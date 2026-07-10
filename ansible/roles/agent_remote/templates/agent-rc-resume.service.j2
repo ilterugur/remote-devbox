@@ -1,10 +1,10 @@
 {# Managed by Ansible (claude-devbox). Boot/recovery companion, one per (profile,
-   project). Pulled in via Wants= from claude-rc-<id>.service, so it runs each time
+   project). Pulled in via Wants= from agent-rc-<id>.service, so it runs each time
    the Remote Control service (re)starts and resumes interrupted sessions. #}
-{% set ID = item.0.user ~ '-' ~ item.1.project %}
+{% set ID = agent ~ '-' ~ item.0.user ~ '-' ~ item.1.project %}
 [Unit]
-Description=Claude remote-control resume ({{ ID }})
-After=claude-rc-{{ ID }}.service
+Description={{ agent }} boot-resume ({{ ID }})
+After=agent-rc-{{ ID }}.service
 {# Triggered from the RC unit's ExecStartPost (--no-block) on every start; After=
    orders this to run once the RC start job completes. No Requisite= — the trigger
    is best-effort and the orchestrator polls for the RC tmux session before acting,
@@ -22,7 +22,7 @@ Environment=RC_RESUME_MAX_CONCURRENT={{ rc_resume_max_concurrent | default(2) }}
 Environment=RC_RESUME_SETTLE_SEC={{ rc_resume_settle_sec | default(20) }}
 Environment=RC_RESUME_MAX_ATTEMPTS={{ rc_resume_max_attempts | default(3) }}
 Environment=RC_RESUME_MIN_FREE_MB={{ rc_resume_min_free_mb | default(1200) }}
-ExecStart=/usr/local/bin/claude-rc-resume {{ ID }}
+ExecStart=/usr/local/bin/agent-rc-resume {{ ID }}
 {# Long-running: it staggers launches with settle waits. Cap it generously. #}
 TimeoutStartSec={{ rc_resume_timeout_sec | default(1800) }}
 

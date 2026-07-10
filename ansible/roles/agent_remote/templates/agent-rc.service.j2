@@ -2,10 +2,10 @@
 {# Merge global rc_limits / rc_build_env defaults with per-server overrides. #}
 {% set L = (rc_limits | default({})) | combine(item.1.limits | default({})) %}
 {% set BENV = (rc_build_env | default({})) | combine(item.1.build_env | default({})) %}
-{% set ID = item.0.user ~ '-' ~ item.1.project %}
+{% set ID = agent ~ '-' ~ item.0.user ~ '-' ~ item.1.project %}
 [Unit]
-Description=Claude remote-control ({{ ID }})
-After=network-online.target tailscaled.service
+Description={{ agent }} remote-control ({{ ID }})
+After=network-online.target
 Wants=network-online.target
 {% if rc_autorestart | default(true) %}
 {# Cap restart churn: at most rc_start_limit_burst restarts per interval, else give up. #}
@@ -21,14 +21,14 @@ StartLimitBurst={{ rc_start_limit_burst | default(10) }}
    session lives and exits non-zero the moment it dies (OOM/kill/crash), so
    Restart=on-failure brings the whole unit back in RestartSec. #}
 Type=simple
-ExecStartPre=/usr/local/bin/claude-rc-wrapper {{ ID }}
-ExecStart=/usr/local/bin/claude-rc-monitor {{ ID }}
+ExecStartPre=/usr/local/bin/agent-rc-wrapper {{ ID }}
+ExecStart=/usr/local/bin/agent-rc-monitor {{ ID }}
 Restart=on-failure
 RestartSec={{ rc_restart_sec | default(10) }}
 {% else %}
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/claude-rc-wrapper {{ ID }}
+ExecStart=/usr/local/bin/agent-rc-wrapper {{ ID }}
 {% endif %}
 User={{ item.0.user }}
 Environment=HOME=/home/{{ item.0.user }}
@@ -43,12 +43,13 @@ Environment=CLAUDE_RC_PROJECT_DIR=/home/{{ item.0.user }}/projects/{{ item.1.pro
 Environment="CLAUDE_RC_NAME={{ item.1.name | default(item.0.user ~ ' · ' ~ item.1.project) }}"
 Environment=CLAUDE_RC_SPAWN={{ item.1.spawn | default('worktree') }}
 Environment=CLAUDE_RC_CAPACITY={{ item.1.capacity | default(4) }}
-{# Hindsight (when enabled): load the profile's HINDSIGHT_USER_ID + HINDSIGHT_API_LLM_* so the memory hooks/daemon work in RC sessions too. The leading '-' makes it optional, so the unit is unaffected when Hindsight is disabled and the file is absent. uvx resolves via `mise activate --shims` in claude-rc-run. #}
+Environment=CLAUDE_RC_AGENT={{ agent }}
+{# Hindsight (when enabled): load the profile's HINDSIGHT_USER_ID + HINDSIGHT_API_LLM_* so the memory hooks/daemon work in RC sessions too. The leading '-' makes it optional, so the unit is unaffected when Hindsight is disabled and the file is absent. uvx resolves via `mise activate --shims` in agent-rc-run. #}
 EnvironmentFile=-/home/{{ item.0.user }}/.hindsight/llm.env
 {% for k, v in BENV.items() %}
 Environment="{{ k }}={{ v }}"
 {% endfor %}
-ExecStop=/usr/bin/tmux -L claude-rc-{{ ID }} kill-server
+ExecStop=/usr/bin/tmux -L agent-rc-{{ ID }} kill-server
 {% if rc_resume_on_boot | default(true) %}
 {# Trigger the boot/recovery orchestrator on EVERY start — including Restart=
    auto-restarts after an OOM, which do NOT re-pull Wants= dependencies (so a plain
@@ -57,7 +58,7 @@ ExecStop=/usr/bin/tmux -L claude-rc-{{ ID }} kill-server
    '+' runs it as root (the service runs as the profile user, which can't call
    systemctl). --no-block returns immediately so it never delays the unit becoming
    active, and the companion is idempotent (it skips sessions already running). #}
-ExecStartPost=-+/usr/bin/systemctl start --no-block claude-rc-resume-{{ ID }}.service
+ExecStartPost=-+/usr/bin/systemctl start --no-block agent-rc-resume-{{ ID }}.service
 {% endif %}
 {# ── Resource control (systemd cgroup) — keep one build from taking the box ── #}
 {% if L.memory_high | default('') %}MemoryHigh={{ L.memory_high }}
