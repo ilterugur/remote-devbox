@@ -14,7 +14,7 @@ no network. The plan distinguishes:
 
 Worktrees + JSONL transcripts are read, never modified.
 
-Usage: claude-rc-resume-scan.py <CLAUDE_RC_PROJECT_DIR> [lookback_hours]
+Usage: agent-rc-resume-scan.py <CLAUDE_RC_PROJECT_DIR> [lookback_hours]
 Env:   HOME (transcripts live under $HOME/.claude/projects)
 """
 import os
@@ -79,7 +79,7 @@ def killed_workflows(sess_dir):
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: claude-rc-resume-scan.py <project_dir> [lookback_h]", file=sys.stderr)
+        print("usage: agent-rc-resume-scan.py <project_dir> [lookback_h]", file=sys.stderr)
         return 2
     project_dir = os.path.abspath(sys.argv[1])
     lookback_h = float(sys.argv[2]) if len(sys.argv) > 2 else float(os.environ.get("RC_RESUME_LOOKBACK_H", "12"))

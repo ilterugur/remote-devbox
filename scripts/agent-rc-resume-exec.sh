@@ -22,7 +22,7 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
 export PATH="${HOME}/.local/bin:${PATH}"
 command -v mise >/dev/null 2>&1 && eval "$(mise activate bash --shims)" || true
 
-cd "${WT}" 2>/dev/null || { echo "[claude-rc-resume] worktree missing: ${WT}" >&2; sleep 10; exit 1; }
+cd "${WT}" 2>/dev/null || { echo "[agent-rc-resume] worktree missing: ${WT}" >&2; sleep 10; exit 1; }
 
 NAME="$(cat "${NAMEFILE}")"
 NOTICE="$(cat "${NOTICEFILE}")"
