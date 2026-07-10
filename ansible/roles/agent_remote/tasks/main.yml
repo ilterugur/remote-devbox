@@ -131,8 +131,7 @@
        + ['/usr/local/bin/claude-rc-wrapper', '/usr/local/bin/claude-rc-run',
           '/usr/local/bin/claude-rc-monitor', '/usr/local/bin/claude-rc-resume',
           '/usr/local/bin/claude-rc-resume-exec', '/usr/local/bin/claude-rc-resume-scan',
-          '/usr/local/share/claude-devbox/claude-rc-resume-sys.txt',
-          '/usr/local/share/claude-devbox'] }}
+          '/usr/local/share/claude-devbox/claude-rc-resume-sys.txt'] }}
   loop_control:
     label: "{{ item }}"
   notify: Reload systemd

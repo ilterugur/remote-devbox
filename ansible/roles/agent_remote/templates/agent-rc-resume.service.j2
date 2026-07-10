@@ -16,6 +16,7 @@ User={{ item.0.user }}
 Environment=HOME=/home/{{ item.0.user }}
 Environment=PATH=/home/{{ item.0.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=CLAUDE_RC_PROJECT_DIR=/home/{{ item.0.user }}/projects/{{ item.1.project }}
+Environment=CLAUDE_RC_AGENT={{ agent }}
 Environment="CLAUDE_RC_NAME={{ item.1.name | default(item.0.user ~ ' · ' ~ item.1.project) }}"
 Environment=RC_RESUME_LOOKBACK_H={{ rc_resume_lookback_h | default(12) }}
 Environment=RC_RESUME_MAX_CONCURRENT={{ rc_resume_max_concurrent | default(2) }}

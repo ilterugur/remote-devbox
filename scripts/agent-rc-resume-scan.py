@@ -3,7 +3,7 @@
 
 Given a Remote Control project dir (CLAUDE_RC_PROJECT_DIR), find the per-session
 worktrees that were interrupted by a host crash/restart and emit a JSON plan the
-orchestrator (claude-rc-resume.sh) consumes. Reads ONLY on-disk state — no LLM,
+orchestrator (agent-rc-resume.sh) consumes. Reads ONLY on-disk state — no LLM,
 no network. The plan distinguishes:
 
   - permissionMode   : each session's last-used mode (resume with the same one)
