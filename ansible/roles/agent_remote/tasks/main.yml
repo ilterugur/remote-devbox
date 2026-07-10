@@ -1,5 +1,5 @@
 ---
-- name: Deploy Remote Control wrapper + loop + self-heal/resume scripts
+- name: Deploy Remote Control engine scripts (agent-neutral)
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../scripts/{{ item }}.sh"
     dest: "/usr/local/bin/{{ item }}"
@@ -7,89 +7,156 @@
     group: root
     mode: "0755"
   loop:
-    - claude-rc-wrapper
-    - claude-rc-run
-    - claude-rc-monitor       # self-heal: blocking liveness monitor (Type=simple)
-    - claude-rc-resume        # boot/recovery orchestrator
-    - claude-rc-resume-exec   # per-session resume launcher (file-based prompts)
+    - agent-rc-wrapper        # tmux session bootstrap
+    - agent-rc-run            # in-session launcher (sources the per-agent adapter)
+    - agent-rc-monitor        # self-heal: blocking liveness monitor (Type=simple)
+    - agent-rc-resume         # boot/recovery orchestrator
+    - agent-rc-resume-exec    # per-session resume launcher (file-based prompts)
 
 - name: Deploy the resume scanner (python, deterministic — no LLM/network)
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/claude-rc-resume-scan.py"
-    dest: "/usr/local/bin/claude-rc-resume-scan"
+    src: "{{ playbook_dir }}/../scripts/agent-rc-resume-scan.py"
+    dest: /usr/local/bin/agent-rc-resume-scan
     owner: root
     group: root
     mode: "0755"
 
-- name: Ensure shared data dir for claude-devbox
+- name: Ensure shared data + adapters dir
   ansible.builtin.file:
-    path: /usr/local/share/claude-devbox
+    path: "{{ item }}"
     state: directory
     owner: root
     group: root
     mode: "0755"
+  loop:
+    - /usr/local/share/agent-devbox
+    - /usr/local/share/agent-devbox/adapters
 
 - name: Deploy the seamless-resume system prompt
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/claude-rc-resume-sys.txt"
-    dest: /usr/local/share/claude-devbox/claude-rc-resume-sys.txt
+    src: "{{ playbook_dir }}/../scripts/agent-rc-resume-sys.txt"
+    dest: /usr/local/share/agent-devbox/agent-rc-resume-sys.txt
     owner: root
     group: root
     mode: "0644"
 
-- name: Generate a systemd unit per (profile, project)
-  ansible.builtin.template:
-    src: claude-rc.service.j2
-    dest: "/etc/systemd/system/claude-rc-{{ item.0.user }}-{{ item.1.project }}.service"
+- name: Deploy per-agent adapters
+  ansible.builtin.copy:
+    src: "adapters/"
+    dest: /usr/local/share/agent-devbox/adapters/
     owner: root
     group: root
-    mode: "0644"
+    mode: "0755"
+
+# ── Flatten (profile, project) × the profile's agents into a single rc_matrix so
+#    unit generation, enable/start, and migration all iterate the same list.
+#    Ansible can't nest subelements × a per-item list inline, so the include appends
+#    one rc_matrix row per agent. Rows carry the whole profile/server dicts (type
+#    preserved via the single-expression `item: [profile, server]` pass-through).
+- name: Build the (profile, project, agent) matrix
+  ansible.builtin.include_tasks: _matrix.yml
   loop: "{{ profiles | subelements('servers', skip_missing=True) }}"
   loop_control:
     label: "{{ item.0.user }}-{{ item.1.project }}"
+
+- name: Generate a systemd unit per (profile, project, agent)
+  ansible.builtin.template:
+    src: agent-rc.service.j2
+    dest: "/etc/systemd/system/agent-rc-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ rc_matrix | default([]) }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
+  vars:
+    agent: "{{ row.agent }}"
+    item: ["{{ row.profile }}", "{{ row.server }}"]
   notify: Reload systemd
 
-- name: Generate a boot/recovery resume companion unit per (profile, project)
+- name: Generate a boot/recovery resume companion unit per (profile, project, agent)
   ansible.builtin.template:
-    src: claude-rc-resume.service.j2
-    dest: "/etc/systemd/system/claude-rc-resume-{{ item.0.user }}-{{ item.1.project }}.service"
+    src: agent-rc-resume.service.j2
+    dest: "/etc/systemd/system/agent-rc-resume-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ profiles | subelements('servers', skip_missing=True) }}"
+  loop: "{{ rc_matrix | default([]) }}"
   loop_control:
-    label: "{{ item.0.user }}-{{ item.1.project }}"
+    loop_var: row
+    label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
+  vars:
+    agent: "{{ row.agent }}"
+    item: ["{{ row.profile }}", "{{ row.server }}"]
   when: rc_resume_on_boot | default(true)
   notify: Reload systemd
 
 - name: Remove resume companion units when boot-resume is disabled
   ansible.builtin.file:
-    path: "/etc/systemd/system/claude-rc-resume-{{ item.0.user }}-{{ item.1.project }}.service"
+    path: "/etc/systemd/system/agent-rc-resume-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     state: absent
-  loop: "{{ profiles | subelements('servers', skip_missing=True) }}"
+  loop: "{{ rc_matrix | default([]) }}"
   loop_control:
-    label: "{{ item.0.user }}-{{ item.1.project }}"
+    loop_var: row
+    label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   when: not (rc_resume_on_boot | default(true))
   notify: Reload systemd
 
-- name: Load new units before enabling
+# ── Legacy migration: retire the old single-agent claude-rc-* units/scripts/dir.
+#    MUST run before "Enable and start" so the old RC session is gone before the new
+#    agent-rc unit brings one up — two RC sessions must not fight over one login.
+- name: Find legacy claude-rc units to migrate
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns: "claude-rc-*.service"
+  register: legacy_units
+
+- name: Stop+disable legacy claude-rc units
+  ansible.builtin.systemd_service:
+    name: "{{ item.path | basename }}"
+    state: stopped
+    enabled: false
+  loop: "{{ legacy_units.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  failed_when: false
+
+- name: Remove legacy claude-rc units + scripts + share dir
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ (legacy_units.files | map(attribute='path') | list)
+       + ['/usr/local/bin/claude-rc-wrapper', '/usr/local/bin/claude-rc-run',
+          '/usr/local/bin/claude-rc-monitor', '/usr/local/bin/claude-rc-resume',
+          '/usr/local/bin/claude-rc-resume-exec', '/usr/local/bin/claude-rc-resume-scan',
+          '/usr/local/share/claude-devbox/claude-rc-resume-sys.txt',
+          '/usr/local/share/claude-devbox'] }}
+  loop_control:
+    label: "{{ item }}"
+  notify: Reload systemd
+
+- name: Load new units + drop removed ones before enabling
   ansible.builtin.meta: flush_handlers
 
 - name: Enable and start each Remote Control service
   ansible.builtin.systemd_service:
-    name: "claude-rc-{{ item.0.user }}-{{ item.1.project }}.service"
+    name: "agent-rc-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     enabled: true
     state: started
     daemon_reload: true
-  loop: "{{ profiles | subelements('servers', skip_missing=True) }}"
+  loop: "{{ rc_matrix | default([]) }}"
   loop_control:
-    label: "{{ item.0.user }}-{{ item.1.project }}"
+    loop_var: row
+    label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   # Services self-heal: each polls until its profile is logged in
   # (run `sudo claude-devbox-login`), then comes online automatically.
 
 # ── Persist per-profile workflow-usage consent so auto-resumed workflows continue
 #    without a confirmation prompt (only suppresses the token-usage warning; does
-#    NOT bypass edit/bash permissions). Skipped before first login (no ~/.claude.json).
+#    NOT bypass edit/bash permissions). Claude-specific: skipped for profiles that
+#    do not run claude, and before first login (no ~/.claude.json).
 - name: Check for each profile's ~/.claude.json
   ansible.builtin.stat:
     path: "/home/{{ item.user }}/.claude.json"
@@ -97,7 +164,9 @@
   loop_control:
     label: "{{ item.user }}"
   register: claude_json_stat
-  when: rc_resume_skip_workflow_warning | default(rc_resume_on_boot | default(true)) | bool
+  when:
+    - rc_resume_skip_workflow_warning | default(rc_resume_on_boot | default(true)) | bool
+    - "'claude' in (item.agents | default(['claude']))"
 
 - name: Set skipWorkflowUsageWarning in each profile's ~/.claude.json
   ansible.builtin.command:
@@ -115,6 +184,7 @@
   when:
     - rc_resume_skip_workflow_warning | default(rc_resume_on_boot | default(true)) | bool
     - item.stat is defined and item.stat.exists | default(false)
+    - "'claude' in (item.item.agents | default(['claude']))"
   register: skip_warning_set
   # In a loop, changed_when is evaluated per item against that item's own result,
   # so reference the bare `stdout` (skip_warning_set.stdout is the aggregate and is
