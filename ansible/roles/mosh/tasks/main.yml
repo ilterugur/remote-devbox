@@ -39,6 +39,33 @@
       own firewall/VPN, or set mosh_enabled: false.
   when: not (tailscale_enabled | default(true))
 
+- name: Remove stale public mosh UFW rule (ufw is additive; re-scoping to tailnet)
+  # community.general.ufw only adds rules — toggling tailscale_enabled false→true
+  # doesn't remove the old public (no-interface) allow rule, so the UDP range would
+  # stay reachable from the public internet even after "re-scoping" to tailscale0.
+  # Mirrors the legacy-cleanup idiom in roles/hindsight/tasks/main.yml.
+  community.general.ufw:
+    rule: allow
+    direction: in
+    proto: udp
+    port: "60000:61000"
+    delete: true
+  when: tailscale_enabled | default(true)
+  failed_when: false
+
+- name: Remove stale tailscale-scoped mosh UFW rule (tailscale now disabled)
+  # Mirror case: toggling tailscale_enabled true→false leaves the old
+  # tailscale0-scoped allow rule in place alongside the new public one.
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: tailscale0
+    proto: udp
+    port: "60000:61000"
+    delete: true
+  when: not (tailscale_enabled | default(true))
+  failed_when: false
+
 - name: Allow mosh (UDP 60000-61000)
   # With Tailscale: scoped to the tailscale0 interface so the range is reachable only from
   # your tailnet (connect to the box's Tailscale address). Without Tailscale: no interface
