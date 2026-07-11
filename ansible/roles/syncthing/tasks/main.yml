@@ -18,7 +18,6 @@
       Syncthing currently requires Tailscale (it binds to the tailnet address). Set
       tailscale_enabled: true, or use sync_engine: mutagen / drop sync_engine for
       profiles currently set to sync_engine: syncthing.
-  tags: [always]
 
 - name: Collect profiles using the syncthing engine
   ansible.builtin.set_fact:
