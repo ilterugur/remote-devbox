@@ -226,6 +226,7 @@
   register: hs_serve_status
   changed_when: false
   failed_when: false
+  when: tailscale_enabled | default(true)
 
 - name: Expose each profile's Hindsight daemon via Tailscale Serve (tailnet only)
   ansible.builtin.command:
@@ -238,6 +239,7 @@
     label: "{{ item.user }}"
     index_var: idx
   when:
+    - tailscale_enabled | default(true)
     - hindsight_expose_tailscale | default(false)
     - (':' ~ ((hindsight_serve_https_port | default(9443)) + idx)) not in (hs_serve_status.stdout | default(''))
   changed_when: true
@@ -250,6 +252,7 @@
     label: "{{ item.user }}"
     index_var: idx
   when:
+    - tailscale_enabled | default(true)
     - not (hindsight_expose_tailscale | default(false))
     - (':' ~ ((hindsight_serve_https_port | default(9443)) + idx)) in (hs_serve_status.stdout | default(''))
   changed_when: true

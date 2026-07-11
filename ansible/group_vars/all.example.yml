@@ -78,7 +78,15 @@ swap_size: 4G # bump (e.g. 8G/12G) so heavy builds swap instead of getting OOM-k
 # rc_resume_skip_workflow_warning: true
 
 # ── Private networking ────────────────────────────────────────────────────────
+# Tailscale gives the box a private tailnet address (recommended: the dashboard,
+# Hindsight exposure, and mosh/et all scope their access to it). Set to false to skip
+# Tailscale entirely: then no tailscale_authkey is needed, the tailscale/et roles are
+# skipped, mosh defaults OFF (forcing it on opens its UDP range publicly), Hindsight
+# stays loopback-only, and you connect over the box's public host with your own
+# firewall/VPN. Default: true.
+tailscale_enabled: true
 # Use a REUSABLE, NON-ephemeral key (https://login.tailscale.com/admin/settings/keys).
+# Only needed when tailscale_enabled is true.
 tailscale_authkey: "tskey-auth-REPLACE_ME"
 # Host the `devbox-*` ssh aliases (mosh / plain ssh / VS Code / Zed) connect to, set
 # by gen-editor-config.py. Pin the box's Tailscale IP (or MagicDNS name) here: mosh's

@@ -30,13 +30,23 @@
     state: present
   loop: "{{ locales | default(['en_US.UTF-8']) }}"
 
-- name: Allow mosh (UDP 60000-61000) over Tailscale
-  # Scoped to the tailscale0 interface so the UDP range is reachable only from your
-  # tailnet, never the public internet — connect to the box's Tailscale address.
+- name: Warn when mosh opens its UDP range publicly (no tailnet to scope to)
+  ansible.builtin.debug:
+    msg: >-
+      mosh is enabled but tailscale_enabled is false — the UDP 60000-61000 range will be
+      opened on ALL interfaces (public internet), not scoped to tailscale0. This is an
+      explicit opt-in (you set mosh_enabled: true without Tailscale). Restrict it with your
+      own firewall/VPN, or set mosh_enabled: false.
+  when: not (tailscale_enabled | default(true))
+
+- name: Allow mosh (UDP 60000-61000)
+  # With Tailscale: scoped to the tailscale0 interface so the range is reachable only from
+  # your tailnet (connect to the box's Tailscale address). Without Tailscale: no interface
+  # scope, so the range is public (see the warning above) — reach mosh over the box's host.
   community.general.ufw:
     rule: allow
     direction: in
-    interface: tailscale0
+    interface: "{{ 'tailscale0' if (tailscale_enabled | default(true)) else omit }}"
     proto: udp
     port: "60000:61000"
-    comment: mosh over tailscale
+    comment: "{{ 'mosh over tailscale' if (tailscale_enabled | default(true)) else 'mosh (public — no tailnet)' }}"
