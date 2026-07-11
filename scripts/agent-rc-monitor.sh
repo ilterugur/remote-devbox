@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. systemd ExecStart for claude-rc-<id>.service when
+# Managed by claude-devbox. systemd ExecStart for agent-rc-<id>.service when
 # self-heal is enabled (Type=simple). The wrapper (ExecStartPre) spawns the
 # detached tmux server; this monitor then BLOCKS while that tmux session is
 # alive and exits non-zero the moment it disappears — so systemd's
@@ -11,7 +11,7 @@
 set -uo pipefail
 
 ID="${1:?instance id required}"
-SOCKET="claude-rc-${ID}"
+SOCKET="agent-rc-${ID}"
 
 # Wait for the session the wrapper just spawned to appear (avoid a startup race
 # where we'd exit before tmux finished creating it).
@@ -25,5 +25,5 @@ while tmux -L "${SOCKET}" has-session -t "${SOCKET}" 2>/dev/null; do
   sleep 5
 done
 
-echo "[claude-rc-monitor] tmux session '${SOCKET}' gone — exiting non-zero for systemd restart" >&2
+echo "[agent-rc-monitor] tmux session '${SOCKET}' gone — exiting non-zero for systemd restart" >&2
 exit 1

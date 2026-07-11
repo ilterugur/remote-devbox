@@ -36,4 +36,4 @@ done
 
 echo
 echo "Done. The always-on servers detect new logins within ~15s."
-echo "Check:  systemctl status 'claude-rc-*' --no-pager"
+echo "Check:  systemctl status 'agent-rc-*' --no-pager"

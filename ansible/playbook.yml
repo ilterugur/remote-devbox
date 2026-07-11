@@ -92,8 +92,8 @@
     - { role: runtime, tags: [runtime, mise] }
     - { role: users, tags: [users, profiles] }
     - { role: projects, tags: [projects] }
-    - { role: claude_remote, tags: [remote, services] }
-    - { role: claude_config, tags: [config, sync] }
+    - { role: agent_remote, tags: [remote, services] }
+    - { role: agent_config, tags: [config, sync] }
     # OPT-IN: per-profile Syncthing instance — only when a profile sets sync_engine: syncthing
     # (the Mutagen sync engine needs no box-side role). Run with --tags syncthing.
     - role: syncthing

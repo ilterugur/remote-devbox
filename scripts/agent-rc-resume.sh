@@ -15,14 +15,14 @@
 #
 # Reads worktrees + transcripts; never modifies them.
 #
-# Usage: claude-rc-resume <user>-<project>
+# Usage: agent-rc-resume <user>-<project>
 # Env (from the systemd unit): HOME, CLAUDE_RC_PROJECT_DIR, CLAUDE_RC_NAME,
 #   RC_RESUME_LOOKBACK_H, RC_RESUME_MAX_CONCURRENT, RC_RESUME_SETTLE_SEC,
 #   RC_RESUME_MAX_ATTEMPTS, RC_RESUME_MIN_FREE_MB
 set -uo pipefail
 
 ID="${1:?instance id (<user>-<project>) required}"
-SOCKET="claude-rc-${ID}"
+SOCKET="agent-rc-${ID}"
 DIR="${CLAUDE_RC_PROJECT_DIR:?CLAUDE_RC_PROJECT_DIR not set}"
 PROJECT_NAME="${CLAUDE_RC_NAME:-${ID}}"
 
@@ -33,18 +33,22 @@ MAX_ATTEMPTS="${RC_RESUME_MAX_ATTEMPTS:-3}"
 MIN_FREE_MB="${RC_RESUME_MIN_FREE_MB:-1200}"
 SETTLE_MAX_SEC="${RC_RESUME_SETTLE_MAX_SEC:-180}"
 
-SCAN="/usr/local/bin/claude-rc-resume-scan"
-EXEC="/usr/local/bin/claude-rc-resume-exec"
-SYSFILE="/usr/local/share/claude-devbox/claude-rc-resume-sys.txt"
-RUNDIR="${HOME}/.cache/claude-devbox/resume"
+SCAN="/usr/local/bin/agent-rc-resume-scan"
+EXEC="/usr/local/bin/agent-rc-resume-exec"
+SYSFILE="/usr/local/share/agent-devbox/agent-rc-resume-sys.txt"
+RUNDIR="${HOME}/.cache/agent-devbox/resume"
 STATE="${RUNDIR}/attempts.json"
 mkdir -p "${RUNDIR}"
 
-log() { echo "[claude-rc-resume] $*" >&2; }
+log() { echo "[agent-rc-resume] $*" >&2; }
 
 export PATH="${HOME}/.local/bin:${PATH}"
 command -v mise >/dev/null 2>&1 && eval "$(mise activate bash --shims)" || true
 PYBIN="$(command -v python3 || echo python3)"
+AGENT="${CLAUDE_RC_AGENT:-claude}"
+ADAPTER="/usr/local/share/agent-devbox/adapters/${AGENT}.sh"
+[ -r "${ADAPTER}" ] && . "${ADAPTER}" || { log "adapter ${ADAPTER} missing"; exit 0; }
+RESUME_PAT="$(adapter_resume_pgrep_pattern '')"
 
 # Wait for the RC tmux session to be ready (the service may still be registering).
 for _ in $(seq 1 60); do
@@ -54,7 +58,7 @@ done
 tmux -L "${SOCKET}" has-session -t "${SOCKET}" 2>/dev/null || { log "RC tmux not up; nothing to resume"; exit 0; }
 sleep "${SETTLE_SEC}"
 
-PLAN="$("${PYBIN}" "${SCAN}" "${DIR}" "${LOOKBACK_H}" 2>/dev/null || echo '[]')"
+PLAN="$(adapter_resume_scan "${DIR}" "${LOOKBACK_H}")"
 [ "${PLAN}" = "[]" ] && { log "no interrupted sessions in last ${LOOKBACK_H}h"; exit 0; }
 
 # Planner: read the scan plan + attempt state, write per-session name/notice files,
@@ -128,7 +132,7 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree; do
   case "${uuid}" in \#*) log "${uuid} ${perm}"; continue;; esac
 
   # idempotency: never double-resume a session that is already running
-  if pgrep -f "claude --resume ${uuid}" >/dev/null 2>&1; then
+  if pgrep -f "$(adapter_resume_pgrep_pattern "${uuid}")" >/dev/null 2>&1; then
     log "already running: ${uuid}"; continue
   fi
 
@@ -145,7 +149,7 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree; do
   sleep "${SETTLE_SEC}"
   waited=0
   while :; do
-    running="$(pgrep -fc 'claude --resume' 2>/dev/null || echo 0)"
+    running="$(pgrep -fc "${RESUME_PAT% }" 2>/dev/null || echo 0)"
     free_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $7}')"; free_mb="${free_mb:-9999}"
     { [ "${running}" -lt "${MAX_CONCURRENT}" ] && [ "${free_mb}" -ge "${MIN_FREE_MB}" ]; } && break
     [ "${waited}" -ge "${SETTLE_MAX_SEC}" ] && { log "settle timeout (running=${running} free=${free_mb}MB) — proceeding"; break; }
