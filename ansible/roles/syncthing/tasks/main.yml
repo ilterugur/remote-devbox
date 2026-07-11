@@ -3,6 +3,22 @@
 # its own system-template instance (syncthing@<user>) so it starts at boot with no
 # login. The role is gated at the playbook level (when: any syncthing profile), so
 # it only runs when needed; the loops below iterate just the syncthing profiles.
+
+# Syncthing's BEP listener is pinned to the box's Tailscale IP (config.xml.j2:
+# <listenAddress>tcp://{{ ts_ip }}:22000</listenAddress>) — it has no non-tailnet
+# fallback. Since the playbook only runs this role when a profile has selected
+# sync_engine: syncthing, reaching this point means such a profile exists, so fail
+# fast here with a clear message instead of crashing later on `tailscale ip -4`
+# (the tailscale binary is never installed when tailscale_enabled is false).
+- name: Assert Tailscale is enabled (Syncthing binds to the tailnet address)
+  ansible.builtin.assert:
+    that:
+      - tailscale_enabled | default(true)
+    fail_msg: >-
+      Syncthing currently requires Tailscale (it binds to the tailnet address). Set
+      tailscale_enabled: true, or use sync_engine: mutagen / drop sync_engine for
+      profiles currently set to sync_engine: syncthing.
+
 - name: Collect profiles using the syncthing engine
   ansible.builtin.set_fact:
     syncthing_profiles: "{{ profiles | selectattr('sync_engine', 'defined') | selectattr('sync_engine', 'equalto', 'syncthing') | list }}"

@@ -10,11 +10,13 @@
         that:
           - operator_user | default('') | length > 0
           - operator_ssh_pubkey | default('') is search('ssh-')
-          - tailscale_authkey | default('') is search('tskey-')
+          # Tailscale authkey only required when Tailscale is enabled (default true).
+          - (tailscale_authkey | default('') is search('tskey-')) or not (tailscale_enabled | default(true))
           - profiles | default([]) | length > 0
         fail_msg: >-
           Copy group_vars/all.example.yml to all.yml and set operator_user,
-          operator_ssh_pubkey, tailscale_authkey and at least one profile.
+          operator_ssh_pubkey, at least one profile, and (when tailscale_enabled,
+          the default) tailscale_authkey. Set tailscale_enabled: false to skip Tailscale.
       tags: [always]
 
     - name: Validate every profile username
@@ -78,16 +80,16 @@
   roles:
     - { role: base, tags: [base] }
     - { role: security, tags: [security] }
-    - { role: tailscale, tags: [tailscale] }
+    - { role: tailscale, tags: [tailscale], when: "tailscale_enabled | default(true)" }
     # ON BY DEFAULT (set mosh_enabled: false to skip): mosh for roaming-resilient
     # terminal sessions (survives network drops; pair with tmux). After tailscale so
     # its UFW rule can scope to the tailscale0 interface.
-    - { role: mosh, tags: [mosh], when: "mosh_enabled | default(true)" }
+    - { role: mosh, tags: [mosh], when: "mosh_enabled | default(tailscale_enabled | default(true))" }
     # OPT-IN (et_enabled: true): Eternal Terminal — a TCP, auto-reconnecting remote
     # shell. Same roaming/persistence win as mosh but without mosh's predictive-echo
     # layer, which on macOS clients drops/garbles keystrokes. After tailscale so its
     # UFW rule can scope to tailscale0.
-    - { role: et, tags: [et], when: "et_enabled | default(false)" }
+    - { role: et, tags: [et], when: "(et_enabled | default(false)) and (tailscale_enabled | default(true))" }
     - { role: docker, tags: [docker] }
     - { role: runtime, tags: [runtime, mise] }
     - { role: users, tags: [users, profiles] }
