@@ -1,10 +1,10 @@
 {
-  "name": "claude-devbox-doctor",
+  "name": "remote-devbox-doctor",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "build": "bun build ./src/cli.ts --compile --outfile claude-devbox-doctor"
+    "build": "bun build ./src/cli.ts --compile --outfile remote-devbox-doctor"
   }
 }

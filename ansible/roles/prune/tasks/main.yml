@@ -2,9 +2,9 @@
 # Declarative cleanup of things removed from `profiles`. OPT-IN — only runs via
 #   ansible-playbook playbook.yml --tags prune
 #
-# Scope: it ONLY ever touches claude-devbox's OWN resources —
+# Scope: it ONLY ever touches remote-devbox's OWN resources —
 #   * services it created (the `agent-rc-*` naming convention), and
-#   * users it created (the `.claude-devbox-managed` marker file).
+#   * users it created (the `.remote-devbox-managed` marker file).
 # It will never remove a service or user it didn't add (your admin user, system
 # users, hand-made units are all invisible to it).
 #
@@ -58,10 +58,10 @@
       `servers:`). If you truly mean to remove every service, pass
       -e prune_force_empty=true.
 
-- name: Find claude-devbox-managed profile users (marker — ours only)
+- name: Find remote-devbox-managed profile users (marker — ours only)
   ansible.builtin.find:
     paths: /home
-    patterns: ".claude-devbox-managed"
+    patterns: ".remote-devbox-managed"
     hidden: true
     recurse: true
     depth: 2
@@ -89,7 +89,7 @@
   ansible.builtin.pause:
     prompt: |
 
-      claude-devbox will REMOVE these orphaned resources:
+      remote-devbox will REMOVE these orphaned resources:
 
         Services : {{ orphan_units | default([]) | join(', ') | default('(none)', true) }}
       {% if prune_removed_users | default(false) | bool %}

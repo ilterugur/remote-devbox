@@ -89,7 +89,7 @@
     owner: "{{ item.user }}"
     group: "{{ item.user }}"
     mode: "0644"
-    marker: "# {mark} ANSIBLE MANAGED BLOCK (claude-devbox hindsight)"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK (remote-devbox hindsight)"
     block: |
       [ -f "$HOME/.hindsight/llm.env" ] && set -a && . "$HOME/.hindsight/llm.env" && set +a
   loop: "{{ profiles }}"

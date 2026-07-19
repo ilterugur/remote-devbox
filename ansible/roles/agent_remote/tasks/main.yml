@@ -122,7 +122,10 @@
     label: "{{ item.path | basename }}"
   failed_when: false
 
-- name: Remove legacy claude-rc units + scripts + share dir
+# Legacy paths are HISTORICAL literals (pre-B1 claude-rc-* engine, pre-A claude-devbox
+# command/share names) — they must NOT be renamed to remote-* or the cleanup misses the
+# real old files on an already-provisioned box.
+- name: Remove legacy claude-rc units + old claude-devbox scripts/dirs
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -131,7 +134,10 @@
        + ['/usr/local/bin/claude-rc-wrapper', '/usr/local/bin/claude-rc-run',
           '/usr/local/bin/claude-rc-monitor', '/usr/local/bin/claude-rc-resume',
           '/usr/local/bin/claude-rc-resume-exec', '/usr/local/bin/claude-rc-resume-scan',
-          '/usr/local/share/claude-devbox/claude-rc-resume-sys.txt'] }}
+          '/usr/local/share/claude-devbox/claude-rc-resume-sys.txt',
+          '/usr/local/bin/claude-devbox-login', '/usr/local/bin/claude-devbox-dev',
+          '/usr/local/bin/claude-config-apply', '/usr/local/share/claude-devbox',
+          '/opt/claude-shared'] }}
   loop_control:
     label: "{{ item }}"
   notify: Reload systemd
@@ -150,7 +156,7 @@
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   # Services self-heal: each polls until its profile is logged in
-  # (run `sudo claude-devbox-login`), then comes online automatically.
+  # (run `sudo remote-devbox-login`), then comes online automatically.
 
 # ── Persist per-profile workflow-usage consent so auto-resumed workflows continue
 #    without a confirmation prompt (only suppresses the token-usage warning; does
@@ -198,5 +204,5 @@
     group: root
     mode: "0755"
   loop:
-    - { src: claude-devbox-login.sh, dest: claude-devbox-login }
-    - { src: claude-devbox-dev.sh, dest: claude-devbox-dev }
+    - { src: remote-devbox-login.sh, dest: remote-devbox-login }
+    - { src: remote-devbox-dev.sh, dest: remote-devbox-dev }

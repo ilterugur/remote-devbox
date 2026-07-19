@@ -1,4 +1,4 @@
-{# Managed by Ansible (claude-devbox). One unit per (profile, project). #}
+{# Managed by Ansible (remote-devbox). One unit per (profile, project). #}
 {# Merge global rc_limits / rc_build_env defaults with per-server overrides. #}
 {% set L = (rc_limits | default({})) | combine(item.1.limits | default({})) %}
 {% set BENV = (rc_build_env | default({})) | combine(item.1.build_env | default({})) %}

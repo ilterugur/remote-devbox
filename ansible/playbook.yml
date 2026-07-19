@@ -120,6 +120,6 @@
         msg: >-
           Provisioned. NOW: (1) add each profile's printed SSH public key to its
           GitHub account, (2) `ssh {{ operator_user }}@<box>` then
-          `sudo claude-devbox-login` to do one /login per profile. The always-on
+          `sudo remote-devbox-login` to do one /login per profile. The always-on
           servers come online automatically once logged in.
       tags: [always]

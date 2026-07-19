@@ -16,7 +16,7 @@ portable subset into each account dir**, and never touch the per-account identit
 | Class | Items | Handling |
 | --- | --- | --- |
 | **Per-account — NEVER sync** | `.credentials.json` (the login), **`~/.claude.json`** (identity `oauthAccount`/`userID` + per-project **cost/usage** + caches) | Left untouched per account. Sharing `~/.claude.json` **cross-wires accounts and pools usage** — and it's atomically rewritten, so a symlink to it breaks anyway. |
-| **Shared — synced** | `CLAUDE.md` (+ its `@`-included files), `skills/`, `agents/`, `commands/`, `output-styles/`, `rules/`, `workflows/`, `themes/`, `keybindings.json`, `hooks/` scripts, `mcp.json`, `statusline-command.sh` | Bundled from your client → `/opt/claude-shared` on the box → **copied** into each profile's `~/.claude`. |
+| **Shared — synced** | `CLAUDE.md` (+ its `@`-included files), `skills/`, `agents/`, `commands/`, `output-styles/`, `rules/`, `workflows/`, `themes/`, `keybindings.json`, `hooks/` scripts, `mcp.json`, `statusline-command.sh` | Bundled from your client → `/opt/remote-shared` on the box → **copied** into each profile's `~/.claude`. |
 | **Machine/session state — never sync** | `projects/`, `sessions/`, `history.jsonl`, `todos/`, `statsig/`, `telemetry/`, caches, `plugins/` payload, daemon/lock/log files | The bundle ships a **whitelist only**; the push and apply additionally enforce a shared exclude list (`roles/claude_config/files/sync-excludes.txt`). |
 | **Special — opt-in** | `settings.json` (holds hooks/permissions/env) | **Not deployed by default** — see caveats. |
 
@@ -27,9 +27,9 @@ portable subset into each account dir**, and never touch the per-account identit
 ## How it works
 
 ```
-client ~/.claude  --bundle-->  repo claude-config/shared/  --rsync-->  box /opt/claude-shared/
+client ~/.claude  --bundle-->  repo claude-config/shared/  --rsync-->  box /opt/remote-shared/
                                                                             |
-                                          claude-config-apply  --copy (excl. credentials/.claude.json)-->
+                                          remote-config-apply  --copy (excl. credentials/.claude.json)-->
                                                                             |
                        /home/work/.claude    /home/personal/.claude    ...  (each keeps its own login)
 ```
@@ -37,11 +37,11 @@ client ~/.claude  --bundle-->  repo claude-config/shared/  --rsync-->  box /opt/
 1. **Bundle** (client): `./scripts/bundle-local-config.sh` curates the portable
    subset into `claude-config/shared/` and flags non-portable content.
 2. **Deploy**: `cd ansible && ansible-playbook playbook.yml` pushes it to
-   `/opt/claude-shared` and fans it into every profile's `~/.claude`. Both the push
+   `/opt/remote-shared` and fans it into every profile's `~/.claude`. Both the push
    and the per-profile copy share one exclude list
    (`roles/claude_config/files/sync-excludes.txt`), so identity/state never leak.
 3. **Re-sync after changes**: re-run the playbook, or on the box
-   `sudo claude-config-apply`.
+   `sudo remote-config-apply`.
 
 Config: `sync_claude_config: true`, `claude_config_src`, `claude_sync_settings`
 in `group_vars/all.yml`.
@@ -82,7 +82,7 @@ or drop those entries from the box config.
   `claude mcp add` per account on the box.
 
 ### Don't sync credentials or `~/.claude.json`
-Each profile logs in with `sudo claude-devbox-login` (see
+Each profile logs in with `sudo remote-devbox-login` (see
 [multi-account.md](multi-account.md)). The sync never copies `.credentials.json`
 or `~/.claude.json`.
 

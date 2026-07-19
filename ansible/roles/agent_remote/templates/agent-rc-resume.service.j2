@@ -1,4 +1,4 @@
-{# Managed by Ansible (claude-devbox). Boot/recovery companion, one per (profile,
+{# Managed by Ansible (remote-devbox). Boot/recovery companion, one per (profile,
    project). Pulled in via Wants= from agent-rc-<id>.service, so it runs each time
    the Remote Control service (re)starts and resumes interrupted sessions. #}
 {% set ID = agent ~ '-' ~ item.0.user ~ '-' ~ item.1.project %}

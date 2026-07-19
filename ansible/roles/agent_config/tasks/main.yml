@@ -21,14 +21,14 @@
     group: root
     mode: "0755"
   loop:
-    - /opt/claude-shared
-    - /usr/local/share/claude-devbox
+    - /opt/remote-shared
+    - /usr/local/share/remote-devbox
   when: sync_claude_config | bool
 
 - name: Deploy the shared exclude list
   ansible.builtin.copy:
     src: sync-excludes.txt
-    dest: /usr/local/share/claude-devbox/sync-excludes.txt
+    dest: /usr/local/share/remote-devbox/sync-excludes.txt
     owner: root
     group: root
     mode: "0644"
@@ -37,7 +37,7 @@
 - name: Push curated config (client -> box)
   ansible.posix.synchronize:
     src: "{{ claude_config_src }}/"
-    dest: /opt/claude-shared/
+    dest: /opt/remote-shared/
     archive: true
     delete: false
     rsync_opts:
@@ -46,8 +46,8 @@
 
 - name: Deploy config-apply helper
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/claude-config-apply.sh"
-    dest: /usr/local/bin/claude-config-apply
+    src: "{{ playbook_dir }}/../scripts/remote-config-apply.sh"
+    dest: /usr/local/bin/remote-config-apply
     owner: root
     group: root
     mode: "0755"
@@ -56,7 +56,7 @@
 - name: Fan shared config into each profile (never touches credentials/identity)
   ansible.builtin.command:
     cmd: >-
-      /usr/local/bin/claude-config-apply
+      /usr/local/bin/remote-config-apply
       {{ '--with-settings' if claude_sync_settings | bool else '' }}
       {{ profiles | map(attribute='user') | join(' ') }}
   when: sync_claude_config | bool and cfg_src.stat.exists | default(false)

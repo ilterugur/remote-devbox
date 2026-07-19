@@ -1,21 +1,21 @@
 ---
-name: claude-devbox-setup
+name: remote-devbox-setup
 description: >-
-  Set up and drive the claude-devbox toolkit from the user's client — provision a
+  Set up and drive the remote-devbox toolkit from the user's client — provision a
   remote, multi-profile, always-on Claude Code dev box (Ansible + mise + per-profile
   Linux users). Use this WHENEVER the user wants to set up, provision, configure,
-  bootstrap, or deploy claude-devbox or "a remote Claude Code dev box / dev server";
+  bootstrap, or deploy remote-devbox or "a remote Claude Code dev box / dev server";
   fill in or generate its Ansible inventory or group_vars; add a profile, account,
   project, or runtime to the box; run its playbook; or do the post-install steps
-  (adding per-profile SSH keys to GitHub, `sudo claude-devbox-login`). Trigger even
+  (adding per-profile SSH keys to GitHub, `sudo remote-devbox-login`). Trigger even
   when they don't name the tool — e.g. "set up my remote dev box", "configure the
   claude server", "add a work profile to the box", or when they paste box IP / SSH /
   Tailscale details expecting provisioning.
 ---
 
-# claude-devbox setup
+# remote-devbox setup
 
-Drive the local side of **claude-devbox**: gather inputs → generate the config →
+Drive the local side of **remote-devbox**: gather inputs → generate the config →
 run the playbook → guide the few manual steps. The repo already documents the
 architecture; this skill is the interactive wizard that wires it up for the user.
 
@@ -25,7 +25,7 @@ touch a GitHub account that isn't the user's.
 
 ## Step 0 — Locate the repo
 
-`claude-devbox` is an Ansible repo. Find its checkout (call it `$REPO`):
+`remote-devbox` is an Ansible repo. Find its checkout (call it `$REPO`):
 
 - If the current directory (or an obvious sibling) contains `ansible/playbook.yml`
   and `ansible/roles/claude_remote/`, that's `$REPO`.
@@ -126,7 +126,7 @@ These can't be fully automated; walk the user through them:
      for each profile's repo, first check the active account can reach it —
      `gh api user -q .login` (is this the profile's intended GitHub identity?) and
      `gh repo view <owner/repo> --json viewerPermission` (does it return access, not
-     404?). If good, add the key with `gh ssh-key add <pubfile> --title claude-devbox-<user>`
+     404?). If good, add the key with `gh ssh-key add <pubfile> --title remote-devbox-<user>`
      and re-check `gh repo view`. Adding an SSH key changes GitHub account settings, so
      confirm each one, make sure the correct account is active, and **never** do this
      for an account that isn't the user's. Doing this access check up front means you
@@ -140,7 +140,7 @@ These can't be fully automated; walk the user through them:
 3. **One `/login` per profile** — Remote Control needs interactive OAuth:
    ```bash
    ssh <operator_user>@<box>
-   sudo claude-devbox-login
+   sudo remote-devbox-login
    ```
    Follow the prompts (`/login` → Claude account → paste code → `/exit`). Servers come
    online within ~15s; no restart needed.
@@ -167,7 +167,7 @@ These can't be fully automated; walk the user through them:
   - **`--cli`** (when the client has **bun**): installs the Bun/TS CLI at
     `clients/devbox/` instead of the shell function — a fuzzy picker (`@clack/prompts`,
     no fzf), git-auto-open of the matching local repo, and an argv-array launch (no
-    shell-quoting pitfalls). It writes `~/.config/claude-devbox/config.json`, drops a
+    shell-quoting pitfalls). It writes `~/.config/remote-devbox/config.json`, drops a
     `~/.local/bin/<prefix>` wrapper, and removes the shell function so it isn't shadowed.
     Omit `--cli` for clients without bun (e.g. the phone) to keep the shell function.
 - Point the user to daily use: connect the **desktop app / VS Code Remote-SSH /

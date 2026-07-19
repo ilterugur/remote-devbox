@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. Claude adapter for the agent-rc engine. Holds every
+# Managed by remote-devbox. Claude adapter for the agent-rc engine. Holds every
 # Claude-specific detail so the engine stays provider-agnostic. Sourced (not exec'd).
 
 AGENT_CFG_DEFAULT=".claude"

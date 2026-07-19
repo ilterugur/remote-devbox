@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. systemd ExecStart for agent-rc-<id>.service when
+# Managed by remote-devbox. systemd ExecStart for agent-rc-<id>.service when
 # self-heal is enabled (Type=simple). The wrapper (ExecStartPre) spawns the
 # detached tmux server; this monitor then BLOCKS while that tmux session is
 # alive and exits non-zero the moment it disappears — so systemd's

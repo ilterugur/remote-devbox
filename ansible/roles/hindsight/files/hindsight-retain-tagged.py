@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-devbox custom Stop hook: retain Hindsight memories WITH verti-style tags.
+"""remote-devbox custom Stop hook: retain Hindsight memories WITH verti-style tags.
 
 Wraps the Hindsight plugin's own run_retain() — reusing all its transcript parsing,
 chunking, compaction handling, daemon resolution and POST — and only injects extra

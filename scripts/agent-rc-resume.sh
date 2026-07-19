@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. Boot/recovery orchestrator for one RC instance.
+# Managed by remote-devbox. Boot/recovery orchestrator for one RC instance.
 #
 # After the Remote Control service comes up, scan this project's worktrees for
 # sessions interrupted by a host crash/OOM and bring each one back: resumed from

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Managed by claude-devbox. Deterministic resume scanner.
+"""Managed by remote-devbox. Deterministic resume scanner.
 
 Given a Remote Control project dir (CLAUDE_RC_PROJECT_DIR), find the per-session
 worktrees that were interrupted by a host crash/restart and emit a JSON plan the

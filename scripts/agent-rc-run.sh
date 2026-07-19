@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. Runs INSIDE tmux as the profile user. Keeps the agent's
+# Managed by remote-devbox. Runs INSIDE tmux as the profile user. Keeps the agent's
 # always-on session alive and self-heals once the profile is logged in. Agent-neutral:
 # all agent specifics come from the sourced adapter.
 
@@ -31,7 +31,7 @@ while true; do
       sleep 15
     fi
   else
-    echo "[agent-rc] ${CFG} not logged in — run: sudo claude-devbox-login; polling in 15s..." >&2
+    echo "[agent-rc] ${CFG} not logged in — run: sudo remote-devbox-login; polling in 15s..." >&2
     sleep 15
   fi
 done

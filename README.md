@@ -1,4 +1,4 @@
-# claude-devbox
+# remote-devbox
 
 Provision a cheap remote server into an **always-on, multi-profile Claude Code dev
 box** with one Ansible run from your client. Built for Bun / Turborepo / Vite /
@@ -64,13 +64,13 @@ off). Billing is tied to each Claude **account**, not the machine.
 This repo bundles a Claude Code **skill** that drives the whole local side for you —
 it interviews you, generates `inventory.ini` + `group_vars/all.yml`, runs the
 preflight + playbook (with your confirmation), and walks you through the manual steps
-(GitHub SSH keys, `sudo claude-devbox-login`).
+(GitHub SSH keys, `sudo remote-devbox-login`).
 
 - **In this repo:** open it with Claude Code — the skill at
-  `.claude/skills/claude-devbox-setup/` is auto-discovered. Say *"set up my dev box"*.
+  `.claude/skills/remote-devbox-setup/` is auto-discovered. Say *"set up my dev box"*.
 - **From anywhere:** install it globally —
-  `cp -r .claude/skills/claude-devbox-setup ~/.claude/skills/` — then ask Claude to
-  *"set up claude-devbox"* and it'll locate (or clone) the repo.
+  `cp -r .claude/skills/remote-devbox-setup ~/.claude/skills/` — then ask Claude to
+  *"set up remote-devbox"* and it'll locate (or clone) the repo.
 
 Or do it by hand with the Quickstart below.
 
@@ -102,7 +102,7 @@ failed the first pass). Then the one manual Claude step:
 
 ```bash
 ssh admin@<box>            # your operator_user + box IP/Tailscale name
-sudo claude-devbox-login   # one /login per profile (Remote Control needs OAuth)
+sudo remote-devbox-login   # one /login per profile (Remote Control needs OAuth)
 ```
 
 Done. Servers come online within ~15s. Open the Claude mobile app → Code tab →
@@ -116,7 +116,7 @@ switch to that profile's account → your server → new session.
 | Automated (Ansible) | Manual (one-time) |
 | --- | --- |
 | Hardening, Tailscale, Docker, **mise + toolchain** | Add each profile's SSH key to its GitHub account |
-| Per-profile users, **SSH keys + git identity** | One `/login` per profile (`sudo claude-devbox-login`) |
+| Per-profile users, **SSH keys + git identity** | One `/login` per profile (`sudo remote-devbox-login`) |
 | Clone repos, `bun install`, `.env` scaffold | Fill in real `.env` secrets |
 | Per-profile always-on Remote Control + config sync | (that's it) |
 
@@ -133,7 +133,7 @@ switch to that profile's account → your server → new session.
   inside. Survives network drops / IP changes and resumes on reconnect — the resilient
   alternative to Claude Desktop's integrated SSH (which drops the session on
   disconnect). On by default (`mosh_enabled`); see [docs/mobile.md](docs/mobile.md).
-- **Dev servers / preview:** `sudo claude-devbox-dev <user> <project>` on the box,
+- **Dev servers / preview:** `sudo remote-devbox-dev <user> <project>` on the box,
   then Tailscale Serve or VS Code forward.
 - **`scripts/connect.sh`** runs locally and wraps the common ssh/attach/mosh/login/serve
   calls — `export DEVBOX_HOST=admin@<box>` first.
@@ -157,10 +157,10 @@ ansible/
   requirements.yml        ansible.cfg
   roles/
     base  security  tailscale  mosh  docker  runtime(mise)  users  projects
-    claude_remote  claude_config  browser
+    agent_remote  agent_config  browser
 claude-config/   README.md  settings.shared.example.json  shared/ (gitignored)
 scripts/
-  claude-devbox-login.sh  claude-config-apply.sh  claude-devbox-dev.sh
+  remote-devbox-login.sh  remote-config-apply.sh  remote-devbox-dev.sh
   claude-rc-wrapper.sh  claude-rc-run.sh   (box)
   bundle-local-config.sh  connect.sh        (client)
 docs/
@@ -192,8 +192,8 @@ docs/
 | Symptom | Fix |
 | --- | --- |
 | Profile clone failed | Add that profile's printed SSH key to its GitHub account, re-run. |
-| Server not on phone | `systemctl status 'claude-rc-*'`; did you run `sudo claude-devbox-login`? Switch to that account in the app. |
-| `not logged in` in logs | Run `sudo claude-devbox-login`. |
+| Server not on phone | `systemctl status 'claude-rc-*'`; did you run `sudo remote-devbox-login`? Switch to that account in the app. |
+| `not logged in` in logs | Run `sudo remote-devbox-login`. |
 | `node`/`python` missing for the agent | `mise activate --shims` runs in the wrapper; check the service env and `mise ls` for that user. |
 | Re-run fails as root | Set `ansible_user` to your operator in `inventory.ini` (root login is off). |
 | Attach a service's tmux | `sudo -u <user> tmux -L claude-rc-<user>-<project> attach`. |

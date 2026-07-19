@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. Runs INSIDE a tmux window (under the RC tmux server)
+# Managed by remote-devbox. Runs INSIDE a tmux window (under the RC tmux server)
 # to bring ONE interrupted session back: full conversation via --resume, exposed
 # to the phone via --remote-control, with a system-framed "you were OOM-killed,
 # continue seamlessly" prompt so the agent does not emit robotic acknowledgments

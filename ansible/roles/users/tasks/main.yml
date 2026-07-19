@@ -91,7 +91,7 @@
     group: "{{ item.user }}"
     mode: "0600"
     content: |
-      # Managed by Ansible (claude-devbox).
+      # Managed by Ansible (remote-devbox).
       Host github.com
           HostName ssh.github.com
           Port 443
@@ -133,10 +133,10 @@
   loop_control:
     label: "{{ item.0.user }} {{ item.1.path }}"
 
-- name: Mark each profile as claude-devbox-managed (for declarative prune)
+- name: Mark each profile as remote-devbox-managed (for declarative prune)
   ansible.builtin.copy:
-    dest: "/home/{{ item.user }}/.claude-devbox-managed"
-    content: "managed by claude-devbox\n"
+    dest: "/home/{{ item.user }}/.remote-devbox-managed"
+    content: "managed by remote-devbox\n"
     owner: "{{ item.user }}"
     group: "{{ item.user }}"
     mode: "0644"

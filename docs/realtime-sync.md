@@ -38,7 +38,7 @@ comments is left untouched — it prints the snippet to paste instead).
 
 ## B) Run/experience the live app in your client browser
 
-Dev servers run on the box (start them with `sudo claude-devbox-dev <user> <project>`
+Dev servers run on the box (start them with `sudo remote-devbox-dev <user> <project>`
 so they survive a closed client). Bring them to your client browser one of three ways:
 
 1. **VS Code Remote-SSH auto port-forward (easiest):** run `bun run dev` in the
@@ -73,7 +73,7 @@ if "the files must also live on my client" is a hard requirement.
 
 ## The "close → Claude works → reopen" flow
 
-1. Dev servers run on the box in tmux (`sudo claude-devbox-dev <user> <project>`) →
+1. Dev servers run on the box in tmux (`sudo remote-devbox-dev <user> <project>`) →
    survive a closed client.
 2. Claude's always-on Remote Control servers keep working (see [mobile.md](mobile.md)).
 3. Reopen the client:
