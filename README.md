@@ -157,7 +157,7 @@ ansible/
   requirements.yml        ansible.cfg
   roles/
     base  security  tailscale  mosh  docker  runtime(mise)  users  projects
-    claude_remote  claude_config  browser
+    agent_remote  agent_config  browser
 claude-config/   README.md  settings.shared.example.json  shared/ (gitignored)
 scripts/
   remote-devbox-login.sh  remote-config-apply.sh  remote-devbox-dev.sh

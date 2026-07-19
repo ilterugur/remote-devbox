@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Run as root on the box:  sudo claude-devbox-dev <profile-user> <project> [command...]
+# Run as root on the box:  sudo remote-devbox-dev <profile-user> <project> [command...]
 # Starts a project's dev server in a persistent tmux session AS THAT PROFILE USER,
 # so it survives a closed client. Preview it via Tailscale Serve / VS Code forward.
 #
-#   sudo claude-devbox-dev work app                 # mise exec -- bun run dev
-#   sudo claude-devbox-dev work app "bun run dev:web"
+#   sudo remote-devbox-dev work app                 # mise exec -- bun run dev
+#   sudo remote-devbox-dev work app "bun run dev:web"
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }
 
-user="${1:?usage: claude-devbox-dev <user> <project> [command...]}"
-proj="${2:?usage: claude-devbox-dev <user> <project> [command...]}"
+user="${1:?usage: remote-devbox-dev <user> <project> [command...]}"
+proj="${2:?usage: remote-devbox-dev <user> <project> [command...]}"
 shift 2 || true
 cmd="${*:-mise exec -- bun install && mise exec -- bun run dev}"
 

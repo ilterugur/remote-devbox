@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run as root on the box:  sudo claude-devbox-login [users...]
+# Run as root on the box:  sudo remote-devbox-login [users...]
 # One-time interactive claude.ai login per profile (Remote Control needs OAuth;
 # tokens/API keys don't work). Detects profiles from /home/*/.claude if no args.
 set -euo pipefail

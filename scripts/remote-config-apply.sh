@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run as root on the box:  sudo claude-config-apply [--with-settings] [users...]
-# Fans /opt/claude-shared (the curated portable config) into each profile's
+# Run as root on the box:  sudo remote-config-apply [--with-settings] [users...]
+# Fans /opt/remote-shared (the curated portable config) into each profile's
 # ~/.claude. COPIES real files (symlinks get wiped by Claude auto-update) and
 # NEVER touches per-account identity (.credentials.json, .claude.json) or
 # machine/session state. Detects profiles from /home/*/.claude if no users given.
@@ -8,7 +8,7 @@ set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo (writes into each profile home)." >&2; exit 1; }
 
-SHARED="${CLAUDE_SHARED:-/opt/claude-shared}"
+SHARED="${CLAUDE_SHARED:-/opt/remote-shared}"
 [ -d "${SHARED}" ] || { echo "No shared config at ${SHARED} — run the playbook / bundle-local-config.sh first." >&2; exit 1; }
 
 with_settings=0
@@ -27,7 +27,7 @@ fi
 # Identity files excluded inline (always); full machine-state list in one shared
 # file used by the client->box push too, so they stay in lock-step.
 excludes=( --exclude='.credentials.json' --exclude='.claude.json' )
-EXCLUDES_FILE="${CLAUDE_SYNC_EXCLUDES:-/usr/local/share/claude-devbox/sync-excludes.txt}"
+EXCLUDES_FILE="${CLAUDE_SYNC_EXCLUDES:-/usr/local/share/remote-devbox/sync-excludes.txt}"
 if [ -f "${EXCLUDES_FILE}" ]; then
   excludes+=( "--exclude-from=${EXCLUDES_FILE}" )
 else
