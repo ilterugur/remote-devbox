@@ -1,5 +1,5 @@
 # Single source of truth for rsync excludes — used by BOTH the client->box push
-# (synchronize) AND the box-side per-account apply (claude-config-apply.sh).
+# (synchronize) AND the box-side per-account apply (remote-config-apply.sh).
 # Never sync: per-account identity, machine/session state, caches, plugin payload.
 # (settings.json is handled separately — it is opt-in via --with-settings.)
 .credentials.json

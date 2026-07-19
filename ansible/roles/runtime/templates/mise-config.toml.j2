@@ -1,4 +1,4 @@
-# Managed by Ansible (claude-devbox). Shared toolchain for all profiles.
+# Managed by Ansible (remote-devbox). Shared toolchain for all profiles.
 [tools]
 {% for tool, version in runtimes.items() %}
 {{ tool }} = "{{ version }}"

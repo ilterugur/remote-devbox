@@ -34,7 +34,7 @@ origin matches a box project, which it opens directly (`-m` forces the picker):
   <prefix> ls [profile]       list open tmux sessions
   <prefix> -s [project]       plain shell (skip the --launch command), when --launch is set
 The tmux session is named after the project, so each project keeps its own re-attachable
-session. The active profile is persisted in ~/.config/claude-devbox/active-profile.
+session. The active profile is persisted in ~/.config/remote-devbox/active-profile.
 """
 import argparse
 import json
@@ -45,8 +45,8 @@ import shutil
 import subprocess
 import sys
 
-BEGIN = "# >>> claude-devbox (managed) >>>"
-END = "# <<< claude-devbox <<<"
+BEGIN = "# >>> remote-devbox (managed) >>>"
+END = "# <<< remote-devbox <<<"
 
 
 def die(msg):
@@ -60,7 +60,7 @@ def find_repo(arg):
     cand = os.path.dirname(here)  # repo root (scripts/..)
     if os.path.exists(os.path.join(cand, "ansible", "playbook.yml")):
         return cand
-    die("couldn't locate the claude-devbox repo; pass --repo PATH")
+    die("couldn't locate the remote-devbox repo; pass --repo PATH")
 
 
 def connect_host(repo, override, v):
@@ -126,7 +126,7 @@ def zed_entries(profiles, prefix):
     entries = []
     for p in profiles:
         projects = [{"paths": [f"~/projects/{pr['name']}"]} for pr in (p.get("projects") or [])]
-        entries.append({"host": f"{prefix}-{p['user']}", "nickname": f"claude-devbox · {p['user']}", "projects": projects})
+        entries.append({"host": f"{prefix}-{p['user']}", "nickname": f"remote-devbox · {p['user']}", "projects": projects})
     return entries
 
 
@@ -188,7 +188,7 @@ _@@PFX@@_projects() {  # echo a profile's known projects, one per line
 }
 _@@PFX@@_newhelp() {
   cat >&2 <<'EOH'
-To add a project on the box, edit the claude-devbox repo then re-run the playbook:
+To add a project on the box, edit the remote-devbox repo then re-run the playbook:
   1) ansible/group_vars/all.yml -> add under that profile's projects:
        - { name: myproj, repo: "git@github.com:org/myproj.git", branch: main }
   2) cd ansible && ansible-playbook -i inventory.ini playbook.yml --tags projects
@@ -215,7 +215,7 @@ _@@PFX@@_pick() {  # $1=profile; echo __home__ | __new__ | <project>; non-zero o
   else echo "$sel"; fi
 }
 @@PFX@@() {
-  local STATE="$HOME/.config/claude-devbox/active-profile"
+  local STATE="$HOME/.config/remote-devbox/active-profile"
   local prof proj sess dir h nolaunch= povr= menu=
   if [ "${1:-}" = use ] || [ "${1:-}" = profile ]; then
     if [ -z "${2:-}" ]; then prof="$(cat "$STATE" 2>/dev/null)"; echo "active profile: ${prof:-@@DEFAULT@@}"; return; fi
@@ -359,7 +359,7 @@ def strip_managed_block(path):
 
 
 def write_cli_config(profiles, prefix, host, default, locale, launch, repo):
-    """Write ~/.config/claude-devbox/config.json for the Bun CLI to read."""
+    """Write ~/.config/remote-devbox/config.json for the Bun CLI to read."""
     cfg = {
         "prefix": prefix,
         "host": host,
@@ -377,13 +377,13 @@ def write_cli_config(profiles, prefix, host, default, locale, launch, repo):
             for p in profiles
         ],
     }
-    d = os.path.expanduser("~/.config/claude-devbox")
+    d = os.path.expanduser("~/.config/remote-devbox")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, "config.json")
     with open(path, "w") as f:
         json.dump(cfg, f, indent=2)
         f.write("\n")
-    print(f"  ✓ ~/.config/claude-devbox/config.json written ({len(profiles)} profile(s))")
+    print(f"  ✓ ~/.config/remote-devbox/config.json written ({len(profiles)} profile(s))")
 
 
 def install_cli(repo, prefix):
@@ -403,7 +403,7 @@ def install_cli(repo, prefix):
     os.makedirs(bindir, exist_ok=True)
     wrapper = os.path.join(bindir, prefix)
     with open(wrapper, "w") as f:
-        f.write(f'#!/bin/sh\n# Managed by claude-devbox (gen-editor-config.py --cli).\n'
+        f.write(f'#!/bin/sh\n# Managed by remote-devbox (gen-editor-config.py --cli).\n'
                 f'exec bun {shlex.quote(src)} "$@"\n')
     os.chmod(wrapper, 0o755)
     print(f"  ✓ installed `{prefix}` -> ~/.local/bin/{prefix} (runs the Bun CLI)")

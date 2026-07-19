@@ -1,6 +1,6 @@
 ---
 # ============================================================================
-#  claude-devbox configuration  —  copy to all.yml (gitignored) and edit.
+#  remote-devbox configuration  —  copy to all.yml (gitignored) and edit.
 #
 #    cp group_vars/all.example.yml group_vars/all.yml
 #
@@ -175,9 +175,9 @@ browser_automation: true
 # runs an HAProxy frontend on 127.0.0.1:{{ browser_cdp_port }} that routes to the
 # operator's client browser (reverse SSH tunnel, primary) when reachable, else a
 # local headless Chrome fallback service (backup). Client-side setup lives in the
-# claude-devbox-setup skill. Default off → MCPs launch their own headless Chrome.
+# remote-devbox-setup skill. Default off → MCPs launch their own headless Chrome.
 # Enabling requires per-profile browser MCPs to be wired to the tunnel (client-side
-# setup handled by the claude-devbox-setup skill).
+# setup handled by the remote-devbox-setup skill).
 browser_remote_failover: false
 browser_cdp_port: 9222
 browser_fallback_chrome_port: 9422
@@ -314,7 +314,7 @@ locales:
 mise_prune: false
 # Declarative removal of profiles/servers you DELETED from this file. It NEVER runs
 # on a normal `ansible-playbook playbook.yml` — only via `--tags prune`, which by
-# itself just removes orphaned services (and only ones claude-devbox created). It
+# itself just removes orphaned services (and only ones remote-devbox created). It
 # lists what it will remove and asks for an interactive 'yes' first. The flags below
 # gate the destructive parts:
 prune_removed_users: false # also delete Linux user accounts no longer listed above

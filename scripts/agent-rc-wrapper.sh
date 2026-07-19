@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Managed by claude-devbox. Entry point for agent-rc-<id>.service.
+# Managed by remote-devbox. Entry point for agent-rc-<id>.service.
 # Opens a dedicated tmux server (-L <id>) running the self-healing loop, so each
 # profile's env (CLAUDE_CONFIG_DIR etc., set by the systemd unit) stays isolated.
 set -euo pipefail

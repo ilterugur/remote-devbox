@@ -60,8 +60,8 @@ them persistently (so they survive a closed client):
 
 ```bash
 ssh admin@<box>
-sudo claude-devbox-dev work app                  # mise exec -- bun run dev
-sudo claude-devbox-dev work app "bun run dev:web"
+sudo remote-devbox-dev work app                  # mise exec -- bun run dev
+sudo remote-devbox-dev work app "bun run dev:web"
 ```
 
 Preview from your client — see [realtime-sync.md](realtime-sync.md).
@@ -124,8 +124,8 @@ The default prune removes only orphaned `claude-rc-*` services (re-creatable, no
 loss). Deleting users and especially their home directories (Claude logins, cloned
 repos, possibly unpushed work) is gated behind the explicit flags above.
 
-**It only ever touches resources claude-devbox created** — services by the
-`claude-rc-*` naming convention, users by a `.claude-devbox-managed` marker. Your
+**It only ever touches resources remote-devbox created** — services by the
+`claude-rc-*` naming convention, users by a `.remote-devbox-managed` marker. Your
 admin user, system users, and hand-made units are invisible to it.
 
 **It asks first.** Before removing anything it prints the exact list of services

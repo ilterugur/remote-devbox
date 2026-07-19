@@ -17,7 +17,7 @@ Tailscale untouched.
 2. Log in each profile once (see [multi-account.md](multi-account.md)):
    ```bash
    ssh admin@<box>
-   sudo claude-devbox-login
+   sudo remote-devbox-login
    ```
 
 That's it — the servers come online within ~15s of login.

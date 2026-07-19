@@ -76,7 +76,7 @@ a rewrite preview, and the remote commands — and writes nothing.
   `--force` to override.
 - The pushed file is written `chmod 600` under the profile's own `~/.claude`. It
   is **not** part of config-sync (which deliberately never touches `projects/`),
-  so a later `claude-config-apply` / playbook run won't delete it.
+  so a later `remote-config-apply` / playbook run won't delete it.
 
 ## ⚠️ It's a fork, not a sync
 

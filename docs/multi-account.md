@@ -39,7 +39,7 @@ establish Remote Control. So Ansible can't log in for you. After provisioning:
 
 ```bash
 ssh admin@<box>
-sudo claude-devbox-login            # or: sudo claude-devbox-login work personal
+sudo remote-devbox-login            # or: sudo remote-devbox-login work personal
 ```
 
 For each profile it switches to that user and opens `claude`; type `/login`, choose

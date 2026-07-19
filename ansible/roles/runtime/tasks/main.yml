@@ -49,5 +49,5 @@
     group: root
     mode: "0644"
     content: |
-      # Managed by Ansible (claude-devbox) — mise manages the shell env.
+      # Managed by Ansible (remote-devbox) — mise manages the shell env.
       command -v mise >/dev/null 2>&1 && eval "$(mise activate bash)"

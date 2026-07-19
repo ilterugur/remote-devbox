@@ -25,14 +25,14 @@ shift || true
 case "${cmd}" in
   ssh)    exec ssh -t "${HOST}" ;;
   status) exec ssh -t "${HOST}" "systemctl status 'agent-rc-*' --no-pager || true" ;;
-  login)  exec ssh -t "${HOST}" "sudo claude-devbox-login $*" ;;
+  login)  exec ssh -t "${HOST}" "sudo remote-devbox-login $*" ;;
   attach) u="${1:?usage: connect.sh attach <user> <project>}"; p="${2:?project required}"
           exec ssh -t "${HOST}" "sudo -u ${u} tmux -L agent-rc-claude-${u}-${p} attach -t agent-rc-claude-${u}-${p}" ;;
   mosh)   u="${1:?usage: connect.sh mosh <user> [session]}"; sess="${2:-main}"
           command -v mosh >/dev/null || { echo "mosh not installed on this client (brew install mosh)" >&2; exit 1; }
           exec mosh "${u}@${HOST#*@}" -- tmux new -A -s "${sess}" ;;
   devup)  u="${1:?usage: connect.sh devup <user> <project> [cmd]}"; p="${2:?project required}"; shift 2 || true
-          exec ssh -t "${HOST}" "sudo claude-devbox-dev ${u} ${p} $*" ;;
+          exec ssh -t "${HOST}" "sudo remote-devbox-dev ${u} ${p} $*" ;;
   serve)  port="${1:?usage: connect.sh serve <port>}"
           exec ssh -t "${HOST}" "tailscale serve ${port}" ;;
   *) echo "unknown command: ${cmd}  (ssh|status|login|attach|mosh|devup|serve)" >&2; exit 1 ;;
