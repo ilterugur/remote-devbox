@@ -2,8 +2,13 @@
 # Hardening order is deliberate: the operator key is proven to work BEFORE root
 # login is disabled, the drop-in is syntax-validated before it lands, and sshd
 # is restarted only via a handler at the very end of the play.
+#
+# security_harden_ssh (default true) gates the hardening + its probes: set it false
+# to adopt an existing box without touching sshd (root/password login stay as-is) —
+# the UFW + fail2ban tasks below still run. Flip to true later to harden.
 
 - name: Pre-flight — confirm operator can log in with key before hardening
+  when: security_harden_ssh | default(true)
   ansible.builtin.command:
     cmd: >-
       ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new
@@ -18,6 +23,7 @@
   changed_when: false
 
 - name: Pre-flight — confirm operator has working passwordless sudo
+  when: security_harden_ssh | default(true)
   ansible.builtin.command:
     cmd: >-
       ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new
@@ -33,6 +39,7 @@
   # If this fails, the operator can't sudo — abort before locking out root.
 
 - name: Deploy sshd hardening drop-in
+  when: security_harden_ssh | default(true)
   ansible.builtin.template:
     src: 99-hardening.conf.j2
     dest: /etc/ssh/sshd_config.d/99-hardening.conf

@@ -89,8 +89,12 @@
     # shell. Same roaming/persistence win as mosh but without mosh's predictive-echo
     # layer, which on macOS clients drops/garbles keystrokes. After tailscale so its
     # UFW rule can scope to tailscale0.
-    - { role: et, tags: [et], when: "(et_enabled | default(false)) and (tailscale_enabled | default(true))" }
-    - { role: docker, tags: [docker] }
+    # Works with or without Tailscale: without a tailnet its TCP 2022 UFW rule is
+    # opened publicly (et still bootstraps auth over ssh) — same model as mosh.
+    - { role: et, tags: [et], when: "et_enabled | default(false)" }
+    # ON BY DEFAULT (set docker_enabled: false to skip): not every box needs
+    # containers, and get.docker.com can lag brand-new Ubuntu releases.
+    - { role: docker, tags: [docker], when: "docker_enabled | default(true)" }
     - { role: runtime, tags: [runtime, mise] }
     - { role: users, tags: [users, profiles] }
     - { role: projects, tags: [projects] }

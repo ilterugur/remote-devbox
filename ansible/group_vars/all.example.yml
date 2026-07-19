@@ -15,6 +15,11 @@ operator_user: admin
 operator_ssh_pubkey: "ssh-ed25519 AAAA...REPLACE_ME you@client"
 operator_private_key_path: "~/.ssh/id_ed25519" # for the pre-hardening probe
 
+# Brownfield adoption: set false to SKIP the sshd hardening (root/password login stay
+# as they are) while UFW/fail2ban still reconcile — for adopting an existing box
+# without lockout risk. Flip to true (the default) once operator key-login is proven.
+# security_harden_ssh: true
+
 # ── Box tuning ────────────────────────────────────────────────────────────────
 swap_file: /swapfile
 swap_size: 4G # bump (e.g. 8G/12G) so heavy builds swap instead of getting OOM-killed
@@ -94,6 +99,11 @@ tailscale_authkey: "tskey-auth-REPLACE_ME"
 # "Nothing received from server on UDP port". Provisioning still uses inventory.ini's
 # ansible_host (the public IP). Leave unset to use the public IP for connect too.
 #connect_host: "100.x.y.z"
+
+# ── Docker (ON by default) ────────────────────────────────────────────────────
+# Set false to skip Docker entirely — not every box needs containers, and the
+# get.docker.com installer can lag brand-new Ubuntu releases.
+# docker_enabled: true
 
 # ── Runtimes (installed ONCE via mise, shared by all profiles) ────────────────
 #  Tools resolve on every profile's PATH — including Claude's non-interactive
@@ -229,6 +239,10 @@ hindsight_llm_base_url: ""                  # optional custom OpenAI-compatible 
 # hindsight_retain_llm: {}
 # hindsight_consolidation_llm: {}
 #
+#  NOTE: provider "openai-codex" works for the LLM only — the Codex OAuth token is
+#  accepted by the OpenAI embeddings API but a ChatGPT/Codex subscription has no
+#  platform quota there (429 insufficient_quota), so don't point the embedder at it.
+#
 #  Embedder — REMOTE example: text-embedding-3-small via OpenRouter's NATIVE embeddings
 #  provider (Hindsight has a first-class "openrouter" provider — no base_url needed; reuse
 #  your OpenRouter key). NOTE: a remote embedder sends memory text off the box (the default
@@ -260,6 +274,17 @@ hindsight_llm_base_url: ""                  # optional custom OpenAI-compatible 
 #   api_key: "REPLACE_ME"                    # same OpenRouter key
 #   model: "cohere/rerank-v3.5"
 #   max_candidates: 120
+#
+#  Embedder + reranker — NATIVE Cohere alternative (one Cohere key drives both; strong
+#  multilingual, zero on-box RAM; free trial tier ~1000 calls/month, each recall ≈ 2):
+# hindsight_embeddings:
+#   provider: "cohere"
+#   model: "embed-v4.0"
+#   api_key: "REPLACE_ME"
+# hindsight_reranker:
+#   provider: "cohere"
+#   model: "rerank-v3.5"
+#   api_key: "REPLACE_ME"                    # same Cohere key
 #
 #  Search backends (optional) — pgroonga handles mixed-script lexical search well:
 # hindsight_text_search_extension: "pgroonga"
@@ -298,7 +323,8 @@ mosh_enabled: true
 # ── Eternal Terminal (et) — TCP auto-reconnecting shell (OPT-IN) ──────────────
 #  Same roaming + tmux persistence as mosh, but TCP and WITHOUT predictive echo, so
 #  keystrokes stay clean (no drops) — the fix when mosh misbehaves on macOS. Installs
-#  etserver from its PPA and opens TCP 2022 on the tailscale0 interface only. The
+#  etserver from its PPA and opens TCP 2022 — scoped to the tailscale0 interface when
+#  Tailscale is on, public otherwise (et still bootstraps auth over ssh). The
 #  `devbox` CLI uses `et` automatically when it's installed locally (brew install et).
 # et_enabled: true
 
