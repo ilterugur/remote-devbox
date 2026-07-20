@@ -176,6 +176,9 @@
   tags: [runtime, mise]
 
 - name: Install Claude Code per profile (native installer -> ~/.local/bin)
+  # Skipped for profiles whose `agents:` list omits claude (e.g. codex-only) — same
+  # convention as the skipWorkflowUsageWarning tasks in the agent_remote role.
+  when: "'claude' in (item.agents | default(['claude']))"
   ansible.builtin.shell:
     cmd: "timeout 600 bash -c 'curl -fsSL https://claude.ai/install.sh | bash'"
     creates: "/home/{{ item.user }}/.local/bin/claude"
@@ -187,6 +190,7 @@
     label: "{{ item.user }}"
 
 - name: Verify Claude Code works for each profile (catches a truncated install)
+  when: "'claude' in (item.agents | default(['claude']))"
   ansible.builtin.command: "/home/{{ item.user }}/.local/bin/claude --version"
   become_user: "{{ item.user }}"
   environment:

@@ -46,14 +46,46 @@
     enabled: true
     state: started
 
-- name: Allow Eternal Terminal (TCP 2022) over Tailscale
-  # Scoped to the tailscale0 interface so etserver is reachable only from your tailnet,
-  # never the public internet — connect to the box's Tailscale address. ET bootstraps
-  # over ssh (already open) then carries the session on this TCP port.
+- name: Warn when et opens its port publicly (no tailnet to scope to)
+  ansible.builtin.debug:
+    msg: >-
+      et is enabled but tailscale_enabled is false — TCP 2022 will be opened on ALL
+      interfaces (public internet), not scoped to tailscale0. etserver only accepts
+      sessions bootstrapped over ssh, but this is still extra public surface.
+  when: not (tailscale_enabled | default(true))
+
+- name: Remove stale public et UFW rule (ufw is additive; re-scoping to tailnet)
+  # community.general.ufw only adds rules — toggling tailscale_enabled false→true
+  # doesn't remove the old public (no-interface) allow rule. Mirrors the mosh role.
+  community.general.ufw:
+    rule: allow
+    direction: in
+    proto: tcp
+    port: "2022"
+    delete: true
+  when: tailscale_enabled | default(true)
+  failed_when: false
+
+- name: Remove stale tailscale-scoped et UFW rule (tailscale now disabled)
   community.general.ufw:
     rule: allow
     direction: in
     interface: tailscale0
     proto: tcp
     port: "2022"
-    comment: eternal terminal over tailscale
+    delete: true
+  when: not (tailscale_enabled | default(true))
+  failed_when: false
+
+- name: Allow Eternal Terminal (TCP 2022)
+  # With Tailscale: scoped to the tailscale0 interface so etserver is reachable only
+  # from your tailnet — connect to the box's Tailscale address. Without Tailscale: no
+  # interface scope (public). ET bootstraps over ssh (already open) then carries the
+  # session on this TCP port.
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ 'tailscale0' if (tailscale_enabled | default(true)) else omit }}"
+    proto: tcp
+    port: "2022"
+    comment: "{{ 'eternal terminal over tailscale' if (tailscale_enabled | default(true)) else 'eternal terminal (public — no tailnet)' }}"

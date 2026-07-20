@@ -168,6 +168,21 @@ hindsight_llm_model: "llama3.2"
 # hindsight_llm_api_key not needed
 ```
 
+**Example — OpenAI Codex OAuth** (keyless — reuses the box's `~/.codex/auth.json`
+session, no per-token spend):
+
+```yaml
+hindsight_llm_provider: openai-codex
+hindsight_llm_model: "gpt-5.4-mini"
+# hindsight_llm_api_key not needed
+```
+
+> **Codex OAuth covers the LLM only — not embeddings.** The same token is accepted by
+> `api.openai.com/v1/embeddings` but a ChatGPT/Codex subscription carries no platform
+> quota, so `HINDSIGHT_API_EMBEDDINGS_PROVIDER=openai-codex` fails with
+> `429 insufficient_quota` unless the account also has pay-as-you-go platform credit.
+> Pair a codex LLM with the local embedder or a real embeddings provider (see below).
+
 The playbook fails fast at provision time if `hindsight_enabled: true` but no
 provider/key is configured (and there is no `base_url` to substitute) — better
 to catch it early than have the daemon silently fail at runtime.
@@ -213,6 +228,26 @@ hindsight_embeddings:
   api_key: "sk-or-..."                      # your OpenRouter key
   model: "openai/text-embedding-3-small"
 ```
+
+**Example — native Cohere for both embedder and reranker** (one key drives both;
+strong multilingual retrieval, zero on-box RAM — a good fit for small boxes and
+non-English content):
+
+```yaml
+hindsight_embeddings:
+  provider: cohere
+  model: "embed-v4.0"
+  api_key: "<cohere-key>"
+hindsight_reranker:
+  provider: cohere
+  model: "rerank-v3.5"
+  api_key: "<cohere-key>"                   # same key
+```
+
+Cohere's free trial tier (1,000 calls/month, no card) is enough for light personal
+use; each recall costs ~2 calls (embed + rerank). Changing the embedder changes the
+vector dimension — an existing bank needs a re-embed or reset (see the warning
+above).
 
 **Example — local multilingual embedder** (stays on the box; good for mixed TR+EN banks):
 
