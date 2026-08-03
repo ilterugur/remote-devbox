@@ -20,6 +20,9 @@
       - pkg-config
       - sshfs
       - fuse3
+      # ACL support: Ansible needs it to hand a temp file to an unprivileged
+      # become_user; without it every become_user task fails on the chmod fallback.
+      - acl
     state: present
 
 # The operator account lives in its own role — see roles/operator.

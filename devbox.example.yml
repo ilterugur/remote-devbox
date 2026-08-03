@@ -185,7 +185,7 @@ developers:
         name: "Dev B"
         email: "dev-b@example.com"
     agent_profiles:
-      claude:
+      claude-main:
         provider: claude
     projects:
       - name: main-app

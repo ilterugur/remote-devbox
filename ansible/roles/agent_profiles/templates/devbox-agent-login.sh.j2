@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# Agent logins are interactive OAuth flows, so they cannot be provisioned. This drops the
+# operator into the right profile as the right developer, one at a time.
+#
+#   sudo remote-devbox-login                 # walk every profile that isn't logged in
+#   sudo remote-devbox-login <dev> <profile> # just this one
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+  echo "remote-devbox-login: run me with sudo (it switches to each developer)." >&2
+  exit 1
+fi
+
+# developer:profile:provider
+PROFILES=(
+{% for p in _devbox_agent_profiles %}
+  "{{ p.user }}:{{ p.name }}:{{ p.provider }}"
+{% endfor %}
+)
+
+want_user="${1:-}"
+want_profile="${2:-}"
+
+launch() {
+  local user="$1" profile="$2" provider="$3"
+  echo
+  echo "──────────────────────────────────────────────────────────────"
+  echo " $user / $profile   ($provider)"
+  echo " Log in, then exit the agent to continue with the next profile."
+  echo "──────────────────────────────────────────────────────────────"
+  # A login shell so mise, PATH and the wrapper all behave as they will in real use.
+  sudo -u "$user" -i "/home/$user/.local/bin/$profile" || true
+}
+
+matched=0
+for entry in "${PROFILES[@]}"; do
+  IFS=: read -r user profile provider <<<"$entry"
+  [[ -n "$want_user" && "$want_user" != "$user" ]] && continue
+  [[ -n "$want_profile" && "$want_profile" != "$profile" ]] && continue
+  matched=1
+  launch "$user" "$profile" "$provider"
+done
+
+if [[ $matched -eq 0 ]]; then
+  echo "remote-devbox-login: no agent profile matches '${want_user:-*}/${want_profile:-*}'." >&2
+  printf '  known: %s\n' "${PROFILES[@]}" >&2
+  exit 1
+fi

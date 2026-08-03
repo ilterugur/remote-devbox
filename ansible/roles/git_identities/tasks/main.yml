@@ -1,0 +1,123 @@
+---
+# A developer can push to several GitHub accounts from one Linux account, so a git
+# identity is (name, email, private key) — NOT the login key and NOT the agent account.
+# Each identity gets its own key under ~/.ssh/git-identities/<key>/, and every project
+# selects one explicitly (see the projects role, which writes core.sshCommand per repo).
+#
+# Nothing here rotates or deletes a key: `creates:` guards every generation, so a
+# re-run can never invalidate a key already registered on GitHub.
+
+- name: Flatten the declared git identities
+  ansible.builtin.set_fact:
+    _devbox_identities: "{{ _raw__devbox_identities | from_json }}"
+  vars:
+    _raw__devbox_identities: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers -%}
+        {%- for key, identity in (dev.git_identities | default({})).items() -%}
+          {{- out.append({
+                'user': dev.user,
+                'key': key,
+                'name': identity.name,
+                'email': identity.email,
+                'github_user': identity.github_user,
+                'is_default': key == dev.default_git_identity}) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Create the git identity key directories
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.ssh/git-identities/{{ item.key }}"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ _devbox_identities }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.key }}"
+
+- name: Generate a dedicated SSH key per git identity
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -t ed25519 -N '' -C '{{ item.email }}'
+      -f /home/{{ item.user }}/.ssh/git-identities/{{ item.key }}/id_ed25519
+    creates: "/home/{{ item.user }}/.ssh/git-identities/{{ item.key }}/id_ed25519"
+  become_user: "{{ item.user }}"
+  loop: "{{ _devbox_identities }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.key }}"
+
+- name: Lock down the identity key permissions
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.ssh/git-identities/{{ item.key }}/id_ed25519"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_identities }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.key }}"
+
+# Many cloud networks block outbound TCP/22. ssh.github.com:443 is GitHub's own
+# supported endpoint and works everywhere, so route github.com over it unconditionally.
+- name: Route GitHub SSH over port 443
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.ssh/config"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      Host github.com
+          HostName ssh.github.com
+          Port 443
+          User git
+          StrictHostKeyChecking accept-new
+  become_user: "{{ item.user }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Trust the github.com host key
+  ansible.builtin.known_hosts:
+    path: "/home/{{ item.user }}/.ssh/known_hosts"
+    name: github.com
+    key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 github.com 2>/dev/null') }}"
+    state: present
+  become_user: "{{ item.user }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  failed_when: false # offline provisioning shouldn't block; the clone will warn instead
+
+# The global .gitconfig only carries the developer's DEFAULT identity, and only when
+# there is one. Per-project identity lives in each repo's own .git/config, which always
+# wins — so a project on a non-default identity can never inherit the wrong email.
+- name: Write the default git identity per developer
+  ansible.builtin.template:
+    src: gitconfig.j2
+    dest: "/home/{{ item.user }}/.gitconfig"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Read the git identity public keys
+  ansible.builtin.slurp:
+    src: "/home/{{ item.user }}/.ssh/git-identities/{{ item.key }}/id_ed25519.pub"
+  loop: "{{ _devbox_identities }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.key }}"
+  register: _devbox_identity_pubkeys
+
+- name: Public keys to register on each identity's GitHub account
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.user }}/{{ item.item.key }}
+      {{ '(github: ' ~ item.item.github_user ~ ')' if item.item.github_user else '' }}
+      →  {{ item.content | b64decode | trim }}
+  loop: "{{ _devbox_identity_pubkeys.results }}"
+  loop_control:
+    label: "{{ item.item.user }}/{{ item.item.key }}"

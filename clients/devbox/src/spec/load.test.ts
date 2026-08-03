@@ -70,7 +70,7 @@ test("the example's overrides resolve the way the comments claim", () => {
   // dev-b declares exactly one identity and one profile: both are inferred.
   expect(byName("dev-b", "main-app")).toMatchObject({
     git_identity: "work",
-    agent_profile: "claude",
+    agent_profile: "claude-main",
     memory_space: null,
   });
 });

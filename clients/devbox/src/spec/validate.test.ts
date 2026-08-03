@@ -130,3 +130,19 @@ test("every problem is collected, not just the first", () => {
     ]),
   );
 });
+
+test("an agent profile may not be named after a command on PATH", () => {
+  const raw = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], agent_profiles: { codex: { provider: "codex" } } }],
+  };
+  expect(paths(raw)).toContain("error:developers[0].agent_profiles.codex");
+});
+
+test("a profile name with a slash is rejected (it becomes a filename)", () => {
+  const raw = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], agent_profiles: { "a/b": { provider: "claude" } } }],
+  };
+  expect(paths(raw)).toContain("error:developers[0].agent_profiles.a/b");
+});

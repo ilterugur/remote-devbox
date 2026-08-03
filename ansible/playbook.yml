@@ -57,6 +57,12 @@
     - { role: developers, tags: [developers] }
     - { role: resource_limits, tags: [developers, resources] }
 
+    # Git identities, agent logins and working copies. Independent of each other by
+    # design: a project picks an identity AND an agent, and neither implies the other.
+    - { role: git_identities, tags: [developers, git] }
+    - { role: agent_profiles, tags: [agents] }
+    - { role: projects, tags: [projects] }
+
   post_tasks:
     - name: Next steps
       ansible.builtin.debug:

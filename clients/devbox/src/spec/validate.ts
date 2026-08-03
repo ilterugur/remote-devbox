@@ -24,6 +24,13 @@ const EXPOSURES: readonly string[] = [
   "public_only",
 ] satisfies SshExposure[];
 const PROVIDERS: readonly string[] = ["claude", "codex"];
+const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+/**
+ * An agent profile becomes a launcher script on the developer's PATH. Naming a profile
+ * after the agent's own binary makes the launcher overwrite that binary and then exec
+ * itself — so the collision is rejected here rather than discovered as a fork bomb.
+ */
+const RESERVED_PROFILE_NAMES: readonly string[] = ["claude", "codex", "mise", "git", "node", "bun"];
 
 export const isSshPublicKey = (s: unknown): boolean =>
   typeof s === "string" && /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp\d+)\s+[A-Za-z0-9+/=]+/.test(s.trim());
@@ -311,6 +318,17 @@ function validateAgentProfiles(d: Record<string, unknown>, base: string, issues:
     } else {
       for (const [key, val] of Object.entries(ap)) {
         const p = `${base}.agent_profiles.${key}`;
+        if (!PROFILE_NAME_RE.test(key)) {
+          issues.push(err(p, `'${key}' must match ${PROFILE_NAME_RE.source} — it becomes a launcher filename`));
+        }
+        if (RESERVED_PROFILE_NAMES.includes(key)) {
+          issues.push(
+            err(
+              p,
+              `'${key}' is the name of a command on PATH; its launcher would shadow (and then exec) itself — pick something like '${key}-work'`,
+            ),
+          );
+        }
         if (!isRecord(val)) {
           issues.push(err(p, "must be a mapping"));
           continue;

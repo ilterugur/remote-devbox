@@ -1,0 +1,26 @@
+{#
+  Only the developer's DEFAULT identity lands here. With no default (either no
+  identities at all, or several with no default declared) the file carries no user
+  block: an unset user.email makes git refuse to commit, which is the safe failure —
+  far better than silently attributing a commit to the wrong account.
+-#}
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+# Per-project identity lives in each repo's .git/config and always wins over this.
+{% set default_key = item.default_git_identity %}
+{% set identities = item.git_identities | default({}) %}
+{% if default_key and default_key in identities %}
+[user]
+    name = {{ identities[default_key].name }}
+    email = {{ identities[default_key].email }}
+
+[core]
+    sshCommand = ssh -i /home/{{ item.user }}/.ssh/git-identities/{{ default_key }}/id_ed25519 -o IdentitiesOnly=yes
+{% else %}
+# No default git identity declared — every repo must set its own user.name/user.email.
+{% endif %}
+
+[init]
+    defaultBranch = main
+
+[safe]
+    directory = /home/{{ item.user }}/projects
