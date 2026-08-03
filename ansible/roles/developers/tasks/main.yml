@@ -1,0 +1,150 @@
+---
+# One Linux account per real human. Everything here is about the boundary BETWEEN
+# developers: a private home, an exact key set, no privilege escalation, and no
+# membership in any group that would hand over another developer's data.
+#
+# Adoption is safe by construction: no task deletes a home, a key file, or a project.
+# The preflight role already refused to touch an account that wasn't opted in.
+
+- name: Create developer accounts
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_dev_accounts
+
+# 0700, not the Debian default 0755: without this every developer can read every other
+# developer's source, .env files and agent config.
+- name: Make each home private
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+    state: directory
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Create the per-developer directory skeleton
+  ansible.builtin.file:
+    path: "/home/{{ item.0.user }}/{{ item.1.path }}"
+    state: directory
+    owner: "{{ item.0.user }}"
+    group: "{{ item.0.user }}"
+    mode: "{{ item.1.mode }}"
+  loop: "{{ devbox_developers | product([{'path': '.ssh', 'mode': '0700'},
+            {'path': '.config', 'mode': '0700'},
+            {'path': '.local/bin', 'mode': '0755'},
+            {'path': 'projects', 'mode': '0700'}]) | list }}"
+  loop_control:
+    label: "{{ item.0.user }} {{ item.1.path }}"
+
+# Exclusive on purpose: the login key set is a security boundary, so a key that was
+# removed from devbox.yml must stop working. Skipped entirely when the list is empty —
+# writing an empty authorized_keys would lock the developer out of their own account
+# with no way back except the operator.
+- name: Install each developer's login keys (exact set)
+  ansible.posix.authorized_key:
+    user: "{{ item.user }}"
+    key: "{{ item.login_ssh_keys | join('\n') }}"
+    state: present
+    exclusive: true
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: item.login_ssh_keys | length > 0
+  no_log: true
+
+- name: Warn about developers nobody can log in as
+  ansible.builtin.debug:
+    msg: >-
+      '{{ item.user }}' has no login_ssh_keys — the account exists but nobody can SSH in
+      as it. Add a key under that developer in devbox.yml.
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: item.login_ssh_keys | length == 0
+
+- name: Revoke any sudo grant on a developer account
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/devbox-{{ item.user }}"
+    state: absent
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# Membership in any of these hands over the whole box (sudo), every other developer's
+# containers and volumes (docker), or every other developer's logs (adm). Removed one by
+# one rather than by resetting supplementary groups, so an adopted account keeps the
+# groups it legitimately has.
+- name: Remove developers from privileged groups
+  ansible.builtin.command: "gpasswd -d {{ item.0.user }} {{ item.1 }}"
+  loop: "{{ devbox_developers | product(['sudo', 'admin', 'adm', 'docker']) | list }}"
+  loop_control:
+    label: "{{ item.0.user }} -/- {{ item.1 }}"
+  register: _devbox_group_strip
+  changed_when: _devbox_group_strip.rc == 0
+  failed_when: false
+
+- name: Mark each developer account as managed
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.remote-devbox-managed"
+    content: "managed by remote-devbox\n"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# Without linger, systemd tears the user manager down at logout and takes rootless
+# containers and agent services with it.
+- name: Keep developer services running after logout
+  ansible.builtin.command: "loginctl enable-linger {{ item.user }}"
+  args:
+    creates: "/var/lib/systemd/linger/{{ item.user }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Enforce a private default umask for every login
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: '^\s*UMASK\s+'
+    line: "UMASK           {{ devbox_host.umask }}"
+    state: present
+
+# nousergroups matters: with Ubuntu’s default user-private-group setup, pam_umask
+# relaxes UMASK to 0007 so members of the user’s own group can write. That group has one
+# member, so the relaxation buys nothing and quietly loses the private default.
+- name: Make PAM apply the private umask verbatim
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: '^session\s+optional\s+pam_umask\.so'
+    line: "session optional        pam_umask.so umask={{ devbox_host.umask }} nousergroups"
+    state: present
+    insertafter: EOF
+
+- name: Enforce the umask for non-login shells too
+  ansible.builtin.copy:
+    dest: /etc/profile.d/99-devbox-umask.sh
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      umask {{ devbox_host.umask }}
+
+- name: Remove the superseded profile.d umask drop-in
+  ansible.builtin.file:
+    path: /etc/profile.d/00-devbox-umask.sh
+    state: absent
+
+- name: Include the /proc metadata hardening
+  ansible.builtin.include_tasks: hidepid.yml
+  when: devbox_host.hide_pids | bool

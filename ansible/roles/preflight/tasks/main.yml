@@ -1,0 +1,134 @@
+---
+# Read-only gate. Nothing here changes the box: it proves the host and the generated
+# config agree before any role starts mutating accounts, sshd or the firewall.
+
+- name: Assert the generated config was loaded
+  ansible.builtin.assert:
+    that:
+      - devbox_developers is defined
+      - devbox_operator is defined
+    fail_msg: >-
+      ansible/.generated/all.yml is missing or stale. Generate it first:
+      `devbox plan --write-vars` from the repo root.
+
+- name: Assert the host matches the supported platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution | lower == devbox_platform.distribution | lower
+      - ansible_facts.distribution_version == devbox_platform.version
+      - ansible_facts.architecture in ['x86_64', 'amd64']
+    fail_msg: >-
+      This host is {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+      {{ ansible_facts.architecture }}, but the config targets
+      {{ devbox_platform.distribution }} {{ devbox_platform.version }} {{ devbox_platform.architecture }}.
+      Fix `platform:` in devbox.yml, or set allow_unsupported_platform there and accept the risk.
+  when: not (devbox_allow_unsupported_platform | default(false) | bool)
+
+- name: Warn when running on an unsupported platform on purpose
+  ansible.builtin.debug:
+    msg: >-
+      UNSUPPORTED PLATFORM: {{ ansible_facts.distribution }}
+      {{ ansible_facts.distribution_version }} {{ ansible_facts.architecture }}.
+      Roles assume {{ devbox_platform.distribution }} {{ devbox_platform.version }}; breakage is on you.
+  when: devbox_allow_unsupported_platform | default(false) | bool
+
+- name: Gather host capacity
+  ansible.builtin.set_fact:
+    _devbox_ram_mb: "{{ ansible_facts.memtotal_mb }}"
+    _devbox_root_free_gb: >-
+      {{ ((ansible_facts.mounts | selectattr('mount', 'equalto', '/') | first).size_available
+          / 1024 / 1024 / 1024) | round(1) }}
+
+- name: Assert the box has room for the declared developers
+  ansible.builtin.assert:
+    that:
+      - _devbox_ram_mb | int >= (devbox_developers | length) * 2048
+      - _devbox_root_free_gb | float >= (devbox_developers | length) * 10
+    fail_msg: >-
+      {{ devbox_developers | length }} developer(s) need at least
+      {{ (devbox_developers | length) * 2 }} GiB RAM and {{ (devbox_developers | length) * 10 }} GiB
+      free disk; this host has {{ (_devbox_ram_mb | int / 1024) | round(1) }} GiB RAM and
+      {{ _devbox_root_free_gb }} GiB free.
+
+- name: Check which declared developer accounts already exist
+  ansible.builtin.getent:
+    database: passwd
+
+# An account this playbook created carries a marker file. Without that distinction the
+# adoption gate would fire on every re-run: the second apply would see the accounts the
+# first apply created and demand adopt_existing for all of them.
+- name: Check which declared accounts remote-devbox already manages
+  ansible.builtin.stat:
+    path: >-
+      {{ (ansible_facts.getent_passwd[item.user][4] if item.user in ansible_facts.getent_passwd else '/home/' ~ item.user)
+         }}/.remote-devbox-managed
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_markers
+
+- name: Note which accounts are foreign (exist, but were not created here)
+  ansible.builtin.set_fact:
+    _devbox_foreign_users: >-
+      {{ _devbox_markers.results
+         | rejectattr('stat.exists')
+         | map(attribute='item.user')
+         | select('in', ansible_facts.getent_passwd)
+         | list }}
+
+- name: Report accounts that will be adopted rather than created
+  ansible.builtin.debug:
+    msg: >-
+      ADOPTING existing account '{{ item }}' (uid {{ ansible_facts.getent_passwd[item][1] }}, home
+      {{ ansible_facts.getent_passwd[item][4] }}). Its home and data are left in place; only ownership,
+      permissions and managed files are reconciled.
+  loop: "{{ _devbox_foreign_users }}"
+
+- name: Refuse to take over an existing account that was not opted in
+  ansible.builtin.assert:
+    that: item.adopt_existing | bool
+    fail_msg: >-
+      '{{ item.user }}' already exists on this host and was not created by remote-devbox,
+      but adopt_existing is false. Set `adopt_existing: true` for that developer in
+      devbox.yml to take it over deliberately, or pick a different username.
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: item.user in _devbox_foreign_users
+
+- name: Refuse to manage a system account
+  ansible.builtin.assert:
+    that: ansible_facts.getent_passwd[item.user][1] | int >= 1000
+    fail_msg: >-
+      '{{ item.user }}' is a system account (uid {{ ansible_facts.getent_passwd[item.user][1] }}).
+      remote-devbox will not manage it.
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: item.user in ansible_facts.getent_passwd
+
+- name: Collect the host ports the config claims
+  ansible.builtin.set_fact:
+    _devbox_claimed_ports: >-
+      {{ devbox_developers | map(attribute='projects') | flatten
+         | map(attribute='ports') | flatten | unique | list }}
+
+- name: Read listening sockets
+  ansible.builtin.command: ss -Hltn
+  changed_when: false
+  register: _devbox_listeners
+
+- name: Warn about declared ports that are already in use
+  ansible.builtin.debug:
+    msg: >-
+      port {{ item }} is already bound on this host — a project dev server will fail to
+      start until whatever owns it is stopped.
+  loop: "{{ _devbox_claimed_ports }}"
+  when: _devbox_listeners.stdout is search(':' ~ item ~ '\\s')
+
+- name: Assert outbound package access works
+  ansible.builtin.uri:
+    url: http://archive.ubuntu.com/ubuntu/
+    method: HEAD
+    timeout: 15
+  changed_when: false

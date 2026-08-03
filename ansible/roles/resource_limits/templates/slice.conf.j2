@@ -1,0 +1,22 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+# Covers every process {{ item.user }} runs: shells, editors, rootless containers,
+# agent services and builds. Empty knobs are omitted so the host default applies.
+[Slice]
+{% if item.resources.memory_high | default('') %}
+MemoryHigh={{ item.resources.memory_high }}
+{% endif %}
+{% if item.resources.memory_max | default('') %}
+MemoryMax={{ item.resources.memory_max }}
+{% endif %}
+{% if item.resources.memory_swap_max | default('') %}
+MemorySwapMax={{ item.resources.memory_swap_max }}
+{% endif %}
+{% if item.resources.cpu_weight | default('') %}
+CPUWeight={{ item.resources.cpu_weight }}
+{% endif %}
+{% if item.resources.io_weight | default('') %}
+IOWeight={{ item.resources.io_weight }}
+{% endif %}
+{% if item.resources.tasks_max | default('') %}
+TasksMax={{ item.resources.tasks_max }}
+{% endif %}

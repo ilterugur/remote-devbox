@@ -1,0 +1,13 @@
+---
+# Repo conventions, deliberately kept:
+#  - private task variables are `_`-prefixed rather than role-prefixed; the prefix rule
+#    would rename every register in the tree for no readability gain.
+#  - `changed_when` on a command that genuinely changes state is clearer here than
+#    splitting one-shot setup steps into handlers.
+exclude_paths:
+  - .claude/
+  - clients/
+  - docs/
+skip_list:
+  - var-naming[no-role-prefix]
+  - no-handler

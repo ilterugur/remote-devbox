@@ -7,7 +7,7 @@
  * way as a bad reference.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type Issue, err, hasErrors } from "./issues";
 import { renderVars } from "./normalize";
 import { validateReferences } from "./references";
@@ -44,6 +44,10 @@ export function loadSpec(path: string): LoadResult {
   const resolution = resolveSpec(structural.spec);
   return { resolved: resolution.resolved, issues: [...issues, ...resolution.issues] };
 }
+
+/** devbox.secrets.yml always sits next to the config it belongs to. */
+export const secretsPathFor = (configPath: string): string =>
+  join(dirname(configPath), "devbox.secrets.yml");
 
 /** Write the normalized vars Ansible consumes. Returns the path written. */
 export function writeGeneratedVars(resolved: ResolvedSpec, repoRoot: string): string {

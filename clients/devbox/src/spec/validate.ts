@@ -61,6 +61,8 @@ export function validateStructure(raw: unknown): { spec: DevboxSpec | null; issu
 
   const issues: Issue[] = [];
   validatePlatform(raw, issues);
+  validateRuntimes(raw, issues);
+  validateHost(raw, issues);
   validateOperator(raw, issues);
   validateNetwork(raw, issues);
   validateContainer(raw, issues);
@@ -85,6 +87,52 @@ function validatePlatform(raw: Record<string, unknown>, issues: Issue[]): void {
   if (wrong.length) {
     const detail = wrong.map((k) => `${k} '${String(p[k] ?? "")}'`).join(", ");
     issues.push(level("platform", `unsupported ${detail} (supported: ${supported})`));
+  }
+}
+
+function validateRuntimes(raw: Record<string, unknown>, issues: Issue[]): void {
+  const r = raw.runtimes;
+  if (r === undefined) return;
+  if (!isRecord(r)) {
+    issues.push(err("runtimes", "must be a mapping of tool -> version"));
+    return;
+  }
+  for (const [tool, version] of Object.entries(r)) {
+    if (!isNonEmptyString(version)) {
+      issues.push(err(`runtimes.${tool}`, "must be a version string, 'lts' or 'latest'"));
+    }
+  }
+}
+
+function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
+  const h = raw.host;
+  if (h === undefined) return;
+  if (!isRecord(h)) {
+    issues.push(err("host", "must be a mapping"));
+    return;
+  }
+  if (h.swap_size !== undefined && !(typeof h.swap_size === "string" && /^\d+[KMGT]?$/.test(h.swap_size))) {
+    issues.push(err("host.swap_size", "must be a size like '8G'"));
+  }
+  for (const k of ["mosh", "eternal_terminal", "harden_ssh", "hide_pids"] as const) {
+    if (h[k] !== undefined && typeof h[k] !== "boolean") issues.push(err(`host.${k}`, "must be true or false"));
+  }
+  if (h.umask !== undefined && !(typeof h.umask === "string" && /^[0-7]{3,4}$/.test(h.umask))) {
+    issues.push(err("host.umask", "must be an octal umask like '077'"));
+  }
+  if (h.locales !== undefined && !(Array.isArray(h.locales) && h.locales.every(isNonEmptyString))) {
+    issues.push(err("host.locales", "must be a list of locale names"));
+  }
+  const z = h.zram;
+  if (z !== undefined) {
+    if (!isRecord(z)) {
+      issues.push(err("host.zram", "must be a mapping"));
+    } else {
+      if (typeof z.enabled !== "boolean") issues.push(err("host.zram.enabled", "must be true or false"));
+      if (z.percent !== undefined && !(typeof z.percent === "number" && z.percent > 0 && z.percent <= 100)) {
+        issues.push(err("host.zram.percent", "must be 1..100"));
+      }
+    }
   }
 }
 

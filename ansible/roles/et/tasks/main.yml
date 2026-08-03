@@ -52,7 +52,7 @@
       et is enabled but tailscale_enabled is false — TCP 2022 will be opened on ALL
       interfaces (public internet), not scoped to tailscale0. etserver only accepts
       sessions bootstrapped over ssh, but this is still extra public surface.
-  when: not (tailscale_enabled | default(true))
+  when: not (devbox_network.tailscale.enabled)
 
 - name: Remove stale public et UFW rule (ufw is additive; re-scoping to tailnet)
   # community.general.ufw only adds rules — toggling tailscale_enabled false→true
@@ -63,7 +63,7 @@
     proto: tcp
     port: "2022"
     delete: true
-  when: tailscale_enabled | default(true)
+  when: devbox_network.tailscale.enabled
   failed_when: false
 
 - name: Remove stale tailscale-scoped et UFW rule (tailscale now disabled)
@@ -74,7 +74,7 @@
     proto: tcp
     port: "2022"
     delete: true
-  when: not (tailscale_enabled | default(true))
+  when: not (devbox_network.tailscale.enabled)
   failed_when: false
 
 - name: Allow Eternal Terminal (TCP 2022)
@@ -85,7 +85,7 @@
   community.general.ufw:
     rule: allow
     direction: in
-    interface: "{{ 'tailscale0' if (tailscale_enabled | default(true)) else omit }}"
+    interface: "{{ 'tailscale0' if (devbox_network.tailscale.enabled) else omit }}"
     proto: tcp
     port: "2022"
-    comment: "{{ 'eternal terminal over tailscale' if (tailscale_enabled | default(true)) else 'eternal terminal (public — no tailnet)' }}"
+    comment: "{{ 'eternal terminal over tailscale' if (devbox_network.tailscale.enabled) else 'eternal terminal (public — no tailnet)' }}"

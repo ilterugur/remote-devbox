@@ -21,11 +21,35 @@ platform:
   version: "26.04"
   architecture: amd64
 
+# Host tuning — nothing here is part of the developer model.
+host:
+  swap_size: 8G
+  zram:
+    enabled: true
+    percent: 25
+  locales:
+    # Keep en_US.UTF-8 first: a Turkish working locale’s dotless-i breaks build tools.
+    - en_US.UTF-8
+  mosh: true              # roaming-resilient terminal (UDP, scoped to the tailnet)
+  eternal_terminal: false # TCP alternative to mosh, without its predictive echo
+  harden_ssh: true        # false adopts an existing box without touching sshd
+  hide_pids: true         # /proc hidepid: developers cannot see each other’s command lines
+  umask: "077"
+
+# Shared toolchain, installed once via mise and resolved on every developer PATH.
+runtimes:
+  node: lts
+  python: "3.12"
+  bun: latest
+  uv: latest
+
 # Maintenance account: sudo, runs Ansible. NOT a developer account.
 operator:
   user: devbox-admin
   ssh_authorized_keys:
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5REPLACEME operator@client"
+  # Client-side key used for the pre-hardening login probe.
+  private_key_path: "~/.ssh/id_ed25519"
 
 network:
   tailscale:

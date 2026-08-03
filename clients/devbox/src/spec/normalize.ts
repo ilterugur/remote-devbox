@@ -32,9 +32,27 @@ export function normalize(resolved: ResolvedSpec): Record<string, unknown> {
       version: resolved.platform.version,
       architecture: resolved.platform.architecture,
     },
+    devbox_runtimes: { ...(resolved.runtimes ?? {}) },
+    devbox_host: {
+      swap_size: resolved.host?.swap_size ?? "4G",
+      zram: {
+        enabled: resolved.host?.zram?.enabled ?? false,
+        percent: resolved.host?.zram?.percent ?? 50,
+        algo: resolved.host?.zram?.algo ?? "zstd",
+        // Above the disk swapfile's -1 so compressed RAM is used first.
+        priority: resolved.host?.zram?.priority ?? 100,
+      },
+      locales: [...(resolved.host?.locales ?? ["en_US.UTF-8"])],
+      mosh: resolved.host?.mosh ?? true,
+      eternal_terminal: resolved.host?.eternal_terminal ?? false,
+      harden_ssh: resolved.host?.harden_ssh ?? true,
+      hide_pids: resolved.host?.hide_pids ?? true,
+      umask: resolved.host?.umask ?? "077",
+    },
     devbox_operator: {
       user: resolved.operator.user,
       ssh_authorized_keys: [...resolved.operator.ssh_authorized_keys],
+      private_key_path: resolved.operator.private_key_path ?? "~/.ssh/id_ed25519",
     },
     devbox_network: {
       tailscale: { enabled: resolved.network.tailscale.enabled },

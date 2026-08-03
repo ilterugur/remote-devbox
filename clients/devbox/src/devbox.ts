@@ -35,7 +35,8 @@ import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
-import { loadSpec, writeGeneratedVars } from "./spec/load";
+import { loadSpec, secretsPathFor, writeGeneratedVars } from "./spec/load";
+import { describeSecrets, loadSecrets, validateSecretRefs, writeGeneratedSecrets } from "./spec/secrets";
 import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
 import { renderPlan } from "./spec/plan";
 
@@ -255,16 +256,24 @@ cli
   .option("--write-vars", "also write ansible/.generated/all.yml")
   .action((opts: { config: string; writeVars?: boolean }) => {
     const path = resolvePath(opts.config);
-    const { resolved, issues } = loadSpec(path);
+    const spec = loadSpec(path);
+    const { secrets, issues: secretIssues } = loadSecrets(secretsPathFor(path));
+    const issues = [
+      ...spec.issues,
+      ...secretIssues,
+      ...(spec.resolved ? validateSecretRefs(spec.resolved, secrets) : []),
+    ];
     if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
-    if (!resolved) {
+    if (!spec.resolved) {
       process.stderr.write("devbox: plan failed — fix the errors above\n");
       process.exit(1);
     }
-    console.log(renderPlan(resolved, issues));
+    console.log(renderPlan(spec.resolved, issues, describeSecrets(secrets)));
     if (opts.writeVars) {
       // The repo root is the directory holding devbox.yml; ansible/ lives beside it.
-      console.log(`\nwrote ${writeGeneratedVars(resolved, dirname(path))}`);
+      const root = dirname(path);
+      console.log(`\nwrote ${writeGeneratedVars(spec.resolved, root)}`);
+      console.log(`wrote ${writeGeneratedSecrets(secrets, root)}`);
     }
     if (hasErrors(issues)) process.exit(1);
   });

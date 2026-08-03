@@ -1,129 +1,67 @@
 ---
-- name: Provision Claude Code remote dev box
+# The playbook consumes ONLY the generated variables. devbox.yml is parsed, validated,
+# defaulted and normalized by `devbox plan --write-vars`; by the time Ansible runs, every
+# decision has already been made. That is why no role here contains a `| default(...)`
+# policy choice — a missing key is a bug in the generator, not a silent fallback.
+#
+#   devbox plan --write-vars          # regenerate .generated/{all,secrets}.yml
+#   ansible-playbook -i inventory.ini playbook.yml
+#
+- name: Provision the remote dev box
   hosts: devbox
   become: true
   gather_facts: true
 
+  vars_files:
+    - "{{ playbook_dir }}/.generated/all.yml"
+    - "{{ playbook_dir }}/.generated/secrets.yml"
+
   pre_tasks:
-    - name: Assert required variables are set
-      ansible.builtin.assert:
-        that:
-          - operator_user | default('') | length > 0
-          - operator_ssh_pubkey | default('') is search('ssh-')
-          # Tailscale authkey only required when Tailscale is enabled (default true).
-          - (tailscale_authkey | default('') is search('tskey-')) or not (tailscale_enabled | default(true))
-          - profiles | default([]) | length > 0
-        fail_msg: >-
-          Copy group_vars/all.example.yml to all.yml and set operator_user,
-          operator_ssh_pubkey, at least one profile, and (when tailscale_enabled,
-          the default) tailscale_authkey. Set tailscale_enabled: false to skip Tailscale.
-      tags: [always]
-
-    - name: Validate every profile username
-      ansible.builtin.assert:
-        that:
-          - item.user is match('^[a-z_][a-z0-9_-]*$')
-        fail_msg: "profile user '{{ item.user }}' must be a valid Linux username."
-      loop: "{{ profiles }}"
-      loop_control:
-        label: "{{ item.user }}"
-      tags: [always]
-
-    - name: Validate the operator private key exists on this machine
-      ansible.builtin.stat:
-        path: "{{ operator_private_key_path | expanduser }}"
-      delegate_to: localhost
-      become: false
-      register: _opk
-      failed_when: not _opk.stat.exists
-      tags: [always]
-
     - name: First-run reminder (connected as root)
       ansible.builtin.debug:
         msg: >-
-          Connected as root (first-run mode). After this run, root SSH login is
-          disabled — set `ansible_user={{ operator_user }}` in inventory.ini for
-          every later run, or re-runs will fail to connect.
+          Connected as root (first-run mode). After this run, root SSH login is disabled —
+          set `ansible_user={{ devbox_operator.user }}` in inventory.ini for every later
+          run, or re-runs will fail to connect.
       when: ansible_user | default('') == 'root'
       tags: [always]
 
-    - name: Assert Hindsight is configured when enabled
-      ansible.builtin.assert:
-        that:
-          - hindsight_llm_provider | default('') | length > 0
-          - >-
-            (hindsight_llm_api_key | default('') | length > 0)
-            or (hindsight_llm_base_url | default('') | length > 0)
-            or (hindsight_llm_provider | default('') | lower in ['ollama', 'local', 'openai-codex', 'claude-code'])
-        fail_msg: >-
-          hindsight_enabled is true but the LLM provider isn't configured. Set
-          hindsight_llm_provider and either hindsight_llm_api_key, a custom
-          hindsight_llm_base_url, or a keyless provider (ollama/local/openai-codex/claude-code). See
-          docs/memory.md. (Set hindsight_enabled: false to skip Hindsight.)
-      when: hindsight_enabled | default(true) | bool
-      tags: [always, hindsight]
-
-    - name: Assert uv is available for the Hindsight daemon
-      ansible.builtin.assert:
-        that:
-          - runtimes.uv is defined
-        fail_msg: >-
-          hindsight_enabled is true but `uv` is not in `runtimes`. The Hindsight daemon
-          runs via `uvx hindsight-embed`. Add `uv: "latest"` under runtimes.
-      when: hindsight_enabled | default(true) | bool
-      tags: [always, hindsight]
-
-  # Role tags let you target one thing on an already-provisioned box, e.g.
-  #   ansible-playbook playbook.yml --tags projects     # add/clone a new repo
-  #   ansible-playbook playbook.yml --tags runtime       # bump a runtime version
-  #   ansible-playbook playbook.yml --tags remote        # add a server
+  # Role tags target one thing on an already-provisioned box, e.g.
+  #   ansible-playbook playbook.yml --tags developers   # reconcile accounts + limits
+  #   ansible-playbook playbook.yml --tags runtime      # bump a toolchain version
   roles:
+    # Read-only gate: platform, capacity, account adoption, port conflicts.
+    - { role: preflight, tags: [preflight] }
+
     - { role: base, tags: [base] }
+
+    # The operator must exist and be able to sudo BEFORE security touches sshd.
+    - { role: operator, tags: [base, operator] }
     - { role: security, tags: [security] }
-    - { role: tailscale, tags: [tailscale], when: "tailscale_enabled | default(true)" }
-    # ON BY DEFAULT (set mosh_enabled: false to skip): mosh for roaming-resilient
-    # terminal sessions (survives network drops; pair with tmux). After tailscale so
-    # its UFW rule can scope to the tailscale0 interface.
-    - { role: mosh, tags: [mosh], when: "mosh_enabled | default(tailscale_enabled | default(true))" }
-    # OPT-IN (et_enabled: true): Eternal Terminal — a TCP, auto-reconnecting remote
-    # shell. Same roaming/persistence win as mosh but without mosh's predictive-echo
-    # layer, which on macOS clients drops/garbles keystrokes. After tailscale so its
-    # UFW rule can scope to tailscale0.
-    # Works with or without Tailscale: without a tailnet its TCP 2022 UFW rule is
-    # opened publicly (et still bootstraps auth over ssh) — same model as mosh.
-    - { role: et, tags: [et], when: "et_enabled | default(false)" }
-    # ON BY DEFAULT (set docker_enabled: false to skip): not every box needs
-    # containers, and get.docker.com can lag brand-new Ubuntu releases.
-    - { role: docker, tags: [docker], when: "docker_enabled | default(true)" }
+
+    - role: tailscale
+      tags: [tailscale]
+      when: devbox_network.tailscale.enabled | bool
+
+    # After tailscale so their firewall rules can scope to the tailscale0 interface.
+    - role: mosh
+      tags: [mosh]
+      when: devbox_host.mosh | bool
+    - role: et
+      tags: [et]
+      when: devbox_host.eternal_terminal | bool
+
     - { role: runtime, tags: [runtime, mise] }
-    - { role: users, tags: [users, profiles] }
-    - { role: projects, tags: [projects] }
-    - { role: agent_remote, tags: [remote, services] }
-    - { role: agent_config, tags: [config, sync] }
-    # OPT-IN: per-profile Syncthing instance — only when a profile sets sync_engine: syncthing
-    # (the Mutagen sync engine needs no box-side role). Run with --tags syncthing.
-    - role: syncthing
-      tags: [syncthing]
-      when: "profiles | selectattr('sync_engine', 'defined') | selectattr('sync_engine', 'equalto', 'syncthing') | list | length > 0"
-    # ON BY DEFAULT (set browser_automation: false to skip): headless Chrome +
-    # Playwright MCP per profile.
-    - { role: browser, tags: [browser], when: "browser_automation | default(true)" }
-    # ON BY DEFAULT (set hindsight_enabled: false to skip): Vectorize Hindsight
-    # long-term agent memory wired into Claude Code per profile. ONE profile-wide
-    # bank (cross-project, personal-assistant style) with auto-tags for later
-    # filtering. Local daemon (uvx hindsight-embed, port 9077); only LLM calls leave
-    # the box.
-    - { role: hindsight, tags: [hindsight], when: "hindsight_enabled | default(true)" }
-    # OPT-IN cleanup. `never` keeps it OUT of normal runs entirely — it only runs
-    # when you explicitly ask: `ansible-playbook playbook.yml --tags prune`.
-    - { role: prune, tags: [prune, never] }
+
+    # Accounts, isolation and the per-developer resource slice.
+    - { role: developers, tags: [developers] }
+    - { role: resource_limits, tags: [developers, resources] }
 
   post_tasks:
     - name: Next steps
       ansible.builtin.debug:
         msg: >-
-          Provisioned. NOW: (1) add each profile's printed SSH public key to its
-          GitHub account, (2) `ssh {{ operator_user }}@<box>` then
-          `sudo remote-devbox-login` to do one /login per profile. The always-on
-          servers come online automatically once logged in.
+          Provisioned {{ devbox_developers | length }} developer account(s):
+          {{ devbox_developers | map(attribute='user') | join(', ') }}. Each can now
+          `ssh <user>@<box>` with the keys declared in devbox.yml.
       tags: [always]

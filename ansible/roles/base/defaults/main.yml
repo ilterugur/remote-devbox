@@ -1,0 +1,3 @@
+---
+# Path only; the size comes from the canonical config (host.swap_size).
+swap_file: /swapfile

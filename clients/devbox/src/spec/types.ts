@@ -21,6 +21,20 @@ export interface PlatformSpec {
 export interface OperatorSpec {
   user: string;
   ssh_authorized_keys: string[];
+  /** Client-side key used for the pre-hardening login probe. */
+  private_key_path?: string;
+}
+
+/** Host tuning that is not part of the developer model. */
+export interface HostSpec {
+  swap_size?: string;
+  zram?: { enabled: boolean; percent?: number; algo?: string; priority?: number };
+  locales?: string[];
+  mosh?: boolean;
+  eternal_terminal?: boolean;
+  harden_ssh?: boolean;
+  hide_pids?: boolean;
+  umask?: string;
 }
 
 export interface NetworkSpec {
@@ -119,6 +133,9 @@ export interface DevboxSpec {
   config_version: number;
   allow_unsupported_platform?: boolean;
   platform: PlatformSpec;
+  host?: HostSpec;
+  /** Shared toolchain versions installed once via mise, e.g. {node: "lts"}. */
+  runtimes?: Record<string, string>;
   operator: OperatorSpec;
   network: NetworkSpec;
   container: ContainerSpec;

@@ -13,7 +13,7 @@ const LABEL_WIDTH = 12;
 const row = (label: string, value: string, indent = ""): string =>
   `${indent}${label.padEnd(LABEL_WIDTH)}${value}`;
 
-export function renderPlan(resolved: ResolvedSpec, issues: Issue[]): string {
+export function renderPlan(resolved: ResolvedSpec, issues: Issue[], secretNames: string[] = []): string {
   const p = resolved.platform;
   const lines: string[] = [`devbox plan — ${p.distribution} ${p.version} ${p.architecture}`, ""];
 
@@ -37,6 +37,11 @@ export function renderPlan(resolved: ResolvedSpec, issues: Issue[]): string {
       resolved.shared_services?.enabled ? `enabled (${resolved.shared_services.engine})` : "disabled",
     ),
   );
+
+  // Names only — a plan is something you paste into a chat or a ticket.
+  lines.push(row("secrets", secretNames.length ? secretNames.join(", ") : "none loaded"));
+  const runtimes = Object.entries(resolved.runtimes ?? {}).map(([k, v]) => `${k} ${v}`);
+  lines.push(row("runtimes", runtimes.length ? runtimes.join(" · ") : "none"));
 
   for (const dev of resolved.developers) lines.push("", ...developerLines(dev));
 
