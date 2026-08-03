@@ -4,7 +4,8 @@
 #
 #    cp group_vars/all.example.yml group_vars/all.yml
 #
-#  v2 model: each PROFILE is its own Linux user — isolated $HOME, SSH key, git
+#  LEGACY FORMAT — superseded by devbox.yml (see devbox.example.yml). Convert with
+#  `devbox migrate-config`. Each PROFILE is its own Linux user — isolated $HOME, SSH key, git
 #  identity, Claude login, and always-on Remote Control servers. Runtimes are
 #  installed once (via mise) and shared. The one manual step is a `/login` per
 #  profile (Remote Control needs interactive OAuth) — see docs/multi-account.md.
