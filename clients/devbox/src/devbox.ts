@@ -32,9 +32,11 @@ import { runPull } from "./pull";
 import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
 import { loadSpec, writeGeneratedVars } from "./spec/load";
+import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
 import { renderPlan } from "./spec/plan";
 
 function newHelp(prof: string) {
@@ -244,7 +246,7 @@ cli
     return connect(cfg(), profile, result, co);
   });
 
-// ── v3 provisioning config (devbox.yml) ─────────────────────────────────────────
+// ── Provisioning config (devbox.yml) ────────────────────────────────────────────
 // These two commands do NOT read ~/.config/claude-devbox/config.json — they operate
 // on the canonical config in a remote-devbox checkout, so they work on any machine.
 cli
@@ -265,6 +267,38 @@ cli
       console.log(`\nwrote ${writeGeneratedVars(resolved, dirname(path))}`);
     }
     if (hasErrors(issues)) process.exit(1);
+  });
+
+cli
+  .command("migrate-config", "convert a legacy group_vars/all.yml into a devbox.yml")
+  .option("--from <path>", "legacy group_vars file", { default: "ansible/group_vars/all.yml" })
+  .option("--out <path>", "where to write devbox.yml", { default: "devbox.yml" })
+  .option("--write", "save --out instead of printing (refuses to overwrite an existing file)")
+  .action((opts: { from: string; out: string; write?: boolean }) => {
+    const from = resolvePath(opts.from);
+    if (!existsSync(from)) die(`no config at ${from}`);
+    let raw: unknown;
+    try {
+      raw = Bun.YAML.parse(readFileSync(from, "utf8"));
+    } catch (e) {
+      die(`could not parse ${from}: ${(e as Error).message}`);
+    }
+    if (!isLegacyConfig(raw)) die(`${from} has no 'profiles:' list — nothing to migrate`);
+
+    const { spec, issues } = migrateLegacy(raw as Record<string, unknown>);
+    if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
+    const text = renderMigration(spec);
+
+    // Printing is the default on purpose: migration is a review step, not an apply.
+    if (!opts.write) {
+      process.stdout.write(text);
+      process.stderr.write("\n(dry run — pass --write to save; the source file is never modified)\n");
+      return;
+    }
+    const out = resolvePath(opts.out);
+    if (existsSync(out)) die(`refusing to overwrite ${out} — move it aside first`);
+    writeFileSync(out, text);
+    console.log(`wrote ${out}`);
   });
 
 cli.help();

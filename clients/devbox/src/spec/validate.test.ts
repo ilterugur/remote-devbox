@@ -21,7 +21,7 @@ test("a minimal valid config produces a spec and no issues", () => {
   expect(r.spec?.developers[0].user).toBe("dev-a");
 });
 
-test("a v2 config_version points at migrate-config", () => {
+test("a legacy config_version points at migrate-config", () => {
   const r = validateStructure({ ...minimal(), config_version: 2 });
   expect(r.spec).toBeNull();
   expect(r.issues).toHaveLength(1);

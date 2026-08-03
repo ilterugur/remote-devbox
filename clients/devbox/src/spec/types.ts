@@ -1,5 +1,5 @@
 /**
- * types.ts — the v3 canonical config shape, plus the resolved shape produced after
+ * types.ts — the canonical config shape, plus the resolved shape produced after
  * every default/override chain in the design has been applied.
  *
  * Optional fields in *Spec mean "not stated in devbox.yml". In Resolved* nothing is

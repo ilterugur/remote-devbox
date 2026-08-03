@@ -1,6 +1,6 @@
 ---
 # ============================================================================
-#  remote-devbox canonical configuration (config_version 3)
+#  remote-devbox canonical configuration
 #
 #    cp devbox.example.yml devbox.yml   # devbox.yml is gitignored — real values
 #    devbox plan                        # validate + show the resolved plan

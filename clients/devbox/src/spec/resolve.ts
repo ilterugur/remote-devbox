@@ -1,5 +1,5 @@
 /**
- * resolve.ts — the default/override chains of the v3 model.
+ * resolve.ts — the default/override chains of the developer model.
  *
  * Every ambiguity is an ERROR, never a silent pick: two git identities with no default
  * and no per-project override is exactly how you push to the wrong GitHub account. The

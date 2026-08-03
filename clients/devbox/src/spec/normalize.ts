@@ -3,7 +3,7 @@
  *
  * Two rules drive everything here:
  *  1. Every key is prefixed `devbox_`, so generated vars can never collide with Ansible
- *     facts or with a leftover v2 `group_vars/all.yml`.
+ *     facts or with a leftover `group_vars/all.yml`.
  *  2. Nothing is optional in the output. An absent optional becomes `null`, `false`,
  *     `{}` or `[]` — so no role ever needs a Jinja `| default(...)`, and a missing key
  *     in a template is a real bug rather than a silent policy decision.

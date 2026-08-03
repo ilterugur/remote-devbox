@@ -1,7 +1,7 @@
 /**
  * validate.ts — structural validation of a parsed devbox.yml.
  *
- * Answers exactly one question: "is this object shaped like a v3 DevboxSpec?" Cross-
+ * Answers exactly one question: "is this object shaped like a DevboxSpec?" Cross-
  * references between sections (does this git_identity exist?) are references.ts's job,
  * and default resolution is resolve.ts's. Collects every issue in one pass; returns a
  * typed spec only when no error was produced.
@@ -38,8 +38,8 @@ export function validateStructure(raw: unknown): { spec: DevboxSpec | null; issu
     return { spec: null, issues: [err("", "devbox.yml must be a YAML mapping at the top level")] };
   }
 
-  // Version first, and it short-circuits: validating a v2 body against the v3 schema
-  // produces a wall of noise that hides the one thing the operator needs to do.
+  // Shape gate first, and it short-circuits: running a legacy profile-style file
+  // through this schema produces a wall of noise that hides the one thing to do.
   const version = raw.config_version;
   if (typeof version !== "number") {
     return {
@@ -53,7 +53,7 @@ export function validateStructure(raw: unknown): { spec: DevboxSpec | null; issu
       issues: [
         err(
           "config_version",
-          `unsupported config_version ${version} — run 'devbox migrate-config' to upgrade from v${version}`,
+          `unsupported config_version ${version} — if this is a legacy group_vars file, run 'devbox migrate-config'`,
         ),
       ],
     };
@@ -221,7 +221,7 @@ function validateResources(r: unknown, base: string, issues: Issue[]): void {
     return;
   }
   for (const k of ["memory_high", "memory_max", "memory_swap_max"] as const) {
-    // systemd byte suffixes; "" means "no limit for this knob", same as v2 rc_limits.
+    // systemd byte suffixes; "" means "no limit for this knob".
     if (r[k] !== undefined && !(typeof r[k] === "string" && /^(\d+[KMGT]?|)$/.test(String(r[k])))) {
       issues.push(err(`${base}.${k}`, "must be a systemd size like '10G' (or '' for no limit)"));
     }
