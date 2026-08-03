@@ -65,8 +65,9 @@ export interface MemorySpace {
 export interface MemorySpec {
   enabled: boolean;
   default_space?: string;
-  instances: Record<string, MemoryInstance>;
-  spaces: Record<string, MemorySpace>;
+  /** Absent is equivalent to an empty map — `memory: {enabled: false}` is valid input. */
+  instances?: Record<string, MemoryInstance>;
+  spaces?: Record<string, MemorySpace>;
 }
 
 export interface DesktopSpec {
