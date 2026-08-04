@@ -1,0 +1,38 @@
+; Managed by Ansible (remote-devbox) — do not edit by hand.
+;
+; The listen address is the real control here: binding to the tailnet address means a
+; public scan finds a closed port even if a firewall rule is ever mis-ordered.
+[Globals]
+ini_version=1
+fork=true
+port={{ devbox_desktop_port | default(3389) }}
+{% if devbox_network.tailscale.enabled %}
+address={{ ansible_facts.tailscale0.ipv4.address | default('0.0.0.0') }}
+{% endif %}
+use_vsock=false
+tcp_nodelay=true
+tcp_keepalive=true
+security_layer=negotiate
+crypt_level=high
+; Certificate pinning is not possible here, but requiring TLS keeps credentials off the
+; wire in cleartext.
+ssl_protocols=TLSv1.2, TLSv1.3
+max_bpp=32
+new_cursors=true
+allow_channels=true
+; Clipboard yes, drive redirection no: a redirected client drive would let anything
+; running in the session read the connecting machine's filesystem.
+allow_multimon=true
+
+[Logging]
+LogFile=/var/log/xrdp.log
+LogLevel=INFO
+
+[Xorg]
+name=Xorg
+lib=libxup.so
+username=ask
+password=ask
+ip=127.0.0.1
+port=-1
+code=20

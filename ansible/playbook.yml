@@ -70,6 +70,10 @@
     # Long-term agent memory. After agent_profiles: it wires each profile to its bank.
     - { role: memory, tags: [memory] }
 
+    # Optional per-developer graphical session. Last: it asserts the SSH hardening the
+    # security role established is still in place before handing out PAM passwords.
+    - { role: desktop, tags: [desktop] }
+
   post_tasks:
     - name: Next steps
       ansible.builtin.debug:
