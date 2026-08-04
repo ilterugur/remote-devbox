@@ -6,3 +6,8 @@
   loop:
     - xrdp-sesman.service
     - xrdp.service
+
+- name: Restart fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: restarted

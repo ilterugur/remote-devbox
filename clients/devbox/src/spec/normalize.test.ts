@@ -45,7 +45,7 @@ test("absent optionals become concrete values, never undefined", () => {
     enabled: false,
     environment: "xfce",
     transport: "xrdp",
-    tailscale_only: true,
+    access: ["tunnel"],
     idle_logout_minutes: null,
   });
 });

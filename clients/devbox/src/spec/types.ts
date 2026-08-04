@@ -84,11 +84,23 @@ export interface MemorySpec {
   spaces?: Record<string, MemorySpace>;
 }
 
+/**
+ * How the desktop is reachable. Not mutually exclusive: xrdp accepts several
+ * address:port pairs, so [tunnel, tailnet] really does listen on both and the client
+ * picks by which address it dials.
+ *
+ * "unsafe-public" carries its warning in the name on purpose — RDP authenticates with a
+ * PAM password, so putting it on the internet is a different class of risk from every
+ * other door on the box, all of which are key-only.
+ */
+export type DesktopAccess = "tunnel" | "tailnet" | "unsafe-public";
+
 export interface DesktopSpec {
   enabled: boolean;
   environment: "xfce";
   transport: "xrdp";
-  tailscale_only?: boolean;
+  /** Defaults to ["tunnel"]: reachable only through an SSH tunnel. */
+  access?: DesktopAccess[];
   idle_logout_minutes?: number;
 }
 

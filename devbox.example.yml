@@ -141,7 +141,15 @@ developers:
       enabled: true
       environment: xfce
       transport: xrdp
-      tailscale_only: true
+      # How the desktop is reachable. Not exclusive — xrdp listens on each entry and the
+      # client picks by which address it dials.
+      #   tunnel         loopback only; reach it with `ssh -L 3389:127.0.0.1:3389 <box>`.
+      #                  Nothing sees the RDP prompt without an SSH key first.
+      #   tailnet        the box’s tailnet address; anyone on your tailnet can dial it.
+      #   unsafe-public  every interface, including the public one. RDP authenticates
+      #                  with a PAM password while every other door here is key-only —
+      #                  the name is the warning. Cannot be combined with the others.
+      access: [tunnel]
       idle_logout_minutes: 60
 
     projects:
