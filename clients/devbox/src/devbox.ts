@@ -351,7 +351,20 @@ cli
       return void process.stdout.write(JSON.stringify(["ansible-playbook", ...args, `(cwd ${cwd})`]) + "\n");
     }
     console.log(`devbox: ${phase ?? "all"} -> ansible-playbook ${args.join(" ")}\n`);
-    const r = spawnSync("ansible-playbook", args, { cwd, stdio: "inherit" });
+    // Ansible refuses to run against non-blocking stdio, which is what inheriting a
+    // pipe (CI, a wrapper script, an agent harness) hands it. Only inherit on a real
+    // terminal; otherwise capture and relay, losing live progress but not the run.
+    const piped = !process.stdout.isTTY;
+    const r = spawnSync("ansible-playbook", args, {
+      cwd,
+      stdio: piped ? ["ignore", "pipe", "pipe"] : "inherit",
+      encoding: piped ? "utf8" : undefined,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (piped) {
+      if (r.stdout) process.stdout.write(r.stdout);
+      if (r.stderr) process.stderr.write(r.stderr);
+    }
     process.exit(r.status ?? 0);
   });
 
