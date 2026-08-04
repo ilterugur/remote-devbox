@@ -373,7 +373,12 @@ def write_cli_config(profiles, prefix, host, default, locale, launch, repo):
              **({"lazyMounts": [{"label": m["label"], "path": m["path"]} for m in p["lazy_mounts"]]} if p.get("lazy_mounts") else {}),
              **({"syncEngine": p["sync_engine"]} if p.get("sync_engine") else {}),
              **({"syncDisk": True} if p.get("sync_disk") else {}),
-             **({"lazyMountOnConnect": True} if p.get("lazy_mount_on_connect") else {})}
+             **({"lazyMountOnConnect": True} if p.get("lazy_mount_on_connect") else {}),
+             **({"appConfigs": [
+                 {"label": e["label"], "client": e["client"], "box": e["box"],
+                  "mode": e["mode"], "excludes": e.get("excludes", [])}
+                 for e in (p.get("app_configs") or {}).get("paths", [])
+             ]} if (p.get("app_configs") or {}).get("enabled") else {})}
             for p in profiles
         ],
     }

@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { ensureClientTransport } from "./install";
+import { resolveEntry, type ResolvedEntry } from "./app-configs/registry";
 
 export const CFG_DIR = join(homedir(), ".config", "claude-devbox");
 export const CONFIG_PATH = join(CFG_DIR, "config.json");
@@ -26,6 +27,7 @@ export type Profile = {
   syncEngine?: EngineId;
   syncDisk?: boolean;
   lazyMountOnConnect?: boolean;
+  appConfigs?: ResolvedEntry[];
 };
 // `host` is written by gen-editor-config.py for reference only — the CLI resolves
 // the box via the ssh alias `${prefix}-${profile}` (HostName lives in ~/.ssh/config).
@@ -92,6 +94,12 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       };
       if (d.file_bridge?.sync_disk) profile.syncDisk = true;
       if (d.file_bridge?.engine) profile.syncEngine = d.file_bridge.engine as EngineId;
+      const rawPaths = d.app_configs?.enabled ? (d.app_configs.paths ?? []) : [];
+      const entries = rawPaths.flatMap((raw: any) => {
+        const r = resolveEntry(raw);
+        return "entry" in r ? [r.entry] : [];
+      });
+      if (entries.length) profile.appConfigs = entries;
       out.push(profile);
     }
     return out;
@@ -294,6 +302,7 @@ export const lazyMountsFor = (cfg: Config, prof: string): LazyMount[] => profile
 export const syncEngineFor = (cfg: Config, prof: string): EngineId => profileOf(cfg, prof)?.syncEngine ?? "mutagen";
 export const syncDiskEnabled = (cfg: Config, prof: string): boolean => profileOf(cfg, prof)?.syncDisk ?? false;
 export const lazyMountOnConnect = (cfg: Config, prof: string): boolean => profileOf(cfg, prof)?.lazyMountOnConnect ?? false;
+export const appConfigsFor = (cfg: Config, prof: string): ResolvedEntry[] => profileOf(cfg, prof)?.appConfigs ?? [];
 
 /** The box's reachable hostname/IP behind the ssh alias (from `ssh -G <host>`), for
  *  pinning Syncthing's peer address. Falls back to the alias itself. */
