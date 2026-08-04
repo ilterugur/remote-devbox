@@ -1,5 +1,9 @@
 # Syncing your Claude config to the box (multi-account)
 
+This page is about the **Claude** config. For application configs — FileZilla
+sites, `~/.ssh/config`, DB clients — see
+[file-bridge.md](file-bridge.md#app-configs-connection-records).
+
 Mirror the **portable** parts of your local `~/.claude` (skills, subagents, slash
 commands, `CLAUDE.md`, MCP definitions, hook scripts) to the box and into **every
 account**, while keeping each account's **credentials and identity separate**.

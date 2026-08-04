@@ -169,6 +169,22 @@ developers:
         layout: tr
       idle_logout_minutes: 60
 
+    # Keep app connection records (FileZilla sites, ~/.ssh/config, DB clients) identical
+    # on the client and the box. Needs file_bridge.sync_disk: true — the real files live
+    # inside the sync disk; see docs/file-bridge.md#app-configs-connection-records.
+    # file_bridge:
+    #   sync_disk: true
+    #   engine: mutagen          # mutagen (default) | syncthing
+    # app_configs:
+    #   enabled: true
+    #   paths:
+    #     - filezilla             # registry key: ~/.config/filezilla <-> box
+    #     - ssh_config             # registry key: managed Include block in ~/.ssh/config
+    #     - label: dbeaver         # custom entry: object form, any label
+    #       client: "~/Library/DBeaverData/workspace6/General/.dbeaver"
+    #       box: "~/.local/share/DBeaverData/workspace6/General/.dbeaver"
+    #       mode: dir
+
     projects:
       # Inherits every default: git=work, agent=claude-work, memory=shared,
       # engine=podman-rootless.
