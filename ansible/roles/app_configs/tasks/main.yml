@@ -1,0 +1,46 @@
+---
+# App configs: install the box-side helper and link the unambiguous cases. Ambiguous
+# ones (box-side content that would have to lose) are reported and left alone — that
+# choice belongs to `devbox config link`, where a human answers.
+
+- name: Install the app-configs helper
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/remote-app-configs.sh"
+    dest: /usr/local/bin/remote-app-configs
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure the app-configs store exists for each developer
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/sync/.app-configs"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ devbox_developers | selectattr('app_configs.enabled') | list }}"
+  loop_control: { label: "{{ item.user }}" }
+
+- name: Link the unambiguous app configs
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/remote-app-configs
+      - ensure
+      - "{{ item.1.label }}"
+      - "{{ item.1.box }}"
+      - "{{ item.1.mode }}"
+      - "/home/{{ item.0.user }}/sync/.app-configs/{{ item.1.label }}"
+  become_user: "{{ item.0.user }}"
+  register: _app_link
+  changed_when: false
+  loop: "{{ devbox_developers | selectattr('app_configs.enabled') | subelements('app_configs.paths') }}"
+  loop_control: { label: "{{ item.0.user }}/{{ item.1.label }}" }
+
+- name: Report app configs that need a human decision
+  ansible.builtin.debug:
+    msg: >-
+      {{ _app_link.results | map(attribute='stderr', default='')
+         | select('search', 'run .devbox config link') | list }}
+  when: >-
+    _app_link.results | map(attribute='stderr', default='')
+    | select('search', 'run .devbox config link') | list | length > 0

@@ -74,6 +74,12 @@
     # security role established is still in place before handing out PAM passwords.
     - { role: desktop, tags: [desktop] }
 
+    # App configs ride the sync disk, so they come after the accounts and home dirs
+    # exist. The role never makes a destructive choice — see roles/app_configs.
+    - role: app_configs
+      tags: [app_configs, bridge]
+      when: devbox_developers | selectattr('app_configs.enabled') | list | length > 0
+
     # Last, so the box CLI describes the box as every earlier role left it.
     - { role: box_cli, tags: [cli, always] }
 
