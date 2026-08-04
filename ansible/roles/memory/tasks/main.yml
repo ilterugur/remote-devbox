@@ -137,6 +137,9 @@
     label: "{{ item.user }}/{{ item.name }}"
   notify: Restart memory daemons
 
+# A keyless provider (openai-codex, claude-code) authenticates with the agent's own
+# OAuth session, so the daemon cannot start until that human has logged in. Provisioning
+# must not fail on a step only a person can perform — it reports and moves on.
 - name: Enable and start each memory daemon
   ansible.builtin.systemd_service:
     name: "hindsight-{{ item.name }}.service"
@@ -151,6 +154,20 @@
   loop: "{{ _devbox_memory_instances }}"
   loop_control:
     label: "{{ item.user }}/{{ item.name }}"
+  register: _devbox_memory_start
+  failed_when: false
+
+- name: Report memory daemons still waiting on an agent login
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.user }}/{{ item.item.name }} did not start. Provider
+      '{{ item.item.llm_provider }}' is keyless — it uses that developer's agent OAuth
+      session, so run `sudo remote-devbox-login {{ item.item.user }}` first, then
+      re-run with --tags memory.
+  loop: "{{ _devbox_memory_start.results }}"
+  loop_control:
+    label: "{{ item.item.user }}/{{ item.item.name }}"
+  when: item.failed | default(false)
 
 # The bank is what makes two agent profiles of the same human share (or not share)
 # memory. It is written per PROFILE, into that profile's own config tree.

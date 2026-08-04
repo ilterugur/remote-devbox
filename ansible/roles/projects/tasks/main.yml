@@ -143,6 +143,17 @@
     (stdout | default('')) is search('install(ing|ed)')
     or (stderr | default('')) is search('install(ing|ed)')
 
+- name: Check which projects have a JavaScript manifest
+  ansible.builtin.stat:
+    path: "{{ item.0.path }}/package.json"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists
+  register: _devbox_manifests
+
+# `install: true` means "install dependencies", not "assume this is a JS project" — a
+# Python or Ansible repo has nothing for bun to do, and failing there is noise.
 - name: Install project dependencies
   ansible.builtin.command:
     cmd: "mise exec -- bun install"
@@ -151,10 +162,13 @@
   become_user: "{{ item.0.user }}"
   environment:
     HOME: "{{ item.0.home }}"
-  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results, _devbox_manifests.results) | list }}"
   loop_control:
     label: "{{ item.0.user }}/{{ item.0.name }}"
-  when: item.1.stat.exists and item.0.install
+  when:
+    - item.1.stat.exists
+    - item.0.install
+    - item.2.stat.exists | default(false)
   changed_when: false
 
 - name: Scaffold .env files from .env.example (never overwrites)
