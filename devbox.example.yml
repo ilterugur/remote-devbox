@@ -152,13 +152,15 @@ developers:
       #                  the name is the warning. Cannot be combined with the others.
       access: [tunnel]
       # The session's keyboard, in XKB terms. Omit it and `devbox plan` detects the
-      # keyboard of the machine it runs on and uses that — which is the right default for
-      # the operator and a guess for everybody else, so state it per developer on a box
-      # with more than one. xrdp cannot be trusted to carry it: it has keymap files for
-      # only some RDP layout ids and silently falls back to us for the rest.
+      # keyboard of the machine it runs on and uses that — the right default for the
+      # operator and a guess for everybody else, so state it per developer on a box with
+      # more than one. The plan output says which of the two it used.
+      #
+      # This is not cosmetic: xrdp maps the layout id the client announces through its own
+      # table, that table has holes (Turkish is one), and an unmapped id becomes `us` in
+      # silence. The role teaches xrdp the layouts named here so the announcement lands.
       #   layout   XKB layout name — tr, us, de, gb …
       #   variant  optional — 'f' is the Turkish F keyboard, plain tr is the Q one
-      #   model    optional, defaults to pc105 (the RDP client sends PC scancodes)
       keyboard:
         layout: tr
       idle_logout_minutes: 60

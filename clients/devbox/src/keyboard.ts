@@ -1,11 +1,15 @@
 /**
  * keyboard.ts — work out what keyboard the machine running the CLI types on.
  *
- * The desktop's layout has to be decided on the box, not left to the RDP client: xrdp
- * ships keymap files for a fixed set of RDP layout ids and silently falls back to `us`
- * for everything else — Turkish is one of the missing ones, so a Turkish keyboard types
- * on a us layout with no error anywhere. The least surprising default is therefore the
- * layout the developer is already using on the client, which is what this detects.
+ * The RDP client does announce its layout, and xrdp maps that announcement to an X11
+ * layout through /etc/xrdp/xrdp_keyboard.ini — but that table covers only some layout
+ * ids and falls back to `us` for the rest, Turkish among them, with nothing but a debug
+ * line to say so. The box therefore has to be taught the mapping for the layouts its
+ * developers actually use, and this is how we learn which those are without asking.
+ *
+ * Setting the layout inside the session instead does NOT work: xrdp applies its own
+ * keymap when the client connects, which is after the session script has run, so
+ * anything setxkbmap did there is overwritten a moment later.
  *
  * `devbox.yml` always wins when it names a layout; this is only the default.
  *
@@ -59,12 +63,6 @@ const MAC_LAYOUTS: Record<string, { layout: string; variant?: string }> = {
 };
 
 /**
- * The RDP client sends PC scancodes whatever the physical keyboard is, so the model the
- * box should assume is a PC one — a Mac's own model name would shift the top row.
- */
-const RDP_MODEL = "pc105";
-
-/**
  * Parse `defaults read com.apple.HIToolbox AppleSelectedInputSources`.
  *
  * The selected sources are an ordered list and the first keyboard layout in it is the
@@ -76,7 +74,7 @@ export function keyboardFromMacInputSources(raw: string): XkbKeyboard | null {
   if (!match) return null;
   const mapped = MAC_LAYOUTS[match[1]!.trim()];
   if (!mapped) return null;
-  return { layout: mapped.layout, variant: mapped.variant ?? null, model: RDP_MODEL };
+  return { layout: mapped.layout, variant: mapped.variant ?? null };
 }
 
 /**
@@ -93,7 +91,7 @@ export function keyboardFromSetxkbmap(raw: string): XkbKeyboard | null {
     raw.match(new RegExp(`^${name}:\\s*(\\S+)`, "m"))?.[1] ?? null;
   const layout = firstOf(field("layout"));
   if (!layout) return null;
-  return { layout, variant: firstOf(field("variant")), model: RDP_MODEL };
+  return { layout, variant: firstOf(field("variant")) };
 }
 
 /** Parse Debian/Ubuntu's /etc/default/keyboard — the fallback for a headless client. */
@@ -102,7 +100,7 @@ export function keyboardFromDefaultKeyboard(raw: string): XkbKeyboard | null {
     raw.match(new RegExp(`^${name}="?([^"\\n]*)"?`, "m"))?.[1]?.trim() || null;
   const layout = firstOf(field("XKBLAYOUT"));
   if (!layout) return null;
-  return { layout, variant: firstOf(field("XKBVARIANT")), model: RDP_MODEL };
+  return { layout, variant: firstOf(field("XKBVARIANT")) };
 }
 
 const run = (cmd: string, args: string[]): string | null => {

@@ -88,20 +88,20 @@ const withDesktop = (desktop: Record<string, unknown>): ResolvedSpec => ({
 const desktopOf = (out: Record<string, unknown>): any => (out.devbox_developers as any[])[0].desktop;
 
 test("an unstated keyboard falls back to the one the client types on", () => {
-  const out = normalize(withDesktop({}), { keyboard: { layout: "tr", variant: null, model: "pc105" } });
-  expect(desktopOf(out).keyboard).toEqual({ layout: "tr", variant: null, model: "pc105" });
+  const out = normalize(withDesktop({}), { keyboard: { layout: "tr", variant: null } });
+  expect(desktopOf(out).keyboard).toEqual({ layout: "tr", variant: null, rdp_layout_id: "0x0000041F" });
 });
 
 test("a stated keyboard beats the detected one", () => {
   const out = normalize(withDesktop({ keyboard: { layout: "de" } }), {
-    keyboard: { layout: "tr", variant: null, model: "pc105" },
+    keyboard: { layout: "tr", variant: null },
   });
-  expect(desktopOf(out).keyboard).toEqual({ layout: "de", variant: null, model: "pc105" });
+  expect(desktopOf(out).keyboard).toEqual({ layout: "de", variant: null, rdp_layout_id: "0x00000407" });
 });
 
 test("a stated keyboard keeps its variant", () => {
   const out = normalize(withDesktop({ keyboard: { layout: "tr", variant: "f" } }), { keyboard: null });
-  expect(desktopOf(out).keyboard).toEqual({ layout: "tr", variant: "f", model: "pc105" });
+  expect(desktopOf(out).keyboard).toEqual({ layout: "tr", variant: "f", rdp_layout_id: "0x0001041F" });
 });
 
 // Undetected and unstated leaves the layout to the box rather than guessing at one.

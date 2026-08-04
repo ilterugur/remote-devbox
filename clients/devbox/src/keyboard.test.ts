@@ -25,7 +25,6 @@ describe("macOS input sources", () => {
     expect(keyboardFromMacInputSources(MAC_TURKISH_Q)).toEqual({
       layout: "tr",
       variant: null,
-      model: "pc105",
     });
   });
 
@@ -33,7 +32,7 @@ describe("macOS input sources", () => {
   // and XKB reaches it only through a variant of the same layout as the Q one.
   test("maps the F keyboard to the tr 'f' variant", () => {
     const raw = '{ "KeyboardLayout Name" = "Turkish"; }';
-    expect(keyboardFromMacInputSources(raw)).toEqual({ layout: "tr", variant: "f", model: "pc105" });
+    expect(keyboardFromMacInputSources(raw)).toEqual({ layout: "tr", variant: "f" });
   });
 
   test("takes the first keyboard layout when several are enabled", () => {
@@ -57,19 +56,19 @@ describe("macOS input sources", () => {
 describe("Linux clients", () => {
   test("reads setxkbmap output as-is — it is already XKB", () => {
     const raw = ["rules:      evdev", "model:      pc105", "layout:     tr", "variant:    f"].join("\n");
-    expect(keyboardFromSetxkbmap(raw)).toEqual({ layout: "tr", variant: "f", model: "pc105" });
+    expect(keyboardFromSetxkbmap(raw)).toEqual({ layout: "tr", variant: "f" });
   });
 
   // A switcher setup would otherwise hand the box a layout list it has no key binding
   // to switch between.
   test("keeps only the first of a multi-layout switcher setup", () => {
     const raw = ["layout:     us,tr", "variant:    ,f"].join("\n");
-    expect(keyboardFromSetxkbmap(raw)).toEqual({ layout: "us", variant: null, model: "pc105" });
+    expect(keyboardFromSetxkbmap(raw)).toEqual({ layout: "us", variant: null });
   });
 
   test("falls back to /etc/default/keyboard", () => {
     const raw = ['XKBMODEL="pc105"', 'XKBLAYOUT="tr"', 'XKBVARIANT=""'].join("\n");
-    expect(keyboardFromDefaultKeyboard(raw)).toEqual({ layout: "tr", variant: null, model: "pc105" });
+    expect(keyboardFromDefaultKeyboard(raw)).toEqual({ layout: "tr", variant: null });
   });
 
   test("reports nothing when /etc/default/keyboard names no layout", () => {

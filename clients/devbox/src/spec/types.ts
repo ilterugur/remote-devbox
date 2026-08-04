@@ -108,14 +108,21 @@ export type DesktopAccess = "tunnel" | "tailnet" | "unsafe-public";
 export interface KeyboardSpec {
   layout: string;
   variant?: string;
-  model?: string;
 }
 
-/** A keyboard with every field decided — what the desktop role receives. */
+/** A keyboard as detected or stated, before the RDP id is worked out. */
 export interface XkbKeyboard {
   layout: string;
   variant: string | null;
-  model: string;
+}
+
+/**
+ * What the desktop role receives: the layout plus the id it announces itself as over
+ * RDP, which is the key xrdp's own mapping table is indexed by. Null when we don't know
+ * the id — the box is then left on xrdp's shipped table rather than taught a guess.
+ */
+export interface ResolvedKeyboard extends XkbKeyboard {
+  rdp_layout_id: string | null;
 }
 
 /**
@@ -134,8 +141,8 @@ export interface DesktopSpec {
   access?: DesktopAccess[];
   idle_logout_minutes?: number;
   /**
-   * Defaults to whatever keyboard the client is typing on (see keyboard.ts). xrdp has no
-   * keymap file for every RDP layout id and falls back to `us` in silence, so an
+   * Defaults to whatever keyboard the client is typing on (see keyboard.ts). xrdp maps
+   * only some announced layout ids and falls back to `us` in silence for the rest, so an
    * undetected and unstated layout is the one case where the desktop is quietly wrong.
    */
   keyboard?: KeyboardSpec;

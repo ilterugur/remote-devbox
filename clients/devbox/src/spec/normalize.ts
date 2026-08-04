@@ -14,10 +14,11 @@ import type {
   MemoryInstance,
   MemorySpace,
   ResolvedDeveloper,
+  ResolvedKeyboard,
   ResolvedSpec,
-  XkbKeyboard,
 } from "./types";
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
+import { rdpLayoutId } from "./rdp-layouts";
 import { toYaml } from "./yaml";
 
 const GENERATED_HEADER = [
@@ -155,10 +156,11 @@ const normalizeInstance = (i: MemoryInstance) => ({
  * developers it is a guess for everyone but the operator — which is why `devbox plan`
  * prints where the layout came from rather than just what it is.
  */
-function resolveKeyboard(dev: ResolvedDeveloper, client: ClientFacts): XkbKeyboard | null {
+function resolveKeyboard(dev: ResolvedDeveloper, client: ClientFacts): ResolvedKeyboard | null {
   const stated = dev.desktop?.keyboard;
-  if (!stated) return client.keyboard;
-  return { layout: stated.layout, variant: stated.variant ?? null, model: stated.model ?? "pc105" };
+  const keyboard = stated ? { layout: stated.layout, variant: stated.variant ?? null } : client.keyboard;
+  if (!keyboard) return null;
+  return { ...keyboard, rdp_layout_id: rdpLayoutId(keyboard) };
 }
 
 function mapValues<T, R>(

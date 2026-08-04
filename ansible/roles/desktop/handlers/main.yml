@@ -1,11 +1,23 @@
 ---
+# Ordered deliberately: handlers run in the order they are DEFINED, not the order they
+# were notified, so a changed unit file is reloaded before anything is restarted under it.
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Restarting the session manager abandons every open desktop: sesman keeps its session
+# list in memory, and the X servers it started outlive it without being reachable again.
+# So this is notified ONLY by a change to sesman's own config, never as a way to reload
+# xrdp — which is what the packaged BindsTo would otherwise turn every xrdp restart into.
+- name: Restart xrdp-sesman
+  ansible.builtin.systemd_service:
+    name: xrdp-sesman.service
+    state: restarted
+
 - name: Restart xrdp
   ansible.builtin.systemd_service:
-    name: "{{ item }}"
+    name: xrdp.service
     state: restarted
-  loop:
-    - xrdp-sesman.service
-    - xrdp.service
 
 - name: Restart fail2ban
   ansible.builtin.systemd_service:
