@@ -304,7 +304,24 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   validateAgentProfiles(d, base, issues);
   validateMemory(d.memory, `${base}.memory`, issues);
   validateDesktop(d.desktop, `${base}.desktop`, issues);
+  validateFileBridge(d.file_bridge, `${base}.file_bridge`, issues);
   validateProjects(d.projects, `${base}.projects`, issues);
+}
+
+const SYNC_ENGINES = ["mutagen", "syncthing"];
+
+function validateFileBridge(fb: unknown, base: string, issues: Issue[]): void {
+  if (fb === undefined) return;
+  if (!isRecord(fb)) {
+    issues.push(err(base, "must be a mapping"));
+    return;
+  }
+  if (fb.sync_disk !== undefined && typeof fb.sync_disk !== "boolean") {
+    issues.push(err(`${base}.sync_disk`, "must be true or false"));
+  }
+  if (fb.engine !== undefined && !SYNC_ENGINES.includes(String(fb.engine))) {
+    issues.push(err(`${base}.engine`, `must be one of: ${SYNC_ENGINES.join(", ")}`));
+  }
 }
 
 function validateResources(r: unknown, base: string, issues: Issue[]): void {

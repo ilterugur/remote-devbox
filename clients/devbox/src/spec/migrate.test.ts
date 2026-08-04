@@ -80,15 +80,14 @@ test("profile sudo and servers are warned about, never dropped silently", () => 
   expect(paths).toContain("profiles[0].servers");
 });
 
-test("client-side sync features are warned about", () => {
+test("the sync disk carries over into file_bridge; lazy mounts still warn", () => {
   const raw = legacy();
-  const issues = migrateLegacy({
+  const result = migrateLegacy({
     ...raw,
     profiles: [{ ...raw.profiles[0], sync_disk: true, lazy_mounts: [{ label: "d", path: "~/Desktop" }] }],
-  }).issues;
-  expect(issues.map((i) => i.path)).toEqual(
-    expect.arrayContaining(["profiles[0].lazy_mounts", "profiles[0].sync_disk"]),
-  );
+  });
+  expect(result.issues.map((i) => i.path)).toEqual(expect.arrayContaining(["profiles[0].lazy_mounts"]));
+  expect(result.spec.developers[0]!.file_bridge?.sync_disk).toBe(true);
 });
 
 test("the migrated spec passes structural, reference and resolution validation", () => {

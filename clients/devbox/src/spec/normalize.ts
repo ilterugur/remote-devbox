@@ -120,6 +120,10 @@ function normalizeDeveloper(
       idle_logout_minutes: dev.desktop?.idle_logout_minutes ?? null,
       keyboard: resolveKeyboard(dev, client),
     },
+    file_bridge: {
+      sync_disk: dev.file_bridge?.sync_disk ?? false,
+      engine: dev.file_bridge?.engine ?? "mutagen",
+    },
     projects: dev.projects.map((p) => ({
       name: p.name,
       repo: p.repo,

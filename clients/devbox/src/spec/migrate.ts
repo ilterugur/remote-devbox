@@ -18,10 +18,12 @@ import type {
   AgentProvider,
   DeveloperSpec,
   DevboxSpec,
+  FileBridgeSpec,
   GitIdentity,
   MemoryInstance,
   ProjectSpec,
   ResourceSpec,
+  SyncEngineId,
 } from "./types";
 import { toYaml } from "./yaml";
 
@@ -89,10 +91,11 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
         ),
       );
     }
-    for (const key of ["lazy_mounts", "sync_disk", "sync_engine"] as const) {
-      if (profile[key] !== undefined) {
-        issues.push(warn(`${path}.${key}`, "not represented in the canonical config yet — carry it over by hand"));
-      }
+    const bridge: FileBridgeSpec = {};
+    if (profile.sync_disk === true) bridge.sync_disk = true;
+    if (typeof profile.sync_engine === "string") bridge.engine = profile.sync_engine as SyncEngineId;
+    if (profile.lazy_mounts !== undefined) {
+      issues.push(warn(`${path}.lazy_mounts`, "not represented in the canonical config yet — carry it over by hand"));
     }
 
     const dev: DeveloperSpec = {
@@ -101,6 +104,7 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
       adopt_existing: true,
       login_ssh_keys: operatorKey ? [operatorKey] : [],
     };
+    if (Object.keys(bridge).length) dev.file_bridge = bridge;
 
     const resources = resourcesFrom(legacy.rc_limits);
     if (resources) dev.resources = resources;

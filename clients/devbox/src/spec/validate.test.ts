@@ -231,3 +231,21 @@ test("host.swappiness must be a kernel-valid integer", () => {
   expect(paths(host(-1))).toContain("error:host.swappiness");
   expect(paths(host("10"))).toContain("error:host.swappiness");
 });
+
+test("file_bridge accepts a known engine", () => {
+  const r = validateStructure({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: { sync_disk: true, engine: "syncthing" } }],
+  });
+  expect(r.issues).toEqual([]);
+  expect(r.spec?.developers[0]!.file_bridge?.engine).toBe("syncthing");
+});
+
+test("file_bridge rejects an unknown engine", () => {
+  expect(
+    paths({
+      ...minimal(),
+      developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: { engine: "rsync" } }],
+    }),
+  ).toContain("error:developers[0].file_bridge.engine");
+});

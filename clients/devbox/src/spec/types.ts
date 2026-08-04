@@ -150,6 +150,14 @@ export interface DesktopSpec {
   keyboard?: KeyboardSpec;
 }
 
+export type SyncEngineId = "mutagen" | "syncthing";
+
+/** The client<->box file bridge. Only the sync disk is represented; lazy mounts are not. */
+export interface FileBridgeSpec {
+  sync_disk?: boolean;
+  engine?: SyncEngineId;
+}
+
 export interface ResourceSpec {
   memory_high?: string;
   memory_max?: string;
@@ -184,6 +192,7 @@ export interface DeveloperSpec {
   default_agent_profile?: string;
   memory?: MemorySpec;
   desktop?: DesktopSpec;
+  file_bridge?: FileBridgeSpec;
   projects?: ProjectSpec[];
 }
 
