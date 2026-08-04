@@ -235,7 +235,7 @@ export function unlinkClient(profile: string, e: ResolvedEntry): { restored: boo
     const stripped = body.replace(new RegExp(`${MARK_START}[\\s\\S]*?${MARK_END}\\n?`), "");
     if (!existsSync(target)) {
       writeFileSync(p, stripped, { mode: 0o600 });
-      return { restored: false, reason: "store payload is missing — Include block removed, but its host entries could not be recovered" };
+      return { restored: false, reason: "store payload is missing — its host entries could not be recovered" };
     }
     writeFileSync(p, readFileSync(target, "utf8") + stripped, { mode: 0o600 });
     return { restored: true };
@@ -274,9 +274,14 @@ export async function runConfigUnlink(cfg: Config, profile: string, label?: stri
 
     if (plan.action === "restore") {
       const r = unlinkClient(profile, e);
-      if (!r.restored) out(`  ! ${e.label}: ${r.reason}`);
+      // A failed restore must never be followed by a ✓ line — that marker is a claim
+      // that the client was left in a working state, which is exactly what did not
+      // happen here (the link is still in place, nothing to show for it).
+      if (r.restored) out(`  ✓ ${e.label}: restore`);
+      else out(`  ! ${e.label}: ${r.reason}`);
+    } else {
+      out(`  ✓ ${e.label}: skip (${plan.reason})`);
     }
-    out(`  ✓ ${e.label}: ${plan.action}${plan.action === "skip" ? ` (${plan.reason})` : ""}`);
     boxSh(cfg, profile, ["unlink", e.label, e.box, e.mode, boxStorePath(profile, e)]);
   }
   out(`  · the synced copies are left in ${join(syncDiskRoot(profile), ".app-configs")} — delete them by hand when you are sure`);

@@ -505,6 +505,34 @@ describe("runConfigUnlink", () => {
       cleanupProfile(profile);
     }
   });
+
+  test("a failed restore (missing store payload) never prints a success line for that entry", async () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "cfg");
+    const e = genericDirEntry(p);
+    const target = clientPayload(profile, e); // never created — the store payload is missing
+    symlinkSync(target, p); // client-side: correctly "linked", so plan.action is "restore"
+    const cfg = baseCfg(profile);
+    cfg.profiles[0]!.appConfigs = [e];
+    const lines: string[] = [];
+    const spy = process.stdout.write;
+    process.stdout.write = ((s: string) => { lines.push(s); return true; }) as typeof process.stdout.write;
+    try {
+      await runConfigUnlink(cfg, profile);
+    } catch {
+      // Expected: boxSh dies because the fake ssh alias (devbox-<profile>) is unreachable
+      // in this test env — the client-side restore attempt and its output already
+      // happened before that call, which is exactly what this test is checking.
+    } finally {
+      process.stdout.write = spy;
+      cleanupProfile(profile);
+    }
+    const output = lines.join("");
+    expect(output).toContain("! dbeaver: store payload is missing");
+    expect(output).not.toContain("✓ dbeaver"); // the failure must not be followed by a success marker
+    expect(lstatSync(p).isSymbolicLink()).toBe(true); // nothing was destroyed either
+  });
 });
 
 describe("linkClient — ssh-include mode", () => {
