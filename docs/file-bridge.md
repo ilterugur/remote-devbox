@@ -128,16 +128,25 @@ without touching either side.
 
 ### The link decision
 
-The first `devbox config link` on a brand-new store is simple: whichever side has
-content wins, and an empty pair just creates an empty store. It gets more careful
-once the sync disk already holds a synced copy — the case that matters for a
-**second client machine** joining an existing profile:
+`devbox config link` only proceeds silently when there is nothing to lose; the
+moment a real choice exists, it stops and asks. Already-linked entries on both
+sides are a no-op, and an existing link that points somewhere unexpected (not at
+this feature's store) makes it refuse and tell you to resolve it by hand rather
+than guess. Otherwise:
 
-- If both sides are bare (nothing there, or already pointing at the store), it
-  links straight to the existing synced copy — nothing to choose.
-- If either side has *unlinked* content — a real `sitemanager.xml` that was never
-  linked, say — `devbox config link` stops and asks which side wins rather than
-  silently overwriting the shared copy with a second machine's local sites.
+- **Fresh store, nothing to lose** — only one side has content, or neither does:
+  it uses whichever side has content, or seeds an empty store if both are bare.
+- **Fresh store, both sides already have unlinked content** — the ordinary case
+  for anyone adopting this after already using FileZilla or SSH on both the Mac
+  and the box: it stops and asks which side wins, since linking either way would
+  silently make the other side's content unreadable by the app.
+- **Store already seeded, and anything beyond a fully bare pair** — a real
+  synced copy exists, and either side still has unlinked content of its own.
+  This is what protects a **second client machine** joining an existing profile:
+  a fully bare pair (nothing there, or already pointing at the store) links
+  straight to the existing synced copy with nothing to choose, but any unlinked
+  content on the new machine (or the box) makes it ask instead of silently
+  overwriting the shared copy.
 
 `--from-client` skips the prompt by always choosing the client, which is useful
 in scripts but means you should only pass it when you are sure the client's copy
@@ -165,13 +174,22 @@ modes that otherwise look fine at a glance:
 
 ### `devbox config unlink`
 
-Restores the real file or directory on the client (and, via the box-side helper,
-on the box) and removes the link. It refuses to destroy a link when the store
-payload backing it is missing — leaving the link in place is better than deleting
-it and having nothing to put back — and in that case it does not print a success
-marker for that entry. The synced copies under `.app-configs/` in the sync disk
-are left behind on purpose; delete them by hand once you're sure you don't need
-them.
+Restores real files on the client (and, via the box-side helper, on the box) and
+removes the link — but the exact behavior when the store payload backing a link
+is missing differs by mode, because for `dir`/`file` there might still be
+something to put back later, while for `ssh-include` there provably is not:
+
+- **`dir` / `file`** — leaves the link untouched and reports the failure, rather
+  than deleting it and finding nothing to restore in its place.
+- **`ssh-include`** — the host entries lived only in the missing payload, so
+  there is nothing to recover either way, and leaving the `Include` line
+  pointing at a nonexistent file would make OpenSSH fail to parse the rest of
+  `~/.ssh/config`. It removes the managed block instead (the rest of the file is
+  preserved) and reports the host entries as unrecoverable.
+
+In both cases no success marker is printed for an entry that could not be fully
+restored. The synced copies under `.app-configs/` in the sync disk are left
+behind on purpose; delete them by hand once you're sure you don't need them.
 
 Never synced: SSH private keys, `authorized_keys`, `known_hosts`. FileZilla's
 `queue.sqlite3` is excluded too — it is machine-local, and syncing SQLite corrupts it.
@@ -182,9 +200,15 @@ effectively plain text. On the box that file sits under `/home/<user>/sync` with
 FileZilla's master password (same password on both sides) or use it without saved
 passwords and share only the site list.
 
-`mode: file` is allowed for custom entries but risky: an app that writes atomically
-(temp file + rename) replaces the symlink with a regular file, silently breaking the
-link. Prefer `dir` when the app supports pointing at a directory.
+`mode: file` is allowed for custom entries but risky: an app that writes its config
+atomically (temp file + rename, a common pattern) can end up replacing the symlink
+itself with a plain file, silently breaking the link. Prefer `dir` when the app
+supports pointing at a directory.
+
+If `devbox config link` refuses an entry with "an existing link points somewhere
+else", the client or box path is already a symlink to something outside this
+feature's store (leftover from a different tool, or a stale manual symlink) —
+resolve or remove it by hand, then re-run `link`.
 
 ## Troubleshooting: Mutagen "agent ... Permission denied" on a hardened box
 
