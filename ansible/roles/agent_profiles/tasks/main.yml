@@ -54,6 +54,7 @@
     cmd: "set -o pipefail; timeout 600 bash -lc '{{ devbox_agent_adapters[item.provider].install_cmd }}'"
     executable: /bin/bash
     creates: "/home/{{ item.user }}/{{ devbox_agent_adapters[item.provider].install_creates }}"
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -70,6 +71,7 @@
       bash -lc "/home/{{ item.user }}/{{ devbox_agent_adapters[item.provider].bin_path }}
       {{ devbox_agent_adapters[item.provider].version_args }}"
     executable: /bin/bash
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -117,6 +119,7 @@
       json.dump(d,open(p,"w"),indent=2)'
       "/home/{{ item.user }}/.agent-profiles/{{ item.name }}"
       "/home/{{ item.user }}"
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"

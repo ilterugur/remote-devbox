@@ -60,6 +60,7 @@
       m["playwright"]={"command":"npx","args":["-y","@playwright/mcp@latest","--browser","chrome","--headless","--no-sandbox"]};
       m["chrome-devtools"]={"command":"npx","args":["-y","chrome-devtools-mcp@latest","--headless","--isolated","--channel","stable","--chrome-arg=--no-sandbox","--chrome-arg=--disable-setuid-sandbox","--no-usage-statistics"]};
       json.dump(d,open(p,"w"),indent=2)'
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -84,6 +85,7 @@
       m["playwright"]={"command":"npx","args":["-y","@playwright/mcp@latest","--cdp-endpoint","http://127.0.0.1:{{ browser_cdp_port }}"]};
       m["chrome-devtools"]={"command":"npx","args":["-y","chrome-devtools-mcp@latest","--browserUrl","http://127.0.0.1:{{ browser_cdp_port }}","--no-usage-statistics"]};
       json.dump(d,open(p,"w"),indent=2)'
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"

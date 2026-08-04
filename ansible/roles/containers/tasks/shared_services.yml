@@ -1,0 +1,44 @@
+---
+# The ONE legitimate use of a rootful daemon: infrastructure the whole box shares (a
+# database, a registry mirror) that the operator owns and developers only consume over
+# the network. Developers are still never added to the docker group — if they could
+# reach this socket, they could mount any developer's home into a container as root.
+
+- name: Install the system Docker daemon for shared services
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+  when: devbox_shared_services.enabled | bool
+
+- name: Enable the shared services daemon
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: started
+    masked: false
+  when: devbox_shared_services.enabled | bool
+
+- name: Confirm no developer can reach the rootful socket
+  ansible.builtin.command: "id -nG {{ item.user }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_dev_groups
+  changed_when: false
+  when: devbox_shared_services.enabled | bool
+
+- name: Assert developers stayed out of the docker group
+  ansible.builtin.assert:
+    that: "'docker' not in item.stdout.split()"
+    fail_msg: >-
+      {{ item.item.user }} is in the docker group. That group is root-equivalent: it
+      would give access to every other developer's files through a bind mount.
+  loop: "{{ _devbox_dev_groups.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.user | default('') }}"
+  when: devbox_shared_services.enabled | bool

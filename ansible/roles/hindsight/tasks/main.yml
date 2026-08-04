@@ -57,6 +57,7 @@
         entities_allow_free_form: true
     status_code: [200, 201]
     timeout: 15
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ profiles }}"
   loop_control:
@@ -73,6 +74,7 @@
     cmd: >-
       uvx hindsight-embed -p claude-code profile set-env claude-code
       HINDSIGHT_API_CONSOLIDATION_DEDUP_THRESHOLD {{ hindsight_dedup_threshold | default('0.95') }}
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -116,6 +118,7 @@
     version: main
     depth: 1
     force: true
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -126,6 +129,7 @@
 - name: Register the Hindsight plugin marketplace from the local clone (idempotent)
   ansible.builtin.command:
     cmd: "/home/{{ item.user }}/.local/bin/claude plugin marketplace add /home/{{ item.user }}/.claude/plugins/marketplaces/vectorize-io-hindsight"
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -144,6 +148,7 @@
 - name: Install the hindsight-memory plugin per profile (idempotent)
   ansible.builtin.command:
     cmd: "/home/{{ item.user }}/.local/bin/claude plugin install hindsight-memory"
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -171,6 +176,7 @@
       present=any(any(i.get("command")==cmd for i in g.get("hooks",[])) for g in stop);
       stop.append({"hooks":[{"type":"command","command":cmd,"timeout":20}]}) if not present else None;
       json.dump(d,open(p,"w"),indent=2)'
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"

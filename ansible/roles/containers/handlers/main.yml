@@ -1,0 +1,27 @@
+---
+# Restarting a user manager ends that developer's running session, so it only fires
+# when the delegation drop-in actually changed — in practice, first provisioning.
+- name: Restart user managers
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart user managers (per developer)
+  ansible.builtin.command: "systemctl restart user@{{ ansible_facts.getent_passwd[item.user][1] }}.service"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  listen: Restart user managers
+  changed_when: true
+- name: Restart rootless Docker
+  ansible.builtin.systemd_service:
+    name: docker.service
+    scope: user
+    state: restarted
+    daemon_reload: true
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"

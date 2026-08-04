@@ -1,0 +1,53 @@
+---
+# Podman rootless is the default engine: it needs no daemon, so there is no privileged
+# socket to leak, and every container runs inside the developer's own systemd user
+# slice — which means the resource limits from the resource_limits role apply to
+# container workloads for free.
+
+- name: Install Podman
+  ansible.builtin.apt:
+    name:
+      - podman
+      - passt # pasta networking (Podman's default rootless network backend)
+      - podman-compose
+    state: present
+    update_cache: true
+
+- name: Enable the rootless Podman API socket per developer
+  # The socket is what makes tools that expect a Docker-style endpoint work. It lives in
+  # the developer's own /run/user/<uid>, so it is unreachable by anyone else.
+  ansible.builtin.systemd_service:
+    name: podman.socket
+    scope: user
+    enabled: true
+    state: started
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Verify rootless Podman works for each developer
+  ansible.builtin.command: podman info --format '{{ "{{" }}.Host.Security.Rootless{{ "}}" }}'
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_podman_check
+  changed_when: false
+
+- name: Assert Podman really is rootless
+  ansible.builtin.assert:
+    that: item.stdout | trim == 'true'
+    fail_msg: >-
+      podman reports Rootless={{ item.stdout | trim }} for {{ item.item.user }} — a
+      rootful engine would defeat the isolation between developers.
+  loop: "{{ _devbox_podman_check.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"

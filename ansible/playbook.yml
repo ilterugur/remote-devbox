@@ -63,6 +63,10 @@
     - { role: agent_profiles, tags: [agents] }
     - { role: projects, tags: [projects] }
 
+    # Rootless engines, per developer. Installed after projects so the engine map can
+    # name every project it resolves.
+    - { role: containers, tags: [containers] }
+
   post_tasks:
     - name: Next steps
       ansible.builtin.debug:

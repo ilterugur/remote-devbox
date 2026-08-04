@@ -43,6 +43,7 @@
       ssh-keygen -t ed25519 -N '' -C '{{ item.email }}'
       -f /home/{{ item.user }}/.ssh/git-identities/{{ item.key }}/id_ed25519
     creates: "/home/{{ item.user }}/.ssh/git-identities/{{ item.key }}/id_ed25519"
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ _devbox_identities }}"
   loop_control:
@@ -73,10 +74,21 @@
           Port 443
           User git
           StrictHostKeyChecking accept-new
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ devbox_developers }}"
   loop_control:
     label: "{{ item.user }}"
+
+- name: Check whether github.com is already trusted
+  ansible.builtin.command:
+    cmd: "ssh-keygen -F github.com -f /home/{{ item.user }}/.ssh/known_hosts"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_known_hosts
+  changed_when: false
+  failed_when: false
 
 - name: Trust the github.com host key
   ansible.builtin.known_hosts:
@@ -84,10 +96,14 @@
     name: github.com
     key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 github.com 2>/dev/null') }}"
     state: present
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ devbox_developers }}"
   loop_control:
     label: "{{ item.user }}"
+    index_var: _idx
+  # Re-scanning on every run would rewrite the file and report a permanent change.
+  when: _devbox_known_hosts.results[_idx].rc != 0
   failed_when: false # offline provisioning shouldn't block; the clone will warn instead
 
 # The global .gitconfig only carries the developer's DEFAULT identity, and only when
