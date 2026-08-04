@@ -95,7 +95,7 @@ function developerLines(dev: ResolvedDeveloper): string[] {
         "desktop",
         [
           `${dev.desktop.environment}/${dev.desktop.transport}`,
-          dev.desktop.tailscale_only === false ? "PUBLIC" : "tailnet-only",
+          `via ${(dev.desktop.access ?? ["tunnel"]).join(" + ")}`,
           idle ? `idle logout ${idle}m` : "no idle logout",
         ].join(" · "),
         indent,

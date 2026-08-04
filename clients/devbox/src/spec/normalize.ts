@@ -101,9 +101,9 @@ function normalizeDeveloper(dev: ResolvedDeveloper): Record<string, unknown> {
       enabled: dev.desktop?.enabled ?? false,
       environment: dev.desktop?.environment ?? "xfce",
       transport: dev.desktop?.transport ?? "xrdp",
-      // Tailnet-only is the safe default: xRDP must never be reachable from the public
-      // interface unless the operator explicitly opts out.
-      tailscale_only: dev.desktop?.tailscale_only ?? true,
+      // Tunnel-only by default: the RDP prompt is then unreachable without an SSH key,
+      // which turns the PAM password from the exposed gate into a second factor.
+      access: [...(dev.desktop?.access ?? ["tunnel"])],
       idle_logout_minutes: dev.desktop?.idle_logout_minutes ?? null,
     },
     projects: dev.projects.map((p) => ({

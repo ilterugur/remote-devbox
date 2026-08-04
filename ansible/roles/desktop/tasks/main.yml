@@ -11,6 +11,13 @@
   ansible.builtin.set_fact:
     _devbox_desktop_users: "{{ devbox_developers | selectattr('desktop.enabled') | list }}"
 
+# xrdp is one host-level service, so its listen set is the union across everyone who
+# asked for a desktop — not a per-developer choice.
+- name: Work out how the desktop must be reachable
+  ansible.builtin.set_fact:
+    _devbox_desktop_access: >-
+      {{ _devbox_desktop_users | map(attribute='desktop.access') | flatten | unique | list }}
+
 - name: Install XFCE and xRDP
   ansible.builtin.apt:
     name:
@@ -112,7 +119,7 @@
       security role.
   when: _devbox_desktop_users | length > 0
 
-- name: Restrict RDP to the tailnet
+- name: Allow RDP over the tailnet
   community.general.ufw:
     rule: allow
     port: "3389"
@@ -120,28 +127,113 @@
     interface: tailscale0
     direction: in
     comment: "xrdp over the tailnet"
-  when:
-    - _devbox_desktop_users | length > 0
-    - devbox_network.tailscale.enabled | bool
+  when: "'tailnet' in _devbox_desktop_access"
 
-- name: Remove any public RDP rule
-  # ufw only adds rules, so a box that was once public keeps the old allow until it is
-  # deleted explicitly. Leaving it would silently defeat the tailnet-only setting.
+# Deliberately spelled out rather than reached by a boolean: this is the one path that
+# puts a password-authenticated service on the public internet.
+- name: Allow RDP from anywhere (unsafe-public)
+  community.general.ufw:
+    rule: allow
+    port: "3389"
+    proto: tcp
+    comment: "xrdp UNSAFE-PUBLIC — password-authenticated service on the internet"
+  when: "'unsafe-public' in _devbox_desktop_access"
+
+- name: Remove a stale public RDP rule
+  # ufw only adds rules, so a box that once allowed 3389 publicly keeps that rule until
+  # it is deleted. Leaving it would silently defeat a later switch back to tunnel-only.
   community.general.ufw:
     rule: allow
     port: "3389"
     proto: tcp
     delete: true
+  when: "'unsafe-public' not in _devbox_desktop_access"
   failed_when: false
 
-- name: Refuse to expose RDP publicly without an explicit opt-out
-  ansible.builtin.assert:
-    that: devbox_network.tailscale.enabled | bool
-    fail_msg: >-
-      desktop.enabled is set but Tailscale is off, so there is no private network to
-      scope RDP to. Enable Tailscale, or set desktop.tailscale_only: false for that
-      developer to accept a publicly reachable RDP port.
-  loop: "{{ _devbox_desktop_users }}"
-  loop_control:
-    label: "{{ item.user }}"
-  when: item.desktop.tailscale_only | bool
+- name: Remove a stale tailnet RDP rule
+  community.general.ufw:
+    rule: allow
+    port: "3389"
+    proto: tcp
+    interface: tailscale0
+    direction: in
+    delete: true
+  when: "'tailnet' not in _devbox_desktop_access"
+  failed_when: false
+
+# xrdp binds interfaces by name at startup, so a tailnet listener needs tailscale0 to
+# already exist — otherwise the bind fails and the service comes up reachable only on
+# whatever else was listed.
+- name: Ensure the xrdp drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/xrdp.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: "'tailnet' in _devbox_desktop_access"
+
+- name: Start xrdp after the tailnet is up
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/xrdp.service.d/10-devbox-after-tailscaled.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      [Unit]
+      After=tailscaled.service
+      Wants=tailscaled.service
+  when: "'tailnet' in _devbox_desktop_access"
+  notify: Restart xrdp
+
+- name: Teach fail2ban what an xrdp login failure looks like
+  # fail2ban ships no xrdp filter on Ubuntu, so a jail alone would silently not exist.
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/filter.d/devbox-xrdp.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      [Definition]
+      failregex = ^.*\[ERROR\] login failed for user .* from <HOST>.*$
+                  ^.*AUTHFAIL.*client_ip=<HOST>.*$
+                  ^.*\[INFO \] Login failed for display .*client_ip=<HOST>.*$
+      ignoreregex =
+
+- name: Watch xrdp for password guessing
+  # fail2ban shipped with an sshd jail only, so the one password-authenticated service on
+  # the box was the one nobody was counting failures for.
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/devbox-xrdp.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      [devbox-xrdp]
+      enabled  = true
+      filter   = devbox-xrdp
+      port     = 3389
+      logpath  = /var/log/xrdp-sesman.log
+                 /var/log/xrdp.log
+      backend  = auto
+      maxretry = 4
+      findtime = 600
+      bantime  = 3600
+  when: _devbox_desktop_users | length > 0
+  notify: Restart fail2ban
+
+- name: Report how the desktop is reachable
+  ansible.builtin.debug:
+    msg: >-
+      Desktop listens via {{ _devbox_desktop_access | join(', ') }}.
+      {% if 'tunnel' in _devbox_desktop_access %}
+      Tunnel: ssh -L 3389:127.0.0.1:3389 <developer>@<box>, then point the RDP client at
+      localhost:3389.
+      {% endif %}
+      {% if 'unsafe-public' in _devbox_desktop_access %}
+      WARNING: unsafe-public is set — the RDP password is now internet-facing.
+      {% endif %}
+  when: _devbox_desktop_users | length > 0

@@ -146,3 +146,56 @@ test("a profile name with a slash is rejected (it becomes a filename)", () => {
   };
   expect(paths(raw)).toContain("error:developers[0].agent_profiles.a/b");
 });
+
+test("desktop access defaults are absent-but-valid; an empty list is not", () => {
+  const desktop = (extra: Record<string, unknown>) => ({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, ...extra } }],
+  });
+  expect(paths(desktop({}))).toEqual([]);
+  expect(paths(desktop({ access: [] }))).toContain("error:developers[0].desktop.access");
+});
+
+test("desktop access rejects unknown values and duplicates", () => {
+  const desktop = (access: unknown) => ({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, access } }],
+  });
+  expect(paths(desktop(["vpn"]))).toContain("error:developers[0].desktop.access");
+  expect(paths(desktop(["tunnel", "tunnel"]))).toContain("error:developers[0].desktop.access");
+  expect(paths(desktop(["tunnel", "tailnet"]))).toEqual([]);
+});
+
+test("unsafe-public cannot be combined — the wildcard bind would collide", () => {
+  const raw = {
+    ...minimal(),
+    developers: [
+      { user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, access: ["unsafe-public", "tunnel"] } },
+    ],
+  };
+  expect(paths(raw)).toContain("error:developers[0].desktop.access");
+  expect(
+    paths({
+      ...minimal(),
+      developers: [{ user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, access: ["unsafe-public"] } }],
+    }),
+  ).toEqual([]);
+});
+
+test("the removed tailscale_only is reported, not ignored", () => {
+  const raw = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, tailscale_only: true } }],
+  };
+  expect(paths(raw)).toContain("error:developers[0].desktop.tailscale_only");
+});
+
+test("hardware-backed and certificate SSH keys are accepted", () => {
+  for (const key of [
+    "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5 dev-a@yubikey",
+    "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNh dev-a@yubikey",
+    "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5 dev-a@ca",
+  ]) {
+    expect(paths({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [key] }] })).toEqual([]);
+  }
+});

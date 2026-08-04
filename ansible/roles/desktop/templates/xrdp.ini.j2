@@ -1,14 +1,22 @@
 ; Managed by Ansible (remote-devbox) — do not edit by hand.
 ;
-; The listen address is the real control here: binding to the tailnet address means a
-; public scan finds a closed port even if a firewall rule is ever mis-ordered.
+; The bind address lives inside `port=` (there is no `address=` key) and needs the
+; tcp:// prefix — a bare "127.0.0.1:3389" is parsed as plain 0.0.0.0 and silently binds
+; every interface, which is exactly the kind of decorative hardening worth not shipping.
+; Verified on xrdp 0.10: with the prefix the socket really is address-scoped, so a path
+; missing from the access list has no listener at all, firewall or no firewall.
 [Globals]
 ini_version=1
 fork=true
-port={{ devbox_desktop_port | default(3389) }}
-{% if devbox_network.tailscale.enabled %}
-address={{ ansible_facts.tailscale0.ipv4.address | default('0.0.0.0') }}
-{% endif %}
+{% set _p = devbox_desktop_port | default(3389) %}
+{% set _binds = [] %}
+{% for a in _devbox_desktop_access %}
+{%   if a == 'tunnel' %}{{ _binds.append('tcp://127.0.0.1:' ~ _p) or '' }}
+{%   elif a == 'tailnet' %}{{ _binds.append('tcp://' ~ ansible_facts.tailscale0.ipv4.address ~ ':' ~ _p) or '' }}
+{%   elif a == 'unsafe-public' %}{{ _binds.append('tcp://0.0.0.0:' ~ _p) or '' }}
+{%   endif %}
+{% endfor %}
+port={{ _binds | join(' ') }}
 use_vsock=false
 tcp_nodelay=true
 tcp_keepalive=true

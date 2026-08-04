@@ -24,6 +24,7 @@ const EXPOSURES: readonly string[] = [
   "public_only",
 ] satisfies SshExposure[];
 const PROVIDERS: readonly string[] = ["claude", "codex"];
+const DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];
 const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
 /**
  * An agent profile becomes a launcher script on the developer's PATH. Naming a profile
@@ -32,8 +33,14 @@ const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
  */
 const RESERVED_PROFILE_NAMES: readonly string[] = ["claude", "codex", "mise", "git", "node", "bun"];
 
+/**
+ * Accepts the classic types plus FIDO2/security-key types (sk-*) and certificates.
+ * Rejecting sk-* would have blocked the one upgrade worth making here: a hardware key's
+ * private half cannot be copied off the token.
+ */
 export const isSshPublicKey = (s: unknown): boolean =>
-  typeof s === "string" && /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp\d+)\s+[A-Za-z0-9+/=]+/.test(s.trim());
+  typeof s === "string" &&
+  /^(sk-)?(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp\d+)(-cert-v01)?(@openssh\.com)?\s+[A-Za-z0-9+/=]+/.test(s.trim());
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -406,12 +413,44 @@ function validateDesktop(d: unknown, base: string, issues: Issue[]): void {
   if (d.transport !== undefined && d.transport !== "xrdp") {
     issues.push(err(`${base}.transport`, "only 'xrdp' is supported"));
   }
-  if (d.tailscale_only !== undefined && typeof d.tailscale_only !== "boolean") {
-    issues.push(err(`${base}.tailscale_only`, "must be true or false"));
+  // Renamed rather than silently ignored: a leftover tailscale_only would read as
+  // "restricted" while the desktop quietly fell back to the default.
+  if (d.tailscale_only !== undefined) {
+    issues.push(
+      err(
+        `${base}.tailscale_only`,
+        "replaced by 'access' — use access: [tailnet] for the old true, or [tunnel] for the new default",
+      ),
+    );
   }
+  validateDesktopAccess(d.access, `${base}.access`, issues);
   const idle = d.idle_logout_minutes;
   if (idle !== undefined && !(typeof idle === "number" && Number.isInteger(idle) && idle > 0)) {
     issues.push(err(`${base}.idle_logout_minutes`, "must be a positive integer"));
+  }
+}
+
+function validateDesktopAccess(access: unknown, base: string, issues: Issue[]): void {
+  if (access === undefined) return;
+  if (!Array.isArray(access) || access.length === 0) {
+    issues.push(err(base, `must be a non-empty list of: ${DESKTOP_ACCESS.join(", ")}`));
+    return;
+  }
+  const unknown = access.filter((a) => !DESKTOP_ACCESS.includes(String(a)));
+  if (unknown.length) {
+    issues.push(err(base, `unknown value(s) ${unknown.join(", ")} (have: ${DESKTOP_ACCESS.join(", ")})`));
+    return;
+  }
+  const seen = new Set(access.map(String));
+  if (seen.size !== access.length) {
+    issues.push(err(base, "lists the same access path twice"));
+  }
+  // Binding the wildcard alongside a specific address on the same port does not work,
+  // so this is an error rather than a redundancy warning: xrdp would fail to start.
+  if (seen.has("unsafe-public") && seen.size > 1) {
+    issues.push(
+      err(base, "'unsafe-public' already listens on every interface — it cannot be combined with tunnel or tailnet"),
+    );
   }
 }
 

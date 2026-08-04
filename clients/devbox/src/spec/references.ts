@@ -74,6 +74,26 @@ export function validateReferences(spec: DevboxSpec): Issue[] {
       }
     }
 
+    // Cross-section, so it belongs here rather than in the structural pass: whether
+    // "tailnet" is reachable depends on network.tailscale, not on the desktop block.
+    const access = dev.desktop?.access ?? ["tunnel"];
+    if (dev.desktop?.enabled && access.includes("tailnet") && !spec.network.tailscale.enabled) {
+      issues.push(
+        err(
+          `${base}.desktop.access`,
+          "'tailnet' needs network.tailscale.enabled: true — there is no private network to listen on",
+        ),
+      );
+    }
+    if (dev.desktop?.enabled && access.includes("unsafe-public")) {
+      issues.push(
+        warn(
+          `${base}.desktop.access`,
+          "the desktop will be reachable from the internet, and RDP authenticates with a password — every other door on this box is key-only",
+        ),
+      );
+    }
+
     if (dev.container_engine && !isEngineInstalled(spec, dev.container_engine)) {
       issues.push(uninstalledEngine(`${base}.container_engine`, dev.container_engine, spec));
     }
