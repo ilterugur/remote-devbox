@@ -14,6 +14,11 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon start'
 ExecStop=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon stop'
+# Without this the unit reports "active" whenever the LAUNCHER exited cleanly, even when
+# the daemon it forked died seconds later — so a dead memory daemon looked healthy to
+# systemd, to the playbook and to anyone reading `systemctl status`. Prove the socket is
+# actually accepting connections before calling the unit started.
+ExecStartPost=/bin/bash -c 'for _ in $(seq 1 60); do ss -Hltn | grep -q "127.0.0.1:{{ item.port }} " && exit 0; sleep 2; done; echo "no listener on 127.0.0.1:{{ item.port }} after 120s — see ~/.hindsight/profiles/{{ item.name }}.log" >&2; exit 1'
 TimeoutStartSec=600
 # Background service, not interactive work: yield under contention.
 Nice=5
