@@ -1,0 +1,10 @@
+{
+  "_comment": "Managed by Ansible (remote-devbox). Bank for agent profile {{ item.profile }}.",
+  "dynamicBankId": false,
+  "bankId": "{{ item.bank }}",
+  "autoRecall": true,
+  "autoRetain": true,
+  "enableKnowledgeTools": true,
+  "retainEveryNTurns": {{ devbox_memory_retain_every_n_turns | default(4) }},
+  "hindsightApiUrl": "http://127.0.0.1:{{ (_devbox_memory_instances | selectattr('user', 'equalto', item.user) | selectattr('name', 'equalto', item.instance) | first).port }}"
+}

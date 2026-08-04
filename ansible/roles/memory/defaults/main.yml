@@ -1,0 +1,4 @@
+---
+# Instances are numbered from here, in declaration order, so the port a client was wired
+# to never moves. Loopback only — exposure is a separate, deliberate decision.
+devbox_memory_base_port: 9077

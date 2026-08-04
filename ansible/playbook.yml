@@ -67,6 +67,9 @@
     # name every project it resolves.
     - { role: containers, tags: [containers] }
 
+    # Long-term agent memory. After agent_profiles: it wires each profile to its bank.
+    - { role: memory, tags: [memory] }
+
   post_tasks:
     - name: Next steps
       ansible.builtin.debug:
