@@ -1,0 +1,60 @@
+---
+# Asserts the properties the roles exist to guarantee, not that tasks ran.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - fixtures/generated.yml
+
+  tasks:
+    - name: Read the developer homes
+      ansible.builtin.stat:
+        path: "/home/{{ item.user }}"
+      loop: "{{ devbox_developers }}"
+      loop_control:
+        label: "{{ item.user }}"
+      register: homes
+
+    - name: Every developer home is private
+      ansible.builtin.assert:
+        that: item.stat.mode == '0700'
+        fail_msg: "/home/{{ item.item.user }} is {{ item.stat.mode }}, not 0700"
+      loop: "{{ homes.results }}"
+      loop_control:
+        label: "{{ item.item.user }}"
+
+    - name: No developer has a sudoers drop-in
+      ansible.builtin.stat:
+        path: "/etc/sudoers.d/devbox-{{ item.user }}"
+      loop: "{{ devbox_developers }}"
+      loop_control:
+        label: "{{ item.user }}"
+      register: sudoers
+
+    - name: Assert no developer can escalate
+      ansible.builtin.assert:
+        that: not item.stat.exists
+        fail_msg: "{{ item.item.user }} has a sudoers drop-in"
+      loop: "{{ sudoers.results }}"
+      loop_control:
+        label: "{{ item.item.user }}"
+
+    - name: Each git identity has its own key
+      ansible.builtin.stat:
+        path: "/home/{{ item.0.user }}/.ssh/git-identities/{{ item.1 }}/id_ed25519"
+      loop: "{{ devbox_developers | subelements('git_identity_names', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.user }}/{{ item.1 }}"
+      register: identity_keys
+
+    - name: Assert every identity key is private
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == '0600'
+        fail_msg: "{{ item.item.0.user }}/{{ item.item.1 }} key missing or world-readable"
+      loop: "{{ identity_keys.results }}"
+      loop_control:
+        label: "{{ item.item.0.user }}/{{ item.item.1 }}"

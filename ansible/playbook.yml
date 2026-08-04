@@ -74,6 +74,9 @@
     # security role established is still in place before handing out PAM passwords.
     - { role: desktop, tags: [desktop] }
 
+    # Last, so the box CLI describes the box as every earlier role left it.
+    - { role: box_cli, tags: [cli, always] }
+
   post_tasks:
     - name: Next steps
       ansible.builtin.debug:

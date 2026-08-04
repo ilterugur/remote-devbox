@@ -1,0 +1,16 @@
+---
+# Only the roles that are meaningful in a container. The generated vars come from a
+# fixture rather than devbox.yml, so the test is independent of anyone's real config.
+- name: Converge
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - fixtures/generated.yml
+    - fixtures/secrets.yml
+
+  roles:
+    - { role: operator }
+    - { role: developers }
+    - { role: git_identities }

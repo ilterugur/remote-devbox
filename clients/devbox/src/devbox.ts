@@ -33,12 +33,13 @@ import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
 import { loadSpec, secretsPathFor, writeGeneratedVars } from "./spec/load";
 import { describeSecrets, loadSecrets, validateSecretRefs, writeGeneratedSecrets } from "./spec/secrets";
 import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
 import { renderPlan } from "./spec/plan";
+import { describePhases, tagsFor } from "./spec/phases";
 
 function newHelp(prof: string) {
   const lines = [
@@ -308,6 +309,58 @@ cli
     if (existsSync(out)) die(`refusing to overwrite ${out} — move it aside first`);
     writeFileSync(out, text);
     console.log(`wrote ${out}`);
+  });
+
+cli
+  .command("apply [phase]", "regenerate the vars and run the playbook (phase defaults to all)")
+  .option("--config <path>", "path to devbox.yml", { default: "devbox.yml" })
+  .option("--inventory <path>", "ansible inventory", { default: "ansible/inventory.ini" })
+  .option("--check", "ansible dry run (--check --diff): change nothing, show what would change")
+  .action((phase: string | undefined, opts: { config: string; inventory: string; check?: boolean }) => {
+    const path = resolvePath(opts.config);
+    const root = dirname(path);
+
+    // Apply always re-derives the vars first. A playbook run against a stale
+    // .generated/all.yml is the one failure mode that looks like it worked.
+    const spec = loadSpec(path);
+    const { secrets, issues: secretIssues } = loadSecrets(secretsPathFor(path));
+    const issues = [
+      ...spec.issues,
+      ...secretIssues,
+      ...(spec.resolved ? validateSecretRefs(spec.resolved, secrets) : []),
+    ];
+    if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
+    if (!spec.resolved || hasErrors(issues)) die("apply refused — fix the errors above");
+
+    writeGeneratedVars(spec.resolved, root);
+    writeGeneratedSecrets(secrets, root);
+
+    let tags: string[] | null;
+    try {
+      tags = tagsFor(phase);
+    } catch (e) {
+      return die((e as Error).message);
+    }
+
+    const args = ["-i", resolvePath(opts.inventory), "playbook.yml"];
+    if (tags) args.push("--tags", tags.join(","));
+    if (opts.check) args.push("--check", "--diff");
+
+    const cwd = join(root, "ansible");
+    if (process.env.DEVBOX_DRYRUN) {
+      return void process.stdout.write(JSON.stringify(["ansible-playbook", ...args, `(cwd ${cwd})`]) + "\n");
+    }
+    console.log(`devbox: ${phase ?? "all"} -> ansible-playbook ${args.join(" ")}\n`);
+    const r = spawnSync("ansible-playbook", args, { cwd, stdio: "inherit" });
+    process.exit(r.status ?? 0);
+  });
+
+cli
+  .command("phases", "list the provisioning phases 'devbox apply' understands")
+  .action(() => {
+    console.log("phases, in the order they are safe to run:\n");
+    console.log(describePhases());
+    console.log("\n  all         everything, in the order above");
   });
 
 cli.help();

@@ -115,10 +115,3 @@
     mode: "0644"
     content: "{{ _devbox_engine_map | to_nice_json }}\n"
 
-- name: Install the engine-agnostic container CLI
-  ansible.builtin.template:
-    src: devbox-cli.sh.j2
-    dest: /usr/local/bin/devbox
-    owner: root
-    group: root
-    mode: "0755"
