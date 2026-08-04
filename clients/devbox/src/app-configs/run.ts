@@ -5,12 +5,12 @@
  * `remote-app-configs` helper so the two sides never drift. Honors DEVBOX_DRYRUN=1.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appConfigsFor, die, hostFor, shQuote, syncDiskEnabled, syncEngineFor, type Config } from "../config";
 import { normalizePath, syncDiskRoot } from "../bridge";
 import { engineFor } from "../sync/engine";
-import { planAppConfigLink, type SideState } from "./plan";
+import { planAppConfigLink, planAppConfigUnlink, type SideState } from "./plan";
 import { payloadRelPath, storeRelPath, type ResolvedEntry } from "./registry";
 
 const isDry = () => !!process.env.DEVBOX_DRYRUN;
@@ -216,8 +216,71 @@ export async function runConfigStatus(cfg: Config, profile: string): Promise<voi
   }
 }
 
-/** Stub so the CLI wiring typechecks — Task 10 implements this. */
-export const runConfigUnlink = async (_cfg: Config, _profile: string, _label?: string): Promise<void> => {};
+/**
+ * Client-side inverse of `linkClient` — the fs-only half of unlink, so it is testable
+ * the same way `linkClient` is (no ssh in sight). Only mutates when the store payload
+ * actually exists: an absent payload means leaving the link in place rather than
+ * deleting it and finding nothing to put back (the missing-payload window the shell
+ * script was faulted for — never make it worse from this side either).
+ */
+export function unlinkClient(profile: string, e: ResolvedEntry): { restored: boolean; reason?: string } {
+  const p = normalizePath(e.client);
+  const target = clientPayload(profile, e);
+  if (e.mode === "ssh-include") {
+    // Exact inverse of linkClient: that write is `MARK_START..MARK_END\n` + the
+    // pre-link body, with the real Host entries left in the store payload file
+    // (included via the block's `Include` line, never copied back into this file until
+    // now). Regex tolerates the block already being absent (a no-op unlink re-run).
+    const body = existsSync(p) ? readFileSync(p, "utf8") : "";
+    const stripped = body.replace(new RegExp(`${MARK_START}[\\s\\S]*?${MARK_END}\\n?`), "");
+    if (!existsSync(target)) {
+      writeFileSync(p, stripped, { mode: 0o600 });
+      return { restored: false, reason: "store payload is missing — Include block removed, but its host entries could not be recovered" };
+    }
+    writeFileSync(p, readFileSync(target, "utf8") + stripped, { mode: 0o600 });
+    return { restored: true };
+  }
+  if (!existsSync(target)) {
+    return { restored: false, reason: "store payload is missing — cannot restore, leaving the link in place" };
+  }
+  rmSync(p); // only removes the symlink entry — the real data stays untouched in the store
+  cpSync(target, p, { recursive: true });
+  return { restored: true };
+}
+
+/**
+ * `devbox config unlink` — the clean exit: after this runs, the client must be left
+ * with a working real file/directory in place of the link, on both modes, with nothing
+ * lost. Box-side restore is delegated to the installed `remote-app-configs` helper
+ * (Task 7) so the two sides never drift; the synced copies under `.app-configs/` are
+ * left behind on purpose (the user deletes them by hand once they're sure).
+ */
+export async function runConfigUnlink(cfg: Config, profile: string, label?: string): Promise<void> {
+  const all = appConfigsFor(cfg, profile);
+  if (!all.length) return void out(`devbox: no app_configs declared for profile "${profile}"`);
+  if (label && !all.some((e) => e.label === label)) {
+    return void die(`unknown app config "${label}" for profile "${profile}" — known: ${all.map((e) => e.label).join(", ")}`);
+  }
+  const entries = all.filter((e) => !label || e.label === label);
+
+  for (const e of entries) {
+    const client = inspectClient(profile, e);
+    const plan = planAppConfigUnlink(e, client);
+
+    if (isDry()) {
+      out(`  ── ${e.label}: ${plan.action} (${plan.reason})`);
+      continue;
+    }
+
+    if (plan.action === "restore") {
+      const r = unlinkClient(profile, e);
+      if (!r.restored) out(`  ! ${e.label}: ${r.reason}`);
+    }
+    out(`  ✓ ${e.label}: ${plan.action}${plan.action === "skip" ? ` (${plan.reason})` : ""}`);
+    boxSh(cfg, profile, ["unlink", e.label, e.box, e.mode, boxStorePath(profile, e)]);
+  }
+  out(`  · the synced copies are left in ${join(syncDiskRoot(profile), ".app-configs")} — delete them by hand when you are sure`);
+}
 
 /** Create an empty store when neither side has content. For "dir" mode the target
  *  itself is the store directory, so mkdir is enough. For "file"/"ssh-include" the

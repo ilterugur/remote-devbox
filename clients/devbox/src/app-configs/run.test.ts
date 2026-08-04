@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clientPayload, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, seedEmpty, seedFromClient } from "./run";
+import { clientPayload, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, runConfigUnlink, seedEmpty, seedFromClient, unlinkClient } from "./run";
 import type { ResolvedEntry } from "./registry";
 import type { Config } from "../config";
 
@@ -363,6 +363,145 @@ describe("runConfigStatus", () => {
       expect(lines).toContain(`store=ok`);
       expect(lines).not.toContain(`the link has no target`);
     } finally {
+      cleanupProfile(profile);
+    }
+  });
+});
+
+describe("unlinkClient — dir mode", () => {
+  test("replaces the symlink with a real directory copied from the store, leaving the store untouched", () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "cfg");
+    const e = genericDirEntry(p);
+    const target = clientPayload(profile, e);
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "a.conf"), "real content");
+    symlinkSync(target, p);
+    try {
+      const r = unlinkClient(profile, e);
+      expect(r).toEqual({ restored: true });
+      expect(lstatSync(p).isSymbolicLink()).toBe(false);
+      expect(lstatSync(p).isDirectory()).toBe(true);
+      expect(readFileSync(join(p, "a.conf"), "utf8")).toBe("real content");
+      // the store itself is left alone — nothing was moved out of it
+      expect(readFileSync(join(target, "a.conf"), "utf8")).toBe("real content");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("missing store payload: leaves the symlink in place instead of deleting it and finding nothing to restore", () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "cfg");
+    const e = genericDirEntry(p);
+    const target = clientPayload(profile, e); // never created
+    symlinkSync(target, p);
+    try {
+      const r = unlinkClient(profile, e);
+      expect(r.restored).toBe(false);
+      expect(r.reason).toContain("store payload is missing");
+      expect(lstatSync(p).isSymbolicLink()).toBe(true); // untouched — nothing was destroyed
+      expect(readlinkSync(p)).toBe(target);
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+});
+
+describe("unlinkClient — ssh-include mode", () => {
+  test("folds the store payload's host entries back in and drops the managed block, byte-for-byte preserving the rest", () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "config");
+    const e = sshEntry(p);
+    const target = clientPayload(profile, e);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "Host restored\n  HostName 9.9.9.9\n");
+    writeFileSync(p, `# >>> devbox app-configs\nInclude ${target}\n# <<< devbox app-configs\nHost kept\n  HostName 1.2.3.4\n`);
+    try {
+      const r = unlinkClient(profile, e);
+      expect(r).toEqual({ restored: true });
+      const body = readFileSync(p, "utf8");
+      expect(body).not.toContain("devbox app-configs");
+      expect(body).toContain("Host restored");
+      expect(body).toContain("HostName 9.9.9.9");
+      expect(body).toContain("Host kept"); // content outside the managed block is preserved exactly
+      expect(body).toContain("HostName 1.2.3.4");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("missing store payload: still removes the Include block (nothing left to break) but reports the loss", () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "config");
+    const e = sshEntry(p);
+    const target = clientPayload(profile, e); // never created
+    writeFileSync(p, `# >>> devbox app-configs\nInclude ${target}\n# <<< devbox app-configs\nHost kept\n  HostName 1.2.3.4\n`);
+    try {
+      const r = unlinkClient(profile, e);
+      expect(r.restored).toBe(false);
+      expect(r.reason).toContain("store payload is missing");
+      const body = readFileSync(p, "utf8");
+      expect(body).not.toContain("devbox app-configs");
+      expect(body).toContain("Host kept"); // pre-existing content outside the block still preserved
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("re-running after the block is already absent is a no-op that preserves the file", () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "config");
+    const e = sshEntry(p);
+    writeFileSync(p, "Host kept\n  HostName 1.2.3.4\n");
+    try {
+      const r = unlinkClient(profile, e);
+      expect(r.restored).toBe(false); // no payload either, but nothing to strip — same guard applies
+      expect(readFileSync(p, "utf8")).toBe("Host kept\n  HostName 1.2.3.4\n");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+});
+
+describe("runConfigUnlink", () => {
+  test("reports the 'no app_configs declared' line and touches nothing else when none are configured", async () => {
+    const cfg: Config = { prefix: "devbox", default: "work", locale: "C", launch: "", profiles: [{ user: "work", projects: [] }] };
+    const lines = await captureOut(() => runConfigUnlink(cfg, "work"));
+    expect(lines).toEqual([`devbox: no app_configs declared for profile "work"\n`]);
+  });
+
+  test("rejects an unknown --label instead of silently doing nothing", async () => {
+    const profile = testProfile();
+    const e = dirEntry("~/.config/filezilla");
+    const cfg = baseCfg(profile);
+    cfg.profiles[0]!.appConfigs = [e];
+    await expect(runConfigUnlink(cfg, profile, "not-a-real-label")).rejects.toThrow(/unknown app config "not-a-real-label"/);
+  });
+
+  test("dry run previews the plan and touches no files", async () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "cfg");
+    const e = genericDirEntry(p);
+    const target = clientPayload(profile, e);
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "a.conf"), "x");
+    symlinkSync(target, p);
+    const cfg = baseCfg(profile);
+    cfg.profiles[0]!.appConfigs = [e];
+    process.env.DEVBOX_DRYRUN = "1";
+    try {
+      const lines = (await captureOut(() => runConfigUnlink(cfg, profile))).join("");
+      expect(lines).toContain("dbeaver: restore");
+      expect(lstatSync(p).isSymbolicLink()).toBe(true); // still a link — dry run changed nothing
+    } finally {
+      delete process.env.DEVBOX_DRYRUN;
       cleanupProfile(profile);
     }
   });
