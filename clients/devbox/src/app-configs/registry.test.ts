@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { REGISTRY, STORE_ROOT, payloadRelPath, resolveEntry, storeRelPath } from "./registry";
+import { REGISTRY, STORE_ROOT, payloadBasename, payloadRelPath, resolveEntry, storeRelPath } from "./registry";
 import { DEFAULT_IGNORES } from "../sync/engine";
 
 test("a registry key resolves to the full entry", () => {
@@ -48,6 +48,26 @@ test("store and payload paths", () => {
   const ssh = (resolveEntry("ssh_config") as any).entry;
   expect(storeRelPath(fz)).toBe(".app-configs/filezilla");
   expect(payloadRelPath(ssh)).toBe(".app-configs/ssh_config/config");
+});
+
+test("payloadBasename is the single source of truth used to build payloadRelPath", () => {
+  const ssh = (resolveEntry("ssh_config") as any).entry;
+  expect(payloadBasename(ssh)).toBe("config");
+  expect(payloadRelPath(ssh)).toBe(`${storeRelPath(ssh)}/${payloadBasename(ssh)}`);
+});
+
+test("payloadBasename derives a 'file' entry's basename from the client path, not the box path — " +
+  "this is the pairing the box-side helper must be told explicitly rather than recompute from its own " +
+  "box path, since a cross-platform entry can legitimately name the two differently", () => {
+  const r = resolveEntry({
+    label: "custom",
+    client: "~/Library/Application Support/App/settings.json",
+    box: "~/.config/app/config.json",
+    mode: "file",
+  });
+  const entry = "entry" in r ? r.entry : (undefined as never);
+  expect(payloadBasename(entry)).toBe("settings.json"); // client's basename, NOT box's "config.json"
+  expect(payloadRelPath(entry)).toBe(".app-configs/custom/settings.json");
 });
 
 test("the store is not swallowed by the sync engine's ignore list", () => {

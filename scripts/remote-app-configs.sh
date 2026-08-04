@@ -1,35 +1,76 @@
 #!/bin/sh
 # remote-app-configs — box side of `devbox config`. Installed to /usr/local/bin by the
 # app_configs role. Every subcommand is idempotent; nothing is ever deleted, only renamed.
+#
+# usage: remote-app-configs <inspect|seed|link|unlink|ensure> <label> <boxpath> <mode>
+#                            <store> <payload-basename> [excludes…]
+#
+# <payload-basename> is the file/ssh-include payload's name inside <store> (e.g.
+# "config" for ssh-include, or the client's basename for a "file" entry). It is computed
+# once, client-side, by registry.ts's payloadBasename() and passed in here rather than
+# recomputed from <boxpath> — the client and box paths for a "file" entry can legitimately
+# have different basenames (e.g. client `~/Library/App/settings.json`, box
+# `~/.config/app/config.json`), and each side recomputing its own would link to two
+# different files inside the same store. Ignored for "dir" mode, but always required so
+# every caller passes one consistent value.
 set -eu
 
 cmd=${1:?usage: remote-app-configs <inspect|seed|link|unlink|ensure> …}
 label=${2:?label}
-boxpath=$(eval echo "${3:?box path}")
+boxpath_raw=${3:?box path}
 mode=${4:?mode}
-store=$(eval echo "${5:?store path}")
+store_raw=${5:?store path}
+payload_name=${6:?payload basename}
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
+
+# Tilde-expand without `eval`: `eval echo "$3"` also word-splits and would execute
+# `$(…)`/backticks embedded in a config value, and breaks on paths containing spaces
+# (e.g. "~/Library/Application Support/…"). Only a leading "~/" is expanded — that is
+# the only form these paths ever take.
+case "$boxpath_raw" in
+  "~/"*) boxpath="$HOME/${boxpath_raw#\~/}" ;;
+  *) boxpath=$boxpath_raw ;;
+esac
+case "$store_raw" in
+  "~/"*) store="$HOME/${store_raw#\~/}" ;;
+  *) store=$store_raw ;;
+esac
+
+case "$mode" in
+  dir|file|ssh-include) ;;
+  *) echo "app-configs: unknown mode \"$mode\" — must be one of: dir, file, ssh-include" >&2; exit 2 ;;
+esac
 
 payload() {
   case "$mode" in
-    ssh-include) echo "$store/config" ;;
-    file) echo "$store/$(basename "$boxpath")" ;;
-    *) echo "$store" ;;
+    dir) echo "$store" ;;
+    *) echo "$store/$payload_name" ;;
   esac
 }
 
 summarize() {
-  case "$label" in
-    filezilla)
-      n=$(grep -c '<Server>' "$1/sitemanager.xml" 2>/dev/null) || n=0
-      echo "$n sites"
-      ;;
-    ssh_config)
+  case "$mode" in
+    ssh-include)
       n=$(grep -c '^[Hh]ost ' "$1" 2>/dev/null) || n=0
       echo "$n hosts"
       ;;
+    file)
+      # Guard existence explicitly: `wc -c < missing | tr -d ' '` exits 0 (tr succeeds on
+      # empty input even though wc failed upstream), so `|| n=0` alone never triggers —
+      # this matters for a "linked" file entry whose target is dangling.
+      if [ -r "$1" ]; then n=$(wc -c < "$1" | tr -d ' '); else n=0; fi
+      echo "$n bytes"
+      ;;
     *)
-      echo "$(find "$1" -type f 2>/dev/null | wc -l | tr -d ' ') files"
+      case "$label" in
+        filezilla)
+          n=$(grep -c '<Server>' "$1/sitemanager.xml" 2>/dev/null) || n=0
+          echo "$n sites"
+          ;;
+        *)
+          echo "$(find "$1" -type f 2>/dev/null | wc -l | tr -d ' ') files"
+          ;;
+      esac
       ;;
   esac
 }
@@ -44,6 +85,11 @@ case "$cmd" in
     elif [ -L "$boxpath" ]; then
       [ "$(readlink "$boxpath")" = "$(payload)" ] && kind=linked || kind=foreign-link
     elif [ ! -e "$boxpath" ]; then kind=absent
+    elif [ "$mode" = file ]; then
+      # A regular file, not a directory: `ls -A` on it prints the filename itself (never
+      # empty), so it always read "content" even for a zero-byte file. `-s` is the
+      # correct emptiness test for a plain file.
+      if [ -s "$boxpath" ]; then kind=content; else kind=empty; fi
     elif [ -z "$(ls -A "$boxpath" 2>/dev/null)" ]; then kind=empty
     else kind=content; fi
     printf '{"kind":"%s","summary":"%s"}\n' "$kind" "$(summarize "$boxpath" 2>/dev/null || true)"
@@ -55,7 +101,7 @@ case "$cmd" in
       mkdir -p "$(dirname "$(payload)")"
       if [ "$mode" = dir ]; then
         mkdir -p "$store"
-        shift 5
+        shift 6
         # Trailing args are exclude patterns (shell globs, matched against each path
         # component's basename) — e.g. filezilla's queue.sqlite3 / *.lock, which are
         # machine-local and must never enter the shared store. file/ssh-include modes
@@ -93,8 +139,19 @@ case "$cmd" in
         mv "$boxpath.new" "$boxpath"; chmod 600 "$boxpath"
       }
     else
-      [ -e "$boxpath" ] && [ ! -L "$boxpath" ] && mv "$boxpath" "$boxpath.pre-devbox-$stamp"
-      rm -f "$boxpath"; mkdir -p "$(dirname "$boxpath")"; ln -s "$(payload)" "$boxpath"
+      # Never delete a symlink here, foreign or not — only rename aside. A foreign link
+      # is exactly the case where deleting silently drops whatever it pointed at.
+      if [ -L "$boxpath" ]; then
+        if [ "$(readlink "$boxpath")" != "$(payload)" ]; then
+          mv "$boxpath" "$boxpath.pre-devbox-$stamp"
+        fi
+        # else: already correct — no-op, nothing to rename or recreate.
+      elif [ -e "$boxpath" ]; then
+        mv "$boxpath" "$boxpath.pre-devbox-$stamp"
+      fi
+      if [ ! -L "$boxpath" ]; then
+        mkdir -p "$(dirname "$boxpath")"; ln -s "$(payload)" "$boxpath"
+      fi
     fi
     ;;
   unlink)
@@ -106,7 +163,12 @@ case "$cmd" in
       rm -f "$boxpath.new"
     else
       [ -L "$boxpath" ] || exit 0
-      rm -f "$boxpath"; cp -a "$(payload)" "$boxpath"
+      # A missing payload must not turn into a deleted link with nothing to put back:
+      # rm-then-cp deletes the link first, so a failed cp (set -eu) aborts leaving
+      # nothing at $boxpath at all. Check first, and copy-then-swap so a failure never
+      # touches the existing link.
+      [ -e "$(payload)" ] || { echo "app-configs: $label payload is missing on the box — leaving the link in place" >&2; exit 0; }
+      cp -a "$(payload)" "$boxpath.new" && mv -f "$boxpath.new" "$boxpath"
     fi
     ;;
   ensure) # playbook path: link only when unambiguous, never destroy
@@ -118,7 +180,7 @@ case "$cmd" in
       [ -L "$boxpath" ] && exit 0
       [ -e "$boxpath" ] && { echo "app-configs: $label has box-side content — run 'devbox config link'" >&2; exit 0; }
     fi
-    "$0" link "$label" "$3" "$mode" "$5"
+    "$0" link "$label" "$3" "$mode" "$5" "$6"
     ;;
   *) echo "unknown command: $cmd" >&2; exit 2 ;;
 esac

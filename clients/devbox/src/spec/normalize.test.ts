@@ -103,6 +103,7 @@ test("app_configs is emitted fully resolved", () => {
     box: "~/.ssh/config",
     mode: "ssh-include",
     excludes: [],
+    payload: "config",
   });
 });
 

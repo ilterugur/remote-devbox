@@ -63,8 +63,22 @@ export function resolveEntry(raw: string | Record<string, unknown>): { entry: Re
 /** Where the real files live inside the sync disk, relative to its root. */
 export const storeRelPath = (e: ResolvedEntry): string => `${STORE_ROOT}/${e.label}`;
 
+/**
+ * The single source of truth for the payload file's basename inside the store, for
+ * "file"/"ssh-include" modes. Both the client (`payloadRelPath` below, used to build
+ * `clientPayload`) and the box side (`remote-app-configs`, which receives this value as
+ * an explicit argument rather than recomputing it from its own box path) must derive it
+ * from here — deriving it independently on each side is exactly how they end up linking
+ * to two different files inside the same store when a custom entry's client and box
+ * filenames differ (e.g. client `~/Library/App/settings.json`, box
+ * `~/.config/app/config.json`: TS would compute `settings.json`, the shell would compute
+ * `config.json`).
+ */
+export function payloadBasename(e: ResolvedEntry): string {
+  return e.mode === "ssh-include" ? "config" : e.client.split("/").pop() || e.label;
+}
+
 /** For file-shaped modes, the single file inside the store. */
 export function payloadRelPath(e: ResolvedEntry): string {
-  const base = e.mode === "ssh-include" ? "config" : e.client.split("/").pop() || e.label;
-  return `${storeRelPath(e)}/${base}`;
+  return `${storeRelPath(e)}/${payloadBasename(e)}`;
 }
