@@ -60,6 +60,27 @@
       {%- endfor -%}
       {{ out | to_json }}
 
+- name: Work out the settings each instance needs
+  ansible.builtin.set_fact:
+    _devbox_memory_settings: "{{ _raw_settings | from_json }}"
+  vars:
+    _raw_settings: >-
+      {%- set out = [] -%}
+      {%- for inst in _devbox_memory_instances -%}
+        {%- set pairs = [
+             {'key': 'HINDSIGHT_USER_ID', 'value': inst.user},
+             {'key': 'HINDSIGHT_API_PORT', 'value': inst.port},
+             {'key': 'HINDSIGHT_API_LLM_PROVIDER', 'value': inst.llm_provider},
+             {'key': 'HINDSIGHT_API_LLM_MODEL', 'value': inst.llm_model},
+             {'key': 'HINDSIGHT_API_LLM_BASE_URL', 'value': inst.llm_base_url},
+             {'key': 'HINDSIGHT_API_LLM_API_KEY',
+              'value': devbox_secrets.get(inst.api_key_env) if inst.api_key_env else none}] -%}
+        {%- for pair in pairs if pair.value -%}
+          {{- out.append([inst, pair]) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
 - name: Create the per-developer memory directory
   ansible.builtin.file:
     path: "/home/{{ item.user }}/.hindsight"
@@ -86,18 +107,21 @@
   loop_control:
     label: "{{ item.user }}/{{ item.name }}"
 
-# 0600 and no_log: this file carries the provider API key. Loopback-only binding is not
-# on its own an isolation boundary on a shared box — the file mode is.
-- name: Write the environment for each memory instance
-  ansible.builtin.template:
-    src: instance.env.j2
-    dest: "/home/{{ item.user }}/.hindsight/profiles/{{ item.name }}.env"
-    owner: "{{ item.user }}"
-    group: "{{ item.user }}"
+# hindsight-embed owns this file and rewrites parts of it, so only the keys we actually
+# decide are set — templating the whole file fought the tool on every run. no_log because
+# one of those keys is the provider credential.
+- name: Configure each memory instance
+  ansible.builtin.lineinfile:
+    path: "/home/{{ item.0.user }}/.hindsight/profiles/{{ item.0.name }}.env"
+    regexp: "^{{ item.1.key }}="
+    line: "{{ item.1.key }}={{ item.1.value }}"
+    owner: "{{ item.0.user }}"
+    group: "{{ item.0.user }}"
     mode: "0600"
-  loop: "{{ _devbox_memory_instances }}"
+    create: true
+  loop: "{{ _devbox_memory_settings }}"
   loop_control:
-    label: "{{ item.user }}/{{ item.name }}"
+    label: "{{ item.0.user }}/{{ item.0.name }} {{ item.1.key }}"
   no_log: true
   notify: Restart memory daemons
 
@@ -141,27 +165,18 @@
   loop_control:
     label: "{{ item.user }}/{{ item.profile }} -> {{ item.bank }}"
 
-- name: Export the memory endpoint into each agent profile launcher
-  # The launcher is the only place that knows which profile is running, so it is also the
-  # right place to say which daemon and which bank that profile talks to.
-  ansible.builtin.lineinfile:
-    path: "/home/{{ item.user }}/.local/bin/{{ item.profile }}"
-    regexp: "^export HINDSIGHT_API_PORT="
-    line: >-
+- name: Write the memory environment each agent profile sources
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}/memory.env"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+    content: |
+      # Managed by Ansible (remote-devbox). Sourced by this profile's launcher.
       export HINDSIGHT_API_PORT={{
         (_devbox_memory_instances | selectattr('user', 'equalto', item.user)
          | selectattr('name', 'equalto', item.instance) | first).port }}
-    insertbefore: '^exec '
-  loop: "{{ _devbox_memory_profiles }}"
-  loop_control:
-    label: "{{ item.user }}/{{ item.profile }}"
-
-- name: Export the memory bank into each agent profile launcher
-  ansible.builtin.lineinfile:
-    path: "/home/{{ item.user }}/.local/bin/{{ item.profile }}"
-    regexp: "^export HINDSIGHT_BANK_ID="
-    line: "export HINDSIGHT_BANK_ID={{ item.bank }}"
-    insertbefore: '^exec '
+      export HINDSIGHT_BANK_ID={{ item.bank }}
   loop: "{{ _devbox_memory_profiles }}"
   loop_control:
     label: "{{ item.user }}/{{ item.profile }}"
