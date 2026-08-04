@@ -54,10 +54,11 @@ operator:
 network:
   tailscale:
     enabled: true
-  # public_and_tailscale | tailscale_only | public_only
-  # Key-only auth either way; Tailscale is a network layer, not authentication.
+  # Which paths sshd listens on. Key-only either way — Tailscale is a network layer,
+  # not authentication. Defaults to public plus tailnet when Tailscale is on; a public
+  # path is kept deliberately so a Tailscale outage cannot lock you out.
   ssh:
-    exposure: public_and_tailscale
+    access: [public, tailnet]
 
 # Rootless engines, per developer. Both can be installed side by side; their
 # image/volume stores are separate and switching never migrates or deletes data.
@@ -150,6 +151,18 @@ developers:
       #                  with a PAM password while every other door here is key-only —
       #                  the name is the warning. Cannot be combined with the others.
       access: [tunnel]
+      # The session's keyboard, in XKB terms. Omit it and `devbox plan` detects the
+      # keyboard of the machine it runs on and uses that — the right default for the
+      # operator and a guess for everybody else, so state it per developer on a box with
+      # more than one. The plan output says which of the two it used.
+      #
+      # This is not cosmetic: xrdp maps the layout id the client announces through its own
+      # table, that table has holes (Turkish is one), and an unmapped id becomes `us` in
+      # silence. The role teaches xrdp the layouts named here so the announcement lands.
+      #   layout   XKB layout name — tr, us, de, gb …
+      #   variant  optional — 'f' is the Turkish F keyboard, plain tr is the Q one
+      keyboard:
+        layout: tr
       idle_logout_minutes: 60
 
     projects:

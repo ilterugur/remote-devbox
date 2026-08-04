@@ -20,7 +20,7 @@ test("the plan names every developer and their resolved project dimensions", () 
 test("the plan reports the global sections and an issue tally", () => {
   const text = rendered();
   expect(text).toContain("devbox plan — ubuntu 26.04 amd64");
-  expect(text).toContain("ssh public_and_tailscale");
+  expect(text).toContain("ssh via public + tailnet");
   expect(text).toContain("shared svcs disabled");
   expect(text).toMatch(/\d+ warnings?, 0 errors/);
 });

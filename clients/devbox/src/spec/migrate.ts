@@ -48,9 +48,9 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
     },
     network: {
       tailscale: { enabled: legacy.tailscale_enabled !== false },
-      // The legacy format had no exposure switch: sshd listened everywhere the
-      // firewall allowed, which is exactly public_and_tailscale.
-      ssh: { exposure: "public_and_tailscale" },
+      // The legacy format had no such switch: sshd listened everywhere the firewall
+      // allowed, which is exactly every path that existed.
+      ssh: { access: legacy.tailscale_enabled !== false ? ["public", "tailnet"] : ["public"] },
     },
     container: {
       // `docker_enabled` meant the OPERATOR's system Docker, not a per-developer

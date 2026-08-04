@@ -6,7 +6,7 @@ const resolved: ResolvedSpec = {
   config_version: 3,
   platform: { distribution: "ubuntu", version: "26.04", architecture: "amd64" },
   operator: { user: "devbox-admin", ssh_authorized_keys: ["ssh-ed25519 AAAA k@c"] },
-  network: { tailscale: { enabled: true }, ssh: { exposure: "public_and_tailscale" } },
+  network: { tailscale: { enabled: true }, ssh: { access: ["public", "tailnet"] } },
   container: { default_engine: "podman-rootless", install_engines: ["podman-rootless"] },
   developers: [
     {
@@ -45,8 +45,9 @@ test("absent optionals become concrete values, never undefined", () => {
     enabled: false,
     environment: "xfce",
     transport: "xrdp",
-    access: ["tunnel"],
+    access: ["tunnel", "tailnet"],
     idle_logout_minutes: null,
+    keyboard: null,
   });
 });
 
@@ -77,4 +78,44 @@ test("renderVars emits a do-not-edit header and parses back", () => {
 
 test("normalization is deterministic", () => {
   expect(renderVars(resolved)).toBe(renderVars(structuredClone(resolved)));
+});
+
+const withDesktop = (desktop: Record<string, unknown>): ResolvedSpec => ({
+  ...resolved,
+  developers: [{ ...resolved.developers[0]!, desktop: { enabled: true, environment: "xfce", transport: "xrdp", ...desktop } as any }],
+});
+
+const desktopOf = (out: Record<string, unknown>): any => (out.devbox_developers as any[])[0].desktop;
+
+test("an unstated keyboard falls back to the one the client types on", () => {
+  const out = normalize(withDesktop({}), { keyboard: { layout: "tr", variant: null } });
+  expect(desktopOf(out).keyboard).toEqual({ layout: "tr", variant: null, rdp_layout_id: "0x0000041F" });
+});
+
+test("a stated keyboard beats the detected one", () => {
+  const out = normalize(withDesktop({ keyboard: { layout: "de" } }), {
+    keyboard: { layout: "tr", variant: null },
+  });
+  expect(desktopOf(out).keyboard).toEqual({ layout: "de", variant: null, rdp_layout_id: "0x00000407" });
+});
+
+test("a stated keyboard keeps its variant", () => {
+  const out = normalize(withDesktop({ keyboard: { layout: "tr", variant: "f" } }), { keyboard: null });
+  expect(desktopOf(out).keyboard).toEqual({ layout: "tr", variant: "f", rdp_layout_id: "0x0001041F" });
+});
+
+// Undetected and unstated leaves the layout to the box rather than guessing at one.
+test("no keyboard anywhere stays null", () => {
+  expect(desktopOf(normalize(withDesktop({}))).keyboard).toBeNull();
+});
+
+test("a box without Tailscale defaults to the paths that actually exist", () => {
+  const noTailnet: ResolvedSpec = {
+    ...resolved,
+    network: { tailscale: { enabled: false }, ssh: {} },
+    developers: [{ ...resolved.developers[0]!, desktop: { enabled: true, environment: "xfce", transport: "xrdp" } }],
+  };
+  const out = normalize(noTailnet);
+  expect((out.devbox_network as any).ssh.access).toEqual(["public"]);
+  expect(((out.devbox_developers as any[])[0]).desktop.access).toEqual(["tunnel"]);
 });

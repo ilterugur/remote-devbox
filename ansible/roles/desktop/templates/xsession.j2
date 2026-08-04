@@ -1,0 +1,28 @@
+# Managed by Ansible (remote-devbox).
+#
+# The keyboard is NOT set here. xrdp applies its own keymap when the client connects,
+# which happens after this script has run, so a setxkbmap here is overwritten a moment
+# later. The layout is taught to xrdp itself instead — see xrdp_keyboard.ini in the role.
+
+# Close any desktop session of this user that xrdp-sesman has lost track of. An Xorg
+# whose parent is init rather than xrdp-sesexec is exactly that: sesman keeps its session
+# list in memory, so restarting it (which restarting xrdp also does — xrdp-sesman is
+# BindsTo=xrdp.service) abandons the running session without killing it. Nothing can
+# attach to an abandoned session again, and XFCE registers one session manager per USER
+# on the shared user bus, so leaving it behind makes every later login exit a second
+# after it starts — a failure that looks like a broken desktop rather than a stale one.
+for pid in $(pgrep -x Xorg -u "$(id -u)" 2>/dev/null); do
+  [ "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "1" ] || continue
+  kill "$pid" 2>/dev/null
+done
+
+# The abandoned X clients exit on their own once their display is gone, but the new
+# session manager cannot claim the bus name until the old one has. Waiting on the
+# condition rather than a flat sleep keeps the common case (nothing to clean) instant.
+attempt=0
+while [ "$attempt" -lt 20 ] && pgrep -x xfce4-session -u "$(id -u)" >/dev/null 2>&1; do
+  sleep 0.25
+  attempt=$((attempt + 1))
+done
+
+exec startxfce4

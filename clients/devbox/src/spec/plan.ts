@@ -6,14 +6,20 @@
  * agent profile, container engine and memory space it actually ended up with.
  */
 import type { Issue } from "./issues";
-import type { ResolvedDeveloper, ResolvedSpec } from "./types";
+import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
+import type { ClientFacts, ResolvedDeveloper, ResolvedSpec } from "./types";
 
 const LABEL_WIDTH = 12;
 
 const row = (label: string, value: string, indent = ""): string =>
   `${indent}${label.padEnd(LABEL_WIDTH)}${value}`;
 
-export function renderPlan(resolved: ResolvedSpec, issues: Issue[], secretNames: string[] = []): string {
+export function renderPlan(
+  resolved: ResolvedSpec,
+  issues: Issue[],
+  secretNames: string[] = [],
+  client: ClientFacts = { keyboard: null },
+): string {
   const p = resolved.platform;
   const lines: string[] = [`devbox plan — ${p.distribution} ${p.version} ${p.architecture}`, ""];
 
@@ -22,7 +28,7 @@ export function renderPlan(resolved: ResolvedSpec, issues: Issue[], secretNames:
   lines.push(
     row(
       "network",
-      `tailscale ${resolved.network.tailscale.enabled ? "on" : "off"} · ssh ${resolved.network.ssh.exposure}`,
+      `tailscale ${resolved.network.tailscale.enabled ? "on" : "off"} · ssh via ${(resolved.network.ssh.access ?? defaultSshAccess(resolved.network.tailscale.enabled)).join(" + ")}`,
     ),
   );
   lines.push(
@@ -43,7 +49,9 @@ export function renderPlan(resolved: ResolvedSpec, issues: Issue[], secretNames:
   const runtimes = Object.entries(resolved.runtimes ?? {}).map(([k, v]) => `${k} ${v}`);
   lines.push(row("runtimes", runtimes.length ? runtimes.join(" · ") : "none"));
 
-  for (const dev of resolved.developers) lines.push("", ...developerLines(dev));
+  for (const dev of resolved.developers) {
+    lines.push("", ...developerLines(dev, resolved.network.tailscale.enabled, client));
+  }
 
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.length - errors;
@@ -54,7 +62,7 @@ export function renderPlan(resolved: ResolvedSpec, issues: Issue[], secretNames:
   return lines.join("\n");
 }
 
-function developerLines(dev: ResolvedDeveloper): string[] {
+function developerLines(dev: ResolvedDeveloper, tailscale: boolean, client: ClientFacts): string[] {
   const lines = [`developer ${dev.user}${dev.adopt_existing ? "  (adopt existing account)" : ""}`];
   const indent = "  ";
 
@@ -95,8 +103,9 @@ function developerLines(dev: ResolvedDeveloper): string[] {
         "desktop",
         [
           `${dev.desktop.environment}/${dev.desktop.transport}`,
-          `via ${(dev.desktop.access ?? ["tunnel"]).join(" + ")}`,
+          `via ${(dev.desktop.access ?? defaultDesktopAccess(tailscale)).join(" + ")}`,
           idle ? `idle logout ${idle}m` : "no idle logout",
+          describeKeyboard(dev, client),
         ].join(" · "),
         indent,
       ),
@@ -121,6 +130,20 @@ function developerLines(dev: ResolvedDeveloper): string[] {
   }
   return lines;
 }
+
+/**
+ * Where the session's layout came from, not just what it is: the detected one is the
+ * operator's own keyboard, which is a guess for every other developer on the box.
+ */
+function describeKeyboard(dev: ResolvedDeveloper, client: ClientFacts): string {
+  const stated = dev.desktop?.keyboard;
+  if (stated) return `keyboard ${xkb(stated.layout, stated.variant)}`;
+  if (client.keyboard) return `keyboard ${xkb(client.keyboard.layout, client.keyboard.variant)} (detected from this client)`;
+  return "keyboard us (box default — undetected)";
+}
+
+const xkb = (layout: string, variant: string | null | undefined): string =>
+  variant ? `${layout}(${variant})` : layout;
 
 const named = (keys: string[], fallback: string | null | undefined): string =>
   keys.length ? keys.map((k) => (k === fallback ? `${k} (default)` : k)).join(", ") : "unmanaged";

@@ -7,7 +7,7 @@ const minimal = () => ({
   config_version: 3,
   platform: { distribution: "ubuntu", version: "26.04", architecture: "amd64" },
   operator: { user: "devbox-admin", ssh_authorized_keys: [KEY] },
-  network: { tailscale: { enabled: true }, ssh: { exposure: "public_and_tailscale" } },
+  network: { tailscale: { enabled: true }, ssh: { access: ["public", "tailnet"] } },
   container: { default_engine: "podman-rootless", install_engines: ["podman-rootless"] },
   developers: [{ user: "dev-a", login_ssh_keys: [KEY] }],
 });
@@ -39,15 +39,21 @@ test("an unsupported platform is an error, or a warning with the escape hatch", 
   expect(paths({ ...bad, allow_unsupported_platform: true })).toContain("warning:platform");
 });
 
-test("tailscale_only exposure requires tailscale", () => {
+test("a tailnet-only sshd requires a tailnet", () => {
   expect(
-    paths({ ...minimal(), network: { tailscale: { enabled: false }, ssh: { exposure: "tailscale_only" } } }),
+    paths({ ...minimal(), network: { tailscale: { enabled: false }, ssh: { access: ["tailnet"] } } }),
+  ).toContain("error:network.ssh.access");
+});
+
+test("the removed ssh exposure enum is reported, not ignored", () => {
+  expect(
+    paths({ ...minimal(), network: { tailscale: { enabled: true }, ssh: { exposure: "public_only" } } }),
   ).toContain("error:network.ssh.exposure");
 });
 
-test("public_only exposure without tailscale is fine", () => {
+test("a public-only sshd without tailscale is fine", () => {
   expect(
-    paths({ ...minimal(), network: { tailscale: { enabled: false }, ssh: { exposure: "public_only" } } }),
+    paths({ ...minimal(), network: { tailscale: { enabled: false }, ssh: { access: ["public"] } } }),
   ).toEqual([]);
 });
 
@@ -154,6 +160,23 @@ test("desktop access defaults are absent-but-valid; an empty list is not", () =>
   });
   expect(paths(desktop({}))).toEqual([]);
   expect(paths(desktop({ access: [] }))).toContain("error:developers[0].desktop.access");
+});
+
+// The fields reach setxkbmap unquoted, so anything with a space in it would become two
+// arguments on the box and fail there rather than here.
+test("the keyboard is checked against XKB's naming, not merely for being a string", () => {
+  const keyboard = (k: unknown) => ({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, keyboard: k } }],
+  });
+  expect(paths(keyboard({ layout: "tr" }))).toEqual([]);
+  expect(paths(keyboard({ layout: "tr", variant: "f", model: "pc105" }))).toEqual([]);
+  expect(paths(keyboard({ layout: "Turkish Q" }))).toContain("error:developers[0].desktop.keyboard.layout");
+  expect(paths(keyboard({ variant: "f" }))).toContain("error:developers[0].desktop.keyboard.layout");
+  expect(paths(keyboard({ layout: "tr", variant: "F Klavye" }))).toContain(
+    "error:developers[0].desktop.keyboard.variant",
+  );
+  expect(paths(keyboard("tr"))).toContain("error:developers[0].desktop.keyboard");
 });
 
 test("desktop access rejects unknown values and duplicates", () => {

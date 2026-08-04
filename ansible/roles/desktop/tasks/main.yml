@@ -10,6 +10,9 @@
 - name: Work out which developers asked for a desktop
   ansible.builtin.set_fact:
     _devbox_desktop_users: "{{ devbox_developers | selectattr('desktop.enabled') | list }}"
+    # sesman gates RDP on one group name, so the "who may open a session" list has to
+    # exist as a real group on the box rather than as a list in a config file.
+    _devbox_desktop_group: devbox-rdp
 
 # xrdp is one host-level service, so its listen set is the union across everyone who
 # asked for a desktop — not a per-developer choice.
@@ -30,18 +33,107 @@
     update_cache: true
   when: _devbox_desktop_users | length > 0
 
+- name: Create the group that gates RDP
+  ansible.builtin.group:
+    name: "{{ _devbox_desktop_group }}"
+    state: present
+  when: _devbox_desktop_users | length > 0
+
+- name: Let the desktop developers open an RDP session
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: "{{ _devbox_desktop_group }}"
+    append: true
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Read who is currently in the RDP group
+  ansible.builtin.getent:
+    database: group
+    key: "{{ _devbox_desktop_group }}"
+  when: _devbox_desktop_users | length > 0
+
+# A gate that only ever adds is not a gate: turning desktop.enabled off would otherwise
+# leave the account able to open a session until somebody noticed.
+- name: Take RDP away from developers who no longer ask for a desktop
+  ansible.builtin.command:
+    cmd: "gpasswd --delete {{ item }} {{ _devbox_desktop_group }}"
+  loop: >-
+    {{ (ansible_facts.getent_group[_devbox_desktop_group][2] | default('')).split(',')
+       | select | difference(_devbox_desktop_users | map(attribute='user') | list) }}
+  changed_when: true
+  when: _devbox_desktop_users | length > 0
+
 - name: Start each session in XFCE
-  ansible.builtin.copy:
+  ansible.builtin.template:
+    src: xsession.j2
     dest: "/home/{{ item.user }}/.xsession"
     owner: "{{ item.user }}"
     group: "{{ item.user }}"
     mode: "0700"
-    content: |
-      # Managed by Ansible (remote-devbox).
-      exec startxfce4
   loop: "{{ _devbox_desktop_users }}"
   loop_control:
     label: "{{ item.user }}"
+
+# The keyboard belongs to xrdp, not to the session: xrdp maps the layout id the client
+# announces to an X11 layout through this file and applies it AFTER the session script
+# has run. Its shipped table has holes — Turkish among them — and an unmapped id becomes
+# `us` with only a debug line to say so, which is how a Turkish keyboard ends up typing
+# in English. Only the layouts this box's developers actually use are added.
+- name: Work out which keyboards xrdp has to be taught
+  ansible.builtin.set_fact:
+    _devbox_desktop_keyboards: >-
+      {{ _devbox_desktop_users | map(attribute='desktop.keyboard') | reject('none')
+         | rejectattr('rdp_layout_id', 'none') | unique | list }}
+
+- name: Teach xrdp the RDP layout ids it has no mapping for
+  community.general.ini_file:
+    path: /etc/xrdp/xrdp_keyboard.ini
+    section: default_rdp_layouts
+    option: "rdp_layout_{{ item.layout }}{{ '_' ~ item.variant if item.variant else '' }}"
+    value: "{{ item.rdp_layout_id }}"
+    no_extra_spaces: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ _devbox_desktop_keyboards }}"
+  loop_control:
+    label: "{{ item.layout }}{{ '(' ~ item.variant ~ ')' if item.variant else '' }}"
+  notify: Restart xrdp
+
+# Both maps: a client that reports itself as a Mac keyboard (type 4, subtype 3) is served
+# from the mac table, everything else from the default one. Teaching only one of them
+# would fix the desktop for one client and leave it in English on another.
+- name: Map those ids onto the X11 layouts they mean
+  community.general.ini_file:
+    path: /etc/xrdp/xrdp_keyboard.ini
+    section: "{{ item.1 }}"
+    option: "rdp_layout_{{ item.0.layout }}{{ '_' ~ item.0.variant if item.0.variant else '' }}"
+    value: "{{ item.0.layout }}{{ '(' ~ item.0.variant ~ ')' if item.0.variant else '' }}"
+    no_extra_spaces: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ _devbox_desktop_keyboards | product(['default_layouts_map', 'rdp_layouts_map_mac']) | list }}"
+  loop_control:
+    label: "{{ item.1 }}: {{ item.0.layout }}"
+  notify: Restart xrdp
+
+# Restarting xrdp always takes the session manager with it: xrdp-sesman ships
+# BindsTo=xrdp.service, and that cannot be undone by a drop-in — systemd does not reset
+# BindsTo on an empty assignment (measured, not assumed), so the only override would be a
+# full copy of the packaged unit, which then silently drifts on upgrade. Since sesman
+# keeps its session list in memory, every restart abandons the open desktops instead.
+# That is why .xsession reaps abandoned sessions at login: the recovery is automatic
+# rather than prevented.
+- name: Remove the drop-in that tried to prevent it
+  # It was ineffective, and config that looks like a guarantee but isn't is worse than
+  # none — the next person would trust it.
+  ansible.builtin.file:
+    path: /etc/systemd/system/xrdp-sesman.service.d/10-devbox-keep-sessions.conf
+    state: absent
+  notify: Reload systemd
 
 # xrdp runs as its own user and needs to read the session certificate; it does NOT need
 # to read anybody's home, so it stays out of the developers' groups.
@@ -63,7 +155,9 @@
     group: root
     mode: "0644"
   when: _devbox_desktop_users | length > 0
-  notify: Restart xrdp
+  # The one change that has to bounce the session manager, and so the one that costs
+  # every open desktop its session. Everything else reloads xrdp alone.
+  notify: Restart xrdp-sesman
 
 - name: Enable xRDP
   ansible.builtin.systemd_service:
@@ -107,6 +201,10 @@
 - name: Assert SSH password authentication is still disabled
   ansible.builtin.command: sshd -T
   changed_when: false
+  # Reading the effective sshd config changes nothing, and skipping it under --check
+  # would leave the assert below comparing against an empty string — turning every dry
+  # run into a false report that password login had been re-enabled.
+  check_mode: false
   register: _devbox_sshd_effective
   when: _devbox_desktop_users | length > 0
 
@@ -185,7 +283,9 @@
       After=tailscaled.service
       Wants=tailscaled.service
   when: "'tailnet' in _devbox_desktop_access"
-  notify: Restart xrdp
+  notify:
+    - Reload systemd
+    - Restart xrdp
 
 - name: Teach fail2ban what an xrdp login failure looks like
   # fail2ban ships no xrdp filter on Ubuntu, so a jail alone would silently not exist.

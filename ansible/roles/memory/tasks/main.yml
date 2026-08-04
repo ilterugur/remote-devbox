@@ -230,7 +230,9 @@
     repo: https://github.com/vectorize-io/hindsight.git
     dest: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}/plugins/marketplaces/vectorize-io-hindsight"
     version: main
-    depth: 1
+    # No depth: a shallow clone leaves the git module unable to compare before/after
+    # reliably, so it reported "changed" on every single run — the kind of permanent
+    # false positive that trains you to stop reading the diff.
     force: true
   become: true
   become_user: "{{ item.user }}"

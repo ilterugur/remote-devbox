@@ -50,4 +50,14 @@
     mode: "0644"
     content: |
       # Managed by Ansible (remote-devbox) — mise manages the shell env.
-      command -v mise >/dev/null 2>&1 && eval "$(mise activate bash)"
+      # Guarded on the shell that is actually running. `mise activate bash` emits bash
+      # syntax, and /etc/profile is sourced by /bin/sh (dash) too — xrdp's startwm.sh
+      # does exactly that, where an unguarded eval aborts the script with a syntax error
+      # and the desktop session dies a second after login with no useful message.
+      if command -v mise >/dev/null 2>&1; then
+        if [ -n "${BASH_VERSION:-}" ]; then
+          eval "$(mise activate bash)"
+        elif [ -n "${ZSH_VERSION:-}" ]; then
+          eval "$(mise activate zsh)"
+        fi
+      fi
