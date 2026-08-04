@@ -48,6 +48,20 @@ import sys
 BEGIN = "# >>> remote-devbox (managed) >>>"
 END = "# <<< remote-devbox <<<"
 
+# The RDP client the desktop is reached with. Microsoft renamed Remote Desktop to
+# "Windows App" but kept the preference domain, so one domain covers both.
+RDP_DOMAIN = "com.microsoft.rdc.macos"
+RDP_APPS = ["/Applications/Windows App.app", "/Applications/Microsoft Remote Desktop.app"]
+# Keyed by the menu item's VISIBLE title — that is how NSUserKeyEquivalents matches, so
+# this has to stay the string in the app's menu bar (MainMenu.strings: "Close").
+RDP_CLOSE_ITEM = "Close"
+RDP_CLOSE_KEYS = "@~w"
+# Cocoa's key-equivalent notation, for printing something a human can check against the
+# menu they will see. Ordered as macOS renders modifiers (ctrl, opt, shift, cmd) rather
+# than as they were typed, so the printed shortcut matches the menu character for
+# character.
+MODIFIER_GLYPHS = [("^", "\u2303"), ("~", "\u2325"), ("$", "\u21e7"), ("@", "\u2318")]
+
 
 def die(msg):
     sys.exit(f"error: {msg}")
@@ -427,6 +441,51 @@ def install_cli(repo, prefix):
     return wrapper
 
 
+def render_keys(keys):
+    """'@~w' -> '\u2325\u2318W', the way the menu will show it."""
+    flags = {c for c, _ in MODIFIER_GLYPHS}
+    mods = "".join(glyph for c, glyph in MODIFIER_GLYPHS if c in keys)
+    return mods + "".join(c for c in keys if c not in flags).upper()
+
+
+def rebind_rdp_close(keys):
+    """Move the RDP client's Close menu item off \u2318W.
+
+    \u2318W closes the whole session window, and it never reaches the box: macOS routes it
+    to the app's own menu first. Microsoft's answer is that no in-app setting overrides
+    this and the conflicting shortcut has to be reassigned instead, which is what
+    NSUserKeyEquivalents does — it is exactly what System Settings \u2192 Keyboard \u2192 Keyboard
+    Shortcuts \u2192 App Shortcuts writes, so the two stay in agreement.
+
+    Note this frees \u2318W rather than making it useful remotely: the client maps Command to
+    the Windows key, so Ctrl is already the modifier that reaches the session as Ctrl.
+    """
+    if sys.platform != "darwin":
+        print("  • RDP close shortcut: skipped (macOS only)")
+        return
+    if not any(os.path.isdir(app) for app in RDP_APPS):
+        print("  • RDP close shortcut: skipped (no RDP client in /Applications)")
+        return
+
+    current = subprocess.run(
+        ["defaults", "read", RDP_DOMAIN, "NSUserKeyEquivalents"],
+        capture_output=True, text=True,
+    )
+    # Absent domain/key is the normal first run, not an error worth reporting.
+    if current.returncode == 0 and re.search(
+        rf'"?{re.escape(RDP_CLOSE_ITEM)}"?\s*=\s*"?{re.escape(keys)}"?\s*;', current.stdout
+    ):
+        print(f"  ✓ RDP '{RDP_CLOSE_ITEM}' already on {render_keys(keys)}")
+        return
+
+    subprocess.run(
+        ["defaults", "write", RDP_DOMAIN, "NSUserKeyEquivalents", "-dict-add", RDP_CLOSE_ITEM, keys],
+        check=True,
+    )
+    print(f"  ✓ RDP '{RDP_CLOSE_ITEM}' moved to {render_keys(keys)} — \u2318W is free")
+    print("      quit and reopen the RDP client: menu shortcuts are read at launch")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo")
@@ -441,6 +500,12 @@ def main():
     ap.add_argument("--locale", default="en_US.UTF-8", help="locale the connect command pins (LANG/LC_ALL/LC_CTYPE) so mosh-server starts (default en_US.UTF-8)")
     ap.add_argument("--launch", default="", help="command to auto-run on a fresh session, e.g. 'claude' (default: none — lands in a shell)")
     ap.add_argument("--cli", action="store_true", help="install the Bun TS CLI (fuzzy picker, no fzf) instead of the shell function")
+    ap.add_argument(
+        "--rdp-close-shortcut", nargs="?", const=RDP_CLOSE_KEYS, default="", metavar="KEYS",
+        help="free \u2318W in the RDP client (it closes the session window before the key can reach "
+             "the box) by moving its 'Close' menu item elsewhere. Default \u2325\u2318W; KEYS is Cocoa "
+             "notation: @ cmd, ~ opt, $ shift, ^ ctrl. macOS only",
+    )
     args = ap.parse_args()
 
     repo = find_repo(args.repo)
@@ -469,6 +534,9 @@ def main():
             strip_managed_block(shell_rc_path(args.shell_rc))
     elif not args.no_shell:
         write_shell_rc(shell_block(profiles, args.prefix, default, args.locale, args.launch), shell_rc_path(args.shell_rc))
+
+    if args.rdp_close_shortcut:
+        rebind_rdp_close(args.rdp_close_shortcut)
 
     aliases = ", ".join(f"{args.prefix}-{p['user']}" for p in profiles)
     print(f"\nDone.")

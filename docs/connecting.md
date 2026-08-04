@@ -83,6 +83,32 @@ ssh <user>@<box>            # profile user to code, admin to maintain
 - `scripts/connect.sh` wraps the common operator calls (`ssh`/`status`/`login`/
   `attach`/`mosh`/`devup`/`serve`); `export DEVBOX_HOST=admin@<box>` first.
 
+### 6. Full desktop — RDP (XFCE, for the things a terminal can't do)
+
+For a developer with `desktop.enabled`, the box runs XFCE behind xrdp. Point an RDP
+client (macOS: Microsoft's **Windows App**) at the box on **3389** and log in with the
+Linux username and the PAM password whose hash is in `devbox.secrets.yml`.
+
+- **Reachability follows `desktop.access`** — `tailnet` means the box's 100.x address,
+  `tunnel` means `ssh -L 3389:127.0.0.1:3389 <box>` first, then dial `localhost:3389`.
+  RDP is the one door here authenticated by a password rather than a key, which is why
+  it is never public unless you spell out `unsafe-public`.
+- **The keyboard comes from `desktop.keyboard`**, or from the machine that ran
+  `devbox plan` when you leave it out. It is applied by teaching xrdp the layout id
+  your client announces — setting it inside the session does not stick, because xrdp
+  applies its own keymap when the client connects, after the session has started.
+- **⌘W closes the whole connection** on macOS, and no in-app setting changes that:
+  macOS routes it to the client's own "Close" menu item before the app can forward it.
+  Free it with `gen-editor-config.py --rdp-close-shortcut`, which moves that menu item
+  to ⌥⌘W (quit and reopen the client afterwards — menu shortcuts are read at launch).
+  Note the client maps Command to the **Windows** key and Control to Ctrl, so the key
+  that reaches the session as Ctrl was always the physical Control key.
+- **A restart of xrdp abandons open desktops.** `xrdp-sesman` keeps its session list in
+  memory and is `BindsTo=xrdp.service`, so an apply that reloads xrdp leaves the running
+  session unreachable — and XFCE allows one session manager per user, so the next login
+  would exit a second after it starts. The session script reaps those abandoned sessions
+  at login, so the recovery is simply to connect again.
+
 ## At a glance
 
 | Method | UI | Survives a disconnect? | Best for |
@@ -92,6 +118,7 @@ ssh <user>@<box>            # profile user to code, admin to maintain
 | Claude Desktop integrated SSH | desktop app | ❌ session drops, no resume | stable desk work |
 | VS Code / Cursor Remote-SSH | editor | ⚠️ editor reconnects; `claude` only if in tmux | editing on the box |
 | Plain SSH | terminal | ❌ unless you use tmux | quick ops, scripted access |
+| RDP desktop | XFCE desktop | ⚠️ session survives a client drop; not an xrdp restart | browsers, GUI tools, anything not a terminal |
 
 > **Your conversation is never lost.** Claude Code persists each session to disk on
 > the box (`~/.claude/projects/<slug>/*.jsonl`). After any drop, `claude --continue`

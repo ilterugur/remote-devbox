@@ -189,6 +189,12 @@ These can't be fully automated; walk the user through them:
     shell-quoting pitfalls). It writes `~/.config/remote-devbox/config.json`, drops a
     `~/.local/bin/<prefix>` wrapper, and removes the shell function so it isn't shadowed.
     Omit `--cli` for clients without bun (e.g. the phone) to keep the shell function.
+  - **`--rdp-close-shortcut`** (macOS clients of a box with a desktop): moves the RDP
+    client's "Close" menu item to ⌥⌘W so ⌘W stops closing the whole session window.
+    macOS routes ⌘W to the app's menu before it can be forwarded and no in-app setting
+    overrides that, so reassigning the shortcut is the only fix; the client has to be
+    quit and reopened afterwards. Only frees the key — Command still reaches the session
+    as the Windows key, and Control is what arrives as Ctrl.
 - Point the user to daily use: connect the **desktop app / VS Code Remote-SSH /
   Zed as a profile** (e.g. `devbox-work`), drive from the **mobile app** per
   profile, and preview dev servers (`docs/realtime-sync.md`, `docs/mobile.md`).
