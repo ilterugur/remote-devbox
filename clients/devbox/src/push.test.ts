@@ -6,15 +6,15 @@ import { encodeCwd, firstHumanPrompt } from "./config";
 
 describe("encodeCwd", () => {
   test("project root: / and . both become -", () => {
-    expect(encodeCwd("/Users/alnzy/Documents/Projects/dev-a/claude-devbox")).toBe(
-      "-Users-alnzy-Documents-Projects-dev-a-claude-devbox",
+    expect(encodeCwd("/Users/dev/Documents/Projects/dev-a/claude-devbox")).toBe(
+      "-Users-dev-Documents-Projects-dev-a-claude-devbox",
     );
   });
 
   test("worktree '/.claude-worktrees/' collapses to a double dash", () => {
     expect(
-      encodeCwd("/Users/alnzy/Documents/Projects/onlyjs/insurai/example-app/.claude-worktrees/koalay-fixes"),
-    ).toBe("-Users-alnzy-Documents-Projects-onlyjs-insurai-example-app--claude-worktrees-koalay-fixes");
+      encodeCwd("/Users/dev/Projects/example-org/example-app/.claude-worktrees/feature-branch"),
+    ).toBe("-Users-dev-Projects-example-org-example-app--claude-worktrees-feature-branch");
   });
 
   test("remote root", () => {

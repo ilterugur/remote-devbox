@@ -6,7 +6,7 @@ import { encodeCwd } from "./config";
 import { applyMappings, backupLocal, buildMappings, rewriteJsonl } from "./transcript";
 
 describe("buildMappings", () => {
-  const src = "/Users/alnzy/Documents/Projects/dev-a/claude-devbox";
+  const src = "/Users/dev/Documents/Projects/dev-a/claude-devbox";
   const remote = "/home/devbox/projects/claude-devbox";
 
   test("includes the project root and its dash-encoded variant, longest-first", () => {
@@ -23,21 +23,21 @@ describe("buildMappings", () => {
 
   test("home remap (push direction): /Users/<you> -> /home/<profile>", () => {
     const m = buildMappings(src, remote, { homeFrom: src, homeTo: "/home/devbox" });
-    const home = m.find((x) => x.from === "/Users/alnzy");
+    const home = m.find((x) => x.from === "/Users/dev");
     expect(home?.to).toBe("/home/devbox");
     // project root is longer than the home prefix, so it appears earlier
-    expect(m.findIndex((x) => x.from === src)).toBeLessThan(m.findIndex((x) => x.from === "/Users/alnzy"));
+    expect(m.findIndex((x) => x.from === src)).toBeLessThan(m.findIndex((x) => x.from === "/Users/dev"));
   });
 
   test("home remap (pull direction): /home/<profile> -> /Users/<you>", () => {
-    const m = buildMappings(remote, src, { homeFrom: remote, homeTo: "/Users/alnzy" });
+    const m = buildMappings(remote, src, { homeFrom: remote, homeTo: "/Users/dev" });
     const home = m.find((x) => x.from === "/home/devbox");
-    expect(home?.to).toBe("/Users/alnzy");
+    expect(home?.to).toBe("/Users/dev");
   });
 });
 
 describe("applyMappings / rewriteJsonl", () => {
-  const src = "/Users/alnzy/Documents/Projects/dev-a/claude-devbox";
+  const src = "/Users/dev/Documents/Projects/dev-a/claude-devbox";
   const remote = "/home/devbox/projects/claude-devbox";
 
   test("push: rewrites cwd + dash-encoded reference, keeps valid JSON", () => {
@@ -69,17 +69,17 @@ describe("applyMappings / rewriteJsonl", () => {
 
   test("home remap does not clobber the more specific project-root rewrite", () => {
     const mappings = buildMappings(src, remote, { homeFrom: src, homeTo: "/home/devbox" });
-    const text = `${src}/src/x.ts and /Users/alnzy/.claude/hooks/h.sh`;
+    const text = `${src}/src/x.ts and /Users/dev/.claude/hooks/h.sh`;
     expect(applyMappings(text, mappings)).toBe(`${remote}/src/x.ts and /home/devbox/.claude/hooks/h.sh`);
   });
 
   test("single pass: a later mapping never clobbers an earlier mapping's output", () => {
-    const mappings = buildMappings("/Users/alnzy/proj", "/tmp/X-Users-alnzy-Y", {
-      homeFrom: "/Users/alnzy/proj",
+    const mappings = buildMappings("/Users/dev/proj", "/tmp/X-Users-dev-Y", {
+      homeFrom: "/Users/dev/proj",
       homeTo: "/home/work",
     });
-    expect(applyMappings("/Users/alnzy/proj/src/file.ts", mappings)).toBe("/tmp/X-Users-alnzy-Y/src/file.ts");
-    expect(applyMappings("-Users-alnzy-proj", mappings)).toBe("-tmp-X-Users-alnzy-Y");
+    expect(applyMappings("/Users/dev/proj/src/file.ts", mappings)).toBe("/tmp/X-Users-dev-Y/src/file.ts");
+    expect(applyMappings("-Users-dev-proj", mappings)).toBe("-tmp-X-Users-dev-Y");
   });
 
   test("longest-prefix wins at a position (overlapping --map prefixes)", () => {
