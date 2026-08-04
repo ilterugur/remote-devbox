@@ -23,6 +23,9 @@
     url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD3614CB0B3C2D154356BD436CB4ADEA5B72A07A1"
     dest: /etc/apt/keyrings/eternalterminal.asc
     mode: "0644"
+    # The keyserver sends no validators, so get_url re-downloads and reports a change on
+    # every run. A signing key does not rotate under a fixed fingerprint — fetch it once.
+    force: false
 
 - name: Add the Eternal Terminal apt source (suite pinned — PPA lacks a build for the newest Ubuntu)
   ansible.builtin.deb822_repository:
