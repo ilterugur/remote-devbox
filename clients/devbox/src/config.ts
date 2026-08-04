@@ -308,9 +308,11 @@ export const projectsRoot = () => join(homedir(), ".claude", "projects");
 
 /**
  * Claude Code's encoded-dir rule: an absolute cwd becomes a dir name by replacing
- * every '/' AND every '.' with '-'. Lossy (so ENCODE-only; never decode a dir name).
+ * every non-alphanumeric char ('/', '.', '_', '@', space, …) with '-'. This must
+ * match exactly, or dash-encoded self-references (e.g. a worktree's bridge-cse_<id>
+ * path) won't remap on push/pull. Lossy (so ENCODE-only; never decode a dir name).
  */
-export const encodeCwd = (cwd: string) => cwd.replaceAll("/", "-").replaceAll(".", "-");
+export const encodeCwd = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 
 /** ~/.claude/projects/<encoded-cwd> for a given working directory. */
 export const sessionsDir = (cwd: string) => join(projectsRoot(), encodeCwd(cwd));
