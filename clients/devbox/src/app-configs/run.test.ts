@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { clientPayload, inspectClient, linkClient, matches, seedFromClient } from "./run";
+import { clientPayload, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, seedFromClient } from "./run";
 import type { ResolvedEntry } from "./registry";
+import type { Config } from "../config";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "app-configs-"));
 
@@ -221,6 +222,46 @@ describe("linkClient — dir mode", () => {
     } finally {
       cleanupProfile(profile);
     }
+  });
+});
+
+describe("countSyncConflicts", () => {
+  test("0 when the store path does not exist", () => {
+    const root = tmp();
+    expect(countSyncConflicts(join(root, "nope"))).toBe(0);
+  });
+
+  test("0 when the store has no conflict files", () => {
+    const root = tmp();
+    const p = join(root, "store");
+    mkdirSync(p);
+    writeFileSync(join(p, "config"), "x");
+    expect(countSyncConflicts(p)).toBe(0);
+  });
+
+  test("counts Syncthing-style *.sync-conflict-* siblings", () => {
+    const root = tmp();
+    const p = join(root, "store");
+    mkdirSync(p);
+    writeFileSync(join(p, "config"), "x");
+    writeFileSync(join(p, "config.sync-conflict-20260101-120000-ABCDEFG"), "x");
+    writeFileSync(join(p, "config.sync-conflict-20260102-120000-HIJKLMN"), "x");
+    expect(countSyncConflicts(p)).toBe(2);
+  });
+});
+
+describe("runConfigStatus", () => {
+  test("reports the 'no app_configs declared' line and touches nothing else when none are configured", async () => {
+    const cfg: Config = { prefix: "devbox", default: "work", locale: "C", launch: "", profiles: [{ user: "work", projects: [] }] };
+    const lines: string[] = [];
+    const spy = process.stdout.write;
+    process.stdout.write = ((s: string) => { lines.push(s); return true; }) as typeof process.stdout.write;
+    try {
+      await runConfigStatus(cfg, "work");
+    } finally {
+      process.stdout.write = spy;
+    }
+    expect(lines).toEqual([`devbox: no app_configs declared for profile "work"\n`]);
   });
 });
 

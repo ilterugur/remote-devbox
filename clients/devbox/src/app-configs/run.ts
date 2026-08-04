@@ -7,8 +7,9 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appConfigsFor, die, hostFor, shQuote, syncDiskEnabled, type Config } from "../config";
+import { appConfigsFor, die, hostFor, shQuote, syncDiskEnabled, syncEngineFor, type Config } from "../config";
 import { normalizePath, syncDiskRoot } from "../bridge";
+import { engineFor } from "../sync/engine";
 import { planAppConfigLink, type SideState } from "./plan";
 import { payloadRelPath, storeRelPath, type ResolvedEntry } from "./registry";
 
@@ -66,22 +67,24 @@ class BoxUnreachable extends Error {}
 /** Run the installed `remote-app-configs` helper on the box. Outside a dry run, dies on
  *  unreachable/failed ssh rather than letting a transport failure masquerade as "box is
  *  empty" — that misread could talk the planner into overwriting a box side we never
- *  actually saw. Under DEVBOX_DRYRUN=1 it throws BoxUnreachable instead, so the caller
- *  can degrade to an "unknown" preview line rather than crashing the dry run. */
-const boxSh = (cfg: Config, profile: string, args: string[]): string => {
+ *  actually saw. Under DEVBOX_DRYRUN=1, or when the caller passes `allowUnreachable`
+ *  (status: a diagnostic must degrade gracefully, not crash, whether or not it's a dry
+ *  run), it throws BoxUnreachable instead so the caller can report "unreachable" rather
+ *  than dying or misreporting "empty". */
+const boxSh = (cfg: Config, profile: string, args: string[], opts: { allowUnreachable?: boolean } = {}): string => {
   const host = hostFor(cfg, profile);
   const cmd = ["remote-app-configs", ...args].map(shQuote).join(" ");
   const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { encoding: "utf8" });
   if (r.error || r.status !== 0) {
     const msg = `remote-app-configs ${args[0]} failed on ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`;
-    if (isDry()) throw new BoxUnreachable(msg);
+    if (isDry() || opts.allowUnreachable) throw new BoxUnreachable(msg);
     die(msg);
   }
   return (r.stdout ?? "").trim();
 };
 
-export function inspectBox(cfg: Config, profile: string, e: ResolvedEntry): SideState {
-  const raw = boxSh(cfg, profile, ["inspect", e.label, e.box, e.mode, boxStorePath(profile, e)]);
+export function inspectBox(cfg: Config, profile: string, e: ResolvedEntry, opts: { allowUnreachable?: boolean } = {}): SideState {
+  const raw = boxSh(cfg, profile, ["inspect", e.label, e.box, e.mode, boxStorePath(profile, e)], opts);
   try {
     return JSON.parse(raw) as SideState;
   } catch {
@@ -143,8 +146,62 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
   }
 }
 
-/** Stubs so the CLI wiring typechecks — Tasks 9 and 10 implement these. */
-export const runConfigStatus = async (_cfg: Config, _profile: string): Promise<void> => {};
+/** Syncthing marks conflicts as sibling `*.sync-conflict-*` files inside the store;
+ *  Mutagen surfaces conflicts through the engine-level SyncStatus instead (checked
+ *  separately in runConfigStatus). Missing/non-directory store paths just count 0. */
+export function countSyncConflicts(storePath: string): number {
+  if (!existsSync(storePath)) return 0;
+  return readdirSync(storePath).filter((n) => n.includes(".sync-conflict-")).length;
+}
+
+/**
+ * `devbox config status` — read-only diagnostic. Never touches the client or the box:
+ * only inspects (inspectClient/inspectBox's "inspect" op is a read on the box side too)
+ * and reads the sync engine's own status. Surfaces the two silent failure modes:
+ *   - the sync session isn't running, so edits stopped propagating even though
+ *     everything still looks linked;
+ *   - a link whose target is missing in the store, which is the actual data-loss path
+ *     (the app would just write a fresh empty config).
+ * A box that can't be reached is a normal state to report, not a reason to crash a
+ * diagnostic — each entry falls back to `box=unreachable` instead of dying.
+ */
+export async function runConfigStatus(cfg: Config, profile: string): Promise<void> {
+  const entries = appConfigsFor(cfg, profile);
+  if (!entries.length) return void out(`devbox: no app_configs declared for profile "${profile}"`);
+  const disk = syncDiskRoot(profile);
+
+  // Session naming is exact (`devbox-<profile>`, see sync/mutagen.ts sessionName and
+  // sync/syncthing.ts folderId) — not a substring match, which would misfire whenever
+  // one profile name happens to be a substring of another (e.g. "eng" inside "engineer").
+  const sessions = await engineFor(syncEngineFor(cfg, profile)).status();
+  const session = sessions.find((s) => s.name === `devbox-${profile}`);
+  if (!session) out(`  ! sync is not running — edits are NOT propagating (devbox sync up)`);
+  else if (session.conflicts > 0) out(`  ! ${session.conflicts} conflict(s) reported by the sync engine — resolve before continuing`);
+
+  for (const e of entries) {
+    const client = inspectClient(profile, e);
+
+    let boxKind: string;
+    try {
+      boxKind = inspectBox(cfg, profile, e, { allowUnreachable: true }).kind;
+    } catch (err) {
+      if (!(err instanceof BoxUnreachable)) throw err; // boxSh only throws this for dry-run/allowUnreachable
+      boxKind = "unreachable";
+    }
+
+    const storePath = join(disk, storeRelPath(e));
+    const storeOk = existsSync(storePath);
+    const conflicts = countSyncConflicts(storePath);
+
+    out(`  ${e.label}: client=${client.kind} box=${boxKind} store=${storeOk ? "ok" : "MISSING"}` +
+        (conflicts ? ` ⚠ ${conflicts} conflict file(s)` : ""));
+    if (client.kind === "linked" && !storeOk) {
+      out(`    ! the link has no target — the app will write a fresh empty config`);
+    }
+  }
+}
+
+/** Stub so the CLI wiring typechecks — Task 10 implements this. */
 export const runConfigUnlink = async (_cfg: Config, _profile: string, _label?: string): Promise<void> => {};
 
 export function seedFromClient(profile: string, e: ResolvedEntry): void {
