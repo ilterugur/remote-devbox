@@ -5,7 +5,7 @@
  * `remote-app-configs` helper so the two sides never drift. Honors DEVBOX_DRYRUN=1.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appConfigsFor, die, hostFor, shQuote, syncDiskEnabled, type Config } from "../config";
 import { normalizePath, syncDiskRoot } from "../bridge";
@@ -59,15 +59,23 @@ function summarizeClient(e: ResolvedEntry, p: string): string {
   return `${readdirSync(p).length} files`;
 }
 
-/** Run the installed `remote-app-configs` helper on the box. Dies on unreachable/failed
- *  ssh rather than letting a transport failure masquerade as "box is empty" — that
- *  misread could talk the planner into overwriting a box side we never actually saw. */
+/** Thrown by `boxSh` in place of `die()` when DEVBOX_DRYRUN=1: a dry run previews, it
+ *  never aborts hard just because the box happens to be unreachable right now. */
+class BoxUnreachable extends Error {}
+
+/** Run the installed `remote-app-configs` helper on the box. Outside a dry run, dies on
+ *  unreachable/failed ssh rather than letting a transport failure masquerade as "box is
+ *  empty" — that misread could talk the planner into overwriting a box side we never
+ *  actually saw. Under DEVBOX_DRYRUN=1 it throws BoxUnreachable instead, so the caller
+ *  can degrade to an "unknown" preview line rather than crashing the dry run. */
 const boxSh = (cfg: Config, profile: string, args: string[]): string => {
   const host = hostFor(cfg, profile);
   const cmd = ["remote-app-configs", ...args].map(shQuote).join(" ");
   const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { encoding: "utf8" });
   if (r.error || r.status !== 0) {
-    die(`remote-app-configs ${args[0]} failed on ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`);
+    const msg = `remote-app-configs ${args[0]} failed on ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`;
+    if (isDry()) throw new BoxUnreachable(msg);
+    die(msg);
   }
   return (r.stdout ?? "").trim();
 };
@@ -92,9 +100,25 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
 
   for (const e of entries) {
     const client = inspectClient(profile, e);
-    const box = inspectBox(cfg, profile, e);
+
+    let box: SideState;
+    try {
+      box = inspectBox(cfg, profile, e);
+    } catch (err) {
+      if (!(isDry() && err instanceof BoxUnreachable)) throw err; // boxSh only throws this under DEVBOX_DRYRUN=1
+      out(`  ── ${e.label}: unknown — box unreachable, cannot preview (${(err as Error).message})`);
+      continue;
+    }
     const storeKind: SideState["kind"] = existsSync(join(disk, storeRelPath(e))) ? "content" : "absent";
     const plan = planAppConfigLink(e, client, box, storeKind);
+
+    // Dry run stops here: read-only inspection above is fine to preview with, but
+    // nothing past this point may run under DEVBOX_DRYRUN=1 — in particular, never
+    // block on the interactive prompt below, and never resolve "ask" to a guess.
+    if (isDry()) {
+      out(`  ── ${e.label}: ${plan.decision === "ask" ? "would ask" : plan.decision} (${plan.reason})`);
+      continue;
+    }
 
     let decision = plan.decision;
     if (decision === "ask") {
@@ -105,7 +129,6 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
         decision = answer.startsWith("c") ? "use-client" : answer.startsWith("b") ? "use-box" : "refuse";
       }
     }
-    if (isDry()) { out(`  ── ${e.label}: ${decision} (${plan.reason})`); continue; }
 
     switch (decision) {
       case "already-linked": out(`  ✓ ${e.label} already linked`); continue;
@@ -124,7 +147,7 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
 export const runConfigStatus = async (_cfg: Config, _profile: string): Promise<void> => {};
 export const runConfigUnlink = async (_cfg: Config, _profile: string, _label?: string): Promise<void> => {};
 
-function seedFromClient(profile: string, e: ResolvedEntry): void {
+export function seedFromClient(profile: string, e: ResolvedEntry): void {
   const src = normalizePath(e.client);
   const dst = clientPayload(profile, e);
   mkdirSync(dirname(dst), { recursive: true });
@@ -132,12 +155,12 @@ function seedFromClient(profile: string, e: ResolvedEntry): void {
   renameSync(src, `${src}.pre-devbox-${stamp()}`);
 }
 
-const matches = (p: string, pattern: string): boolean => {
+export const matches = (p: string, pattern: string): boolean => {
   const name = p.split("/").pop() ?? "";
   return pattern.includes("*") ? new RegExp("^" + pattern.replace(/[.]/g, "\\.").replace(/\*/g, ".*") + "$").test(name) : name === pattern;
 };
 
-function linkClient(profile: string, e: ResolvedEntry): void {
+export function linkClient(profile: string, e: ResolvedEntry): void {
   const target = clientPayload(profile, e);
   const p = normalizePath(e.client);
   if (e.mode === "ssh-include") {
@@ -150,7 +173,10 @@ function linkClient(profile: string, e: ResolvedEntry): void {
   // symlinkSync below fail with EEXIST if left in place.
   let st;
   try { st = lstatSync(p); } catch { st = null; }
-  if (st) { if (st.isSymbolicLink()) rmSync(p); else renameSync(p, `${p}.pre-devbox-${stamp()}`); }
+  if (st) {
+    if (st.isSymbolicLink() && readlinkSync(p) === target) return; // already correct — leave it alone, nothing to do
+    renameSync(p, `${p}.pre-devbox-${stamp()}`); // never delete — anything occupying p (real content, or a foreign/stale link) is moved aside
+  }
   mkdirSync(dirname(p), { recursive: true });
   // "dir" mode needs the target itself to exist as a directory (the app reads inside
   // it); "file" mode must only ensure the target's *parent* exists — mkdir'ing the
