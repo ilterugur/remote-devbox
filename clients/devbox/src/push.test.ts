@@ -20,6 +20,16 @@ describe("encodeCwd", () => {
   test("remote root", () => {
     expect(encodeCwd("/home/devbox/projects/claude-devbox")).toBe("-home-devbox-projects-claude-devbox");
   });
+
+  test("worktree dir underscore becomes - (matches Claude Code's ~/.claude/projects encoding)", () => {
+    expect(encodeCwd("/home/dev-a/projects/example-monorepo/.claude/worktrees/bridge-cse_01Nn7vs4")).toBe(
+      "-home-dev-a-projects-example-monorepo--claude-worktrees-bridge-cse-01Nn7vs4",
+    );
+  });
+
+  test("every non-alphanumeric (_ @ etc.) maps to -, like the real project dir name", () => {
+    expect(encodeCwd("/home/x/node_modules/@mastra/core")).toBe("-home-x-node-modules--mastra-core");
+  });
 });
 
 describe("firstHumanPrompt", () => {

@@ -222,3 +222,12 @@ test("hardware-backed and certificate SSH keys are accepted", () => {
     expect(paths({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [key] }] })).toEqual([]);
   }
 });
+
+test("host.swappiness must be a kernel-valid integer", () => {
+  const host = (swappiness: unknown) => ({ ...minimal(), host: { swappiness } });
+  expect(paths(host(10))).toEqual([]);
+  expect(paths(host(0))).toEqual([]);
+  expect(paths(host(201))).toContain("error:host.swappiness");
+  expect(paths(host(-1))).toContain("error:host.swappiness");
+  expect(paths(host("10"))).toContain("error:host.swappiness");
+});

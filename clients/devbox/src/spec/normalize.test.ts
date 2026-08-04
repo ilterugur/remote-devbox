@@ -119,3 +119,9 @@ test("a box without Tailscale defaults to the paths that actually exist", () => 
   expect((out.devbox_network as any).ssh.access).toEqual(["public"]);
   expect(((out.devbox_developers as any[])[0]).desktop.access).toEqual(["tunnel"]);
 });
+
+test("swappiness is null when unset, so the role leaves the kernel default alone", () => {
+  expect((normalize(resolved).devbox_host as any).swappiness).toBeNull();
+  const tuned: ResolvedSpec = { ...resolved, host: { swappiness: 10 } };
+  expect((normalize(tuned).devbox_host as any).swappiness).toBe(10);
+});

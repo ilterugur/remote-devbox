@@ -132,6 +132,10 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   if (h.umask !== undefined && !(typeof h.umask === "string" && /^[0-7]{3,4}$/.test(h.umask))) {
     issues.push(err("host.umask", "must be an octal umask like '077'"));
   }
+  const swap = h.swappiness;
+  if (swap !== undefined && !(typeof swap === "number" && Number.isInteger(swap) && swap >= 0 && swap <= 200)) {
+    issues.push(err("host.swappiness", "must be an integer in 0..200"));
+  }
   if (h.locales !== undefined && !(Array.isArray(h.locales) && h.locales.every(isNonEmptyString))) {
     issues.push(err("host.locales", "must be a list of locale names"));
   }

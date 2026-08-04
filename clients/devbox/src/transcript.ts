@@ -42,7 +42,7 @@ export function buildMappings(
   for (const m of base) {
     all.push(m);
     const enc = { from: encodeCwd(m.from), to: encodeCwd(m.to) };
-    if (enc.from !== m.from) all.push(enc); // skip if no '/' or '.' (nothing to encode)
+    if (enc.from !== m.from) all.push(enc); // skip if no non-alphanumerics (nothing to encode)
   }
   const seen = new Set<string>();
   return all.filter((m) => (seen.has(m.from) ? false : (seen.add(m.from), true))).sort((a, b) => b.from.length - a.from.length);

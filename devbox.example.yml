@@ -35,6 +35,10 @@ host:
   harden_ssh: true        # false adopts an existing box without touching sshd
   hide_pids: true         # /proc hidepid: developers cannot see each other’s command lines
   umask: "077"
+  # Left at the kernel default (60) when unset. Lower it on a box that mostly compiles:
+  # build heaps then stay resident instead of being paged into zram, which lives in RAM
+  # and so would double-count against memory rather than relieve it.
+  # swappiness: 10
 
 # Shared toolchain, installed once via mise and resolved on every developer PATH.
 runtimes:

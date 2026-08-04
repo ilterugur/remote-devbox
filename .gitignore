@@ -28,3 +28,6 @@ __pycache__/
 *.env
 .env
 secrets/
+
+# hermes-box — separate box, not committed for now. Ignore the whole directory.
+hermes-box/
