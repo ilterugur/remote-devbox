@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clientPayload, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, runConfigUnlink, seedEmpty, seedFromClient, unlinkClient } from "./run";
+import { clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, runConfigUnlink, seedEmpty, seedFromClient, unlinkClient } from "./run";
 import type { ResolvedEntry } from "./registry";
 import type { Config } from "../config";
 
@@ -42,6 +42,10 @@ const genericDirEntry = (client: string): ResolvedEntry => ({
 
 const sshEntry = (client: string): ResolvedEntry => ({
   label: "ssh_config", client, box: "~/.ssh/config", mode: "ssh-include", excludes: [],
+});
+
+const fileEntry = (client: string): ResolvedEntry => ({
+  label: "custom-file", client, box: "~/.config/app/config.json", mode: "file", excludes: [],
 });
 
 describe("clientPayload", () => {
@@ -137,6 +141,93 @@ describe("inspectClient — ssh-include mode", () => {
     writeFileSync(p, "# >>> devbox app-configs\nInclude /somewhere/config\n# <<< devbox app-configs\nHost foo\n");
     const e = sshEntry(p);
     expect(inspectClient("work", e)).toEqual({ kind: "linked", summary: "" });
+  });
+});
+
+describe("inspectClient — file mode", () => {
+  // Finding (Critical 1): before the fix, everything but ssh-include fell through to
+  // readdirSync(p), which throws ENOTDIR on a regular file — "file" mode was unusable.
+  test("absent when the client path does not exist", () => {
+    const root = tmp();
+    const e = fileEntry(join(root, "nope.json"));
+    expect(inspectClient("work", e)).toEqual({ kind: "absent", summary: "" });
+  });
+
+  test("empty when the file exists but is zero bytes", () => {
+    const root = tmp();
+    const p = join(root, "settings.json");
+    writeFileSync(p, "");
+    const e = fileEntry(p);
+    expect(inspectClient("work", e)).toEqual({ kind: "empty", summary: "" });
+  });
+
+  test("content, with a byte-count summary, for a non-empty file", () => {
+    const root = tmp();
+    const p = join(root, "settings.json");
+    writeFileSync(p, "{}");
+    const e = fileEntry(p);
+    expect(inspectClient("work", e)).toEqual({ kind: "content", summary: "2 bytes" });
+  });
+
+  test("linked when the symlink target matches the computed store payload path exactly", () => {
+    const root = tmp();
+    const p = join(root, "settings.json");
+    const e = fileEntry(p);
+    symlinkSync(clientPayload("work", e), p);
+    expect(inspectClient("work", e)).toEqual({ kind: "linked", summary: "" });
+  });
+
+  test("foreign-link when the symlink points somewhere else, and reports the target", () => {
+    const root = tmp();
+    const p = join(root, "settings.json");
+    const elsewhere = join(root, "elsewhere.json");
+    symlinkSync(elsewhere, p);
+    const e = fileEntry(p);
+    expect(inspectClient("work", e)).toEqual({ kind: "foreign-link", summary: elsewhere });
+  });
+});
+
+describe("computeStoreKind", () => {
+  // Finding (Important 3): storeKind must agree with runConfigStatus's own "store=ok"
+  // check (clientPayload), not just the store *directory* — otherwise a store dir that
+  // exists without its payload file reads as "content" and `link` writes a symlink/
+  // Include pointing at nothing.
+  test("dir mode: content once the store directory itself exists", () => {
+    const profile = testProfile();
+    const e = genericDirEntry("/unused");
+    try {
+      expect(computeStoreKind(profile, e)).toBe("absent");
+      mkdirSync(clientPayload(profile, e), { recursive: true });
+      expect(computeStoreKind(profile, e)).toBe("content");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("ssh-include mode: absent when the store dir exists but the payload file inside it does not", () => {
+    const profile = testProfile();
+    const e = sshEntry("/unused");
+    try {
+      mkdirSync(dirname(clientPayload(profile, e)), { recursive: true }); // store dir only
+      expect(computeStoreKind(profile, e)).toBe("absent"); // would have wrongly read "content" before the fix
+      writeFileSync(clientPayload(profile, e), "Host foo\n");
+      expect(computeStoreKind(profile, e)).toBe("content");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("file mode: absent when the store dir exists but the payload file inside it does not", () => {
+    const profile = testProfile();
+    const e = fileEntry("/unused/settings.json");
+    try {
+      mkdirSync(dirname(clientPayload(profile, e)), { recursive: true });
+      expect(computeStoreKind(profile, e)).toBe("absent");
+      writeFileSync(clientPayload(profile, e), "{}");
+      expect(computeStoreKind(profile, e)).toBe("content");
+    } finally {
+      cleanupProfile(profile);
+    }
   });
 });
 
@@ -282,7 +373,8 @@ describe("seedEmpty", () => {
   });
 
   test("ssh-include mode: creates an empty payload FILE inside the store, not just the directory — " +
-    "a literal (non-glob) Include line pointing at a missing file is a hard error for OpenSSH", () => {
+    "a missing Include target is not a hard error for OpenSSH (it exits 0), which is worse: the shared " +
+    "host entries silently vanish from that side instead of failing loudly", () => {
     const profile = testProfile();
     const e = sshEntry("/unused");
     try {

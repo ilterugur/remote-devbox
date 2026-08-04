@@ -11,7 +11,7 @@ import { appConfigsFor, die, hostFor, shQuote, syncDiskEnabled, syncEngineFor, t
 import { normalizePath, syncDiskRoot } from "../bridge";
 import { engineFor } from "../sync/engine";
 import { planAppConfigLink, planAppConfigUnlink, type SideState } from "./plan";
-import { payloadRelPath, storeRelPath, type ResolvedEntry } from "./registry";
+import { payloadBasename, payloadRelPath, storeRelPath, type ResolvedEntry } from "./registry";
 
 const isDry = () => !!process.env.DEVBOX_DRYRUN;
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -46,12 +46,20 @@ export function inspectClient(profile: string, e: ResolvedEntry): SideState {
       ? { kind: "linked", summary: "" }
       : { kind: "foreign-link", summary: readlinkSync(p) };
   }
+  if (e.mode === "file") {
+    // A regular file, not a directory: readdirSync(p) below would throw ENOTDIR. Emptiness
+    // is byte size, not directory listing.
+    return st.size === 0 ? { kind: "empty", summary: "" } : { kind: "content", summary: summarizeClient(e, p) };
+  }
   const names = readdirSync(p);
   if (!names.length) return { kind: "empty", summary: "" };
   return { kind: "content", summary: summarizeClient(e, p) };
 }
 
 function summarizeClient(e: ResolvedEntry, p: string): string {
+  if (e.mode === "file") {
+    return `${lstatSync(p).size} bytes`;
+  }
   if (e.label === "filezilla") {
     const xml = join(p, "sitemanager.xml");
     const n = existsSync(xml) ? (readFileSync(xml, "utf8").match(/<Server>/g) ?? []).length : 0;
@@ -84,12 +92,59 @@ const boxSh = (cfg: Config, profile: string, args: string[], opts: { allowUnreac
 };
 
 export function inspectBox(cfg: Config, profile: string, e: ResolvedEntry, opts: { allowUnreachable?: boolean } = {}): SideState {
-  const raw = boxSh(cfg, profile, ["inspect", e.label, e.box, e.mode, boxStorePath(profile, e)], opts);
+  const raw = boxSh(cfg, profile, ["inspect", e.label, e.box, e.mode, boxStorePath(profile, e), payloadBasename(e)], opts);
   try {
     return JSON.parse(raw) as SideState;
   } catch {
     return { kind: "absent", summary: "" };
   }
+}
+
+/** Box-side path to the entry's payload file (as seen over ssh) — "dir" mode has no
+ *  single payload file, so callers only use this for "file"/"ssh-include". */
+const boxPayloadPath = (profile: string, e: ResolvedEntry): string => `${boxStorePath(profile, e)}/${payloadBasename(e)}`;
+
+/** Pull a just-seeded box payload down into the client-side store immediately, via ssh,
+ *  instead of leaving `linkClient` to link against a file that only appears once the
+ *  sync engine catches up (see the storeKind/use-box comments in runConfigLink). No-op
+ *  for "dir" mode, which has no single payload file. */
+function pullPayloadToClient(cfg: Config, profile: string, e: ResolvedEntry): void {
+  if (e.mode === "dir") return;
+  const host = hostFor(cfg, profile);
+  const boxPayload = boxPayloadPath(profile, e);
+  const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, `cat ${shQuote(boxPayload)}`], { encoding: "utf8" });
+  if (r.error || r.status !== 0) die(`could not pull ${e.label} payload from ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`);
+  const dst = clientPayload(profile, e);
+  mkdirSync(dirname(dst), { recursive: true });
+  writeFileSync(dst, r.stdout ?? "");
+}
+
+/** Mirror of pullPayloadToClient: push the just-seeded client-side payload up to the
+ *  box's own store via ssh, so the box's own `link` (run right after this) does not
+ *  point at content that only appears once the sync engine catches up. No-op for "dir"
+ *  mode, which has no single payload file. */
+function pushPayloadToBox(cfg: Config, profile: string, e: ResolvedEntry): void {
+  if (e.mode === "dir") return;
+  const host = hostFor(cfg, profile);
+  const boxPayload = boxPayloadPath(profile, e);
+  const body = readFileSync(clientPayload(profile, e), "utf8");
+  const cmd = `mkdir -p ${shQuote(dirname(boxPayload))} && cat > ${shQuote(boxPayload)}`;
+  const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { input: body, encoding: "utf8" });
+  if (r.error || r.status !== 0) die(`could not push ${e.label} payload to ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`);
+}
+
+/**
+ * Whether the store already holds the entry's canonical copy — clientPayload, not the
+ * store *directory*. For "dir" mode the two are the same path, but for "file"/
+ * "ssh-include" the directory can exist (partial propagation, or an aborted earlier
+ * run) while the payload file inside it is still missing. Checking the directory read
+ * that as "content", so `link` would resolve `bare && bare` to "use-client" and write an
+ * Include/symlink pointing at nothing — exactly what `runConfigStatus` (which already
+ * used clientPayload) would then report MISSING right after `link` just "created" it.
+ * Exported so this agreement with `runConfigStatus` is directly testable without ssh.
+ */
+export function computeStoreKind(profile: string, e: ResolvedEntry): SideState["kind"] {
+  return existsSync(clientPayload(profile, e)) ? "content" : "absent";
 }
 
 export async function runConfigLink(cfg: Config, profile: string, opts: { fromClient?: boolean }): Promise<void> {
@@ -112,7 +167,7 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
       out(`  ── ${e.label}: unknown — box unreachable, cannot preview (${(err as Error).message})`);
       continue;
     }
-    const storeKind: SideState["kind"] = existsSync(join(disk, storeRelPath(e))) ? "content" : "absent";
+    const storeKind = computeStoreKind(profile, e);
     const plan = planAppConfigLink(e, client, box, storeKind);
 
     // Dry run stops here: read-only inspection above is fine to preview with, but
@@ -136,12 +191,31 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
     switch (decision) {
       case "already-linked": out(`  ✓ ${e.label} already linked`); continue;
       case "refuse": out(`  ! ${plan.reason}`); continue;
-      case "use-box": boxSh(cfg, profile, ["seed", e.label, e.box, e.mode, boxStorePath(profile, e), ...e.excludes]); break;
-      case "use-client": if (client.kind === "content") seedFromClient(profile, e); break;
-      case "seed-empty": seedEmpty(profile, e); break;
+      case "use-box":
+        // Seeds the box's own store from box content. For non-"dir" modes the client's
+        // local store copy does not exist yet — it only appears once the sync engine
+        // catches up, which `link` never waits for (it only requires the sync disk to
+        // exist, not an active session). Pull the just-seeded payload down over ssh
+        // immediately rather than leaving `linkClient` to link against nothing.
+        boxSh(cfg, profile, ["seed", e.label, e.box, e.mode, boxStorePath(profile, e), payloadBasename(e), ...e.excludes]);
+        pullPayloadToClient(cfg, profile, e);
+        break;
+      case "use-client":
+        if (client.kind === "content") {
+          seedFromClient(profile, e);
+          // Mirror of the use-box case: the box's own store does not have this payload
+          // yet either, and boxSh(["link", …]) below does not wait for sync to carry it
+          // over — push it up now so the box's own link has something real to point at.
+          pushPayloadToBox(cfg, profile, e);
+        }
+        break;
+      case "seed-empty":
+        seedEmpty(profile, e);
+        pushPayloadToBox(cfg, profile, e); // same race as above, just with an empty payload
+        break;
     }
     linkClient(profile, e);
-    boxSh(cfg, profile, ["link", e.label, e.box, e.mode, boxStorePath(profile, e)]);
+    boxSh(cfg, profile, ["link", e.label, e.box, e.mode, boxStorePath(profile, e), payloadBasename(e)]);
     out(`  ✓ ${e.label} linked (${decision})`);
   }
 }
@@ -282,7 +356,7 @@ export async function runConfigUnlink(cfg: Config, profile: string, label?: stri
     } else {
       out(`  ✓ ${e.label}: skip (${plan.reason})`);
     }
-    boxSh(cfg, profile, ["unlink", e.label, e.box, e.mode, boxStorePath(profile, e)]);
+    boxSh(cfg, profile, ["unlink", e.label, e.box, e.mode, boxStorePath(profile, e), payloadBasename(e)]);
   }
   out(`  · the synced copies are left in ${join(syncDiskRoot(profile), ".app-configs")} — delete them by hand when you are sure`);
 }
@@ -291,8 +365,10 @@ export async function runConfigUnlink(cfg: Config, profile: string, label?: stri
  *  itself is the store directory, so mkdir is enough. For "file"/"ssh-include" the
  *  target is a specific file *inside* the store directory (clientPayload/payloadRelPath)
  *  — creating only the directory would leave `linkClient`'s Include/symlink pointing at
- *  a file that doesn't exist, which OpenSSH treats as a hard error for a literal (non-glob)
- *  Include path. So a real (empty) file has to exist at the payload path too. */
+ *  a file that doesn't exist. That is not a hard error for OpenSSH — `ssh -F cfg -G host`
+ *  with `Include /nonexistent` exits 0 — which is worse, not better: the shared host
+ *  entries just silently vanish from that side instead of failing loudly. Creating a
+ *  real (empty) file at the payload path avoids that silent loss. */
 export function seedEmpty(profile: string, e: ResolvedEntry): void {
   const target = clientPayload(profile, e);
   if (e.mode === "dir") {
