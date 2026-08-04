@@ -23,6 +23,16 @@ test("an object entry is used verbatim", () => {
   expect("entry" in r && r.entry.excludes).toEqual([]);
 });
 
+test("a null entry is rejected, not thrown", () => {
+  const r = resolveEntry(null as any);
+  expect("error" in r).toBe(true);
+});
+
+test("a scalar (non-string, non-object) entry is rejected, not thrown", () => {
+  const r = resolveEntry(42 as any);
+  expect("error" in r).toBe(true);
+});
+
 test("an object entry missing a field is rejected", () => {
   const r = resolveEntry({ label: "dbeaver", client: "~/a" });
   expect("error" in r && r.error).toContain("box");

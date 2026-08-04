@@ -48,6 +48,7 @@ export function resolveEntry(raw: string | Record<string, unknown>): { entry: Re
     if (!hit) return { error: `unknown app config "${raw}" — known: ${known}` };
     return { entry: { label: raw, ...hit, excludes: [...hit.excludes] } };
   }
+  if (raw === null || typeof raw !== "object") return { error: "an app config entry must be a string or an object" };
   const label = typeof raw.label === "string" ? raw.label : "";
   if (!label) return { error: "an app config entry needs a label" };
   for (const field of ["client", "box", "mode"] as const) {
