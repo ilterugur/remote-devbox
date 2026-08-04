@@ -1,0 +1,148 @@
+---
+# An agent profile is one login of one agent. A developer can hold several — two Claude
+# accounts and a Codex account, say — because each profile gets its own config tree and
+# the wrapper points the provider's config env var at it.
+#
+# A profile carries NO git identity: which account a commit is attributed to is a
+# property of the project, not of the agent driving it (see the projects role).
+
+- name: Flatten the declared agent profiles
+  ansible.builtin.set_fact:
+    _devbox_agent_profiles: "{{ _raw__devbox_agent_profiles | from_json }}"
+  vars:
+    _raw__devbox_agent_profiles: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers -%}
+        {%- for name, profile in (dev.agent_profiles | default({})).items() -%}
+          {{- out.append({
+                'user': dev.user,
+                'name': name,
+                'provider': profile.provider,
+                'is_default': name == dev.default_agent_profile}) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Reject a profile whose provider has no adapter
+  ansible.builtin.assert:
+    that: item.provider in devbox_agent_adapters
+    fail_msg: >-
+      agent profile '{{ item.user }}/{{ item.name }}' asks for provider
+      '{{ item.provider }}', which has no adapter. Known: {{ devbox_agent_adapters.keys() | join(', ') }}.
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+
+# Each provider binary is installed once per developer, however many profiles use it —
+# the binary is shared, only the config trees are separate.
+- name: Work out which providers each developer needs
+  ansible.builtin.set_fact:
+    _devbox_agent_installs: "{{ _raw__devbox_agent_installs | from_json }}"
+  vars:
+    _raw__devbox_agent_installs: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers -%}
+        {%- for provider in (dev.agent_profiles | default({})).values()
+                            | map(attribute='provider') | unique -%}
+          {{- out.append({'user': dev.user, 'provider': provider}) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Install each agent binary
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; timeout 600 bash -lc '{{ devbox_agent_adapters[item.provider].install_cmd }}'"
+    executable: /bin/bash
+    creates: "/home/{{ item.user }}/{{ devbox_agent_adapters[item.provider].install_creates }}"
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+  loop: "{{ _devbox_agent_installs }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.provider }}"
+
+- name: Verify each agent binary runs (catches a truncated install)
+  # Through a login shell: an agent installed via npm carries an `env node` shebang, so
+  # it only resolves once mise has put the toolchain on PATH — exactly the environment
+  # the profile wrapper sets up before it execs.
+  ansible.builtin.shell:
+    cmd: >-
+      bash -lc "/home/{{ item.user }}/{{ devbox_agent_adapters[item.provider].bin_path }}
+      {{ devbox_agent_adapters[item.provider].version_args }}"
+    executable: /bin/bash
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+  loop: "{{ _devbox_agent_installs }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.provider }}"
+  changed_when: false
+
+- name: Create the per-profile config trees
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+
+# The wrapper IS the profile: running `claude` directly would use the developer's
+# default config tree and quietly mix two accounts' credentials.
+- name: Install a launcher per agent profile
+  ansible.builtin.template:
+    src: agent-wrapper.sh.j2
+    dest: "/home/{{ item.user }}/.local/bin/{{ item.name }}"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+
+- name: Pre-accept Claude's first-run dialogs so headless launches don't block
+  # An untrusted workspace or the first-run Remote Control prompt makes a non-interactive
+  # `claude` hang forever. Seed the flags in this PROFILE's config, not the developer's.
+  ansible.builtin.command:
+    cmd: >-
+      python3 -c 'import json,os,sys;
+      p=os.path.join(sys.argv[1],".claude.json");
+      os.makedirs(sys.argv[1],exist_ok=True);
+      d=json.load(open(p)) if os.path.exists(p) else {};
+      d["remoteDialogSeen"]=True;
+      pr=d.setdefault("projects",{});
+      pr.setdefault(sys.argv[2],{})["hasTrustDialogAccepted"]=True;
+      json.dump(d,open(p,"w"),indent=2)'
+      "/home/{{ item.user }}/.agent-profiles/{{ item.name }}"
+      "/home/{{ item.user }}"
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when: item.provider == 'claude'
+  changed_when: false
+
+- name: Install the login helper
+  ansible.builtin.template:
+    src: devbox-agent-login.sh.j2
+    dest: /usr/local/bin/remote-devbox-login
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Agent profiles that still need an interactive login
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.user }}/{{ item.name }} ({{ item.provider }}) —
+      {{ devbox_agent_adapters[item.provider].login_hint }}. As the operator:
+      `sudo remote-devbox-login {{ item.user }} {{ item.name }}`.
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"

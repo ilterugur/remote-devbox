@@ -1,0 +1,5 @@
+---
+# Docker's apt repository is often months behind a fresh Ubuntu release, so the suite is
+# stated explicitly rather than guessed from the host codename. Point this at the newest
+# suite Docker actually publishes; `devbox doctor` reports which one is in use.
+devbox_docker_apt_suite: "{{ ansible_facts.distribution_release }}"

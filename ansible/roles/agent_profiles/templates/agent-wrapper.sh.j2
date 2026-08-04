@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# Launcher for agent profile "{{ item.name }}" ({{ item.provider }}) of {{ item.user }}.
+# Pointing {{ devbox_agent_adapters[item.provider].config_env }} at this profile's own
+# tree is what keeps several logins of the same provider apart: credentials, history and
+# settings never touch another profile's.
+set -euo pipefail
+
+export {{ devbox_agent_adapters[item.provider].config_env }}="{{ '/home/' ~ item.user ~ '/.agent-profiles/' ~ item.name }}"
+export DEVBOX_AGENT_PROFILE="{{ item.name }}"
+export DEVBOX_AGENT_PROVIDER="{{ item.provider }}"
+
+# Written by the memory role when this profile has a memory space. Sourced rather
+# than templated in, so exactly one role owns this file.
+MEMORY_ENV="{{ '/home/' ~ item.user ~ '/.agent-profiles/' ~ item.name }}/memory.env"
+[ -f "$MEMORY_ENV" ] && . "$MEMORY_ENV"
+
+# mise shims so the agent's own shell tools resolve the pinned toolchain.
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate bash --shims 2>/dev/null || true)"
+fi
+
+exec "{{ '/home/' ~ item.user ~ '/' ~ devbox_agent_adapters[item.provider].bin_path }}" "$@"

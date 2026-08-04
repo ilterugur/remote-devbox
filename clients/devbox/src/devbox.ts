@@ -32,6 +32,14 @@ import { runPull } from "./pull";
 import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { formatIssues, hasErrors } from "./spec/issues";
+import { loadSpec, secretsPathFor, writeGeneratedVars } from "./spec/load";
+import { describeSecrets, loadSecrets, validateSecretRefs, writeGeneratedSecrets } from "./spec/secrets";
+import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
+import { renderPlan } from "./spec/plan";
+import { describePhases, tagsFor } from "./spec/phases";
 
 function newHelp(prof: string) {
   const lines = [
@@ -47,23 +55,28 @@ function newHelp(prof: string) {
   process.stderr.write(lines.join("\n") + "\n");
 }
 
-const cfg: Config = loadConfig();
+// Lazy + memoized: `devbox plan` / `migrate-config` operate on devbox.yml and must
+// work on a machine that has never run gen-editor-config.py (loadConfig() die()s
+// when ~/.config/claude-devbox/config.json is absent).
+let _cfg: Config | null = null;
+const cfg = (): Config => (_cfg ??= loadConfig());
+
 const cli = cac("devbox");
 
 cli
   .command("use [profile]", "show, or set, the remembered active profile")
   .action((profile?: string) => {
-    const active = readState() ?? cfg.default;
+    const active = readState() ?? cfg().default;
     if (!profile) {
       console.log(`active profile: ${active}`);
-      if (users(cfg).length > 1) {
+      if (users(cfg()).length > 1) {
         console.log("profiles:");
-        for (const u of users(cfg)) console.log(`  ${u === active ? "●" : "○"} ${u}`);
+        for (const u of users(cfg())) console.log(`  ${u === active ? "●" : "○"} ${u}`);
         console.log(`switch with:  devbox use <profile>   (or ⌃p in the picker)`);
       }
       return;
     }
-    if (!users(cfg).includes(profile)) die(`unknown profile "${profile}" (have: ${users(cfg).join(" ")})`);
+    if (!users(cfg()).includes(profile)) die(`unknown profile "${profile}" (have: ${users(cfg()).join(" ")})`);
     writeState(profile);
     console.log(`active profile -> ${profile}`);
   });
@@ -71,12 +84,12 @@ cli
 cli
   .command("ls [profile]", "list open (attachable) tmux sessions")
   .action((profile?: string) => {
-    const prof = resolveProfile(cfg, profile);
-    const env = { ...process.env, LANG: cfg.locale, LC_ALL: cfg.locale, LC_CTYPE: cfg.locale };
+    const prof = resolveProfile(cfg(), profile);
+    const env = { ...process.env, LANG: cfg().locale, LC_ALL: cfg().locale, LC_CTYPE: cfg().locale };
     if (process.env.DEVBOX_DRYRUN) {
-      return void process.stdout.write(JSON.stringify(["ssh", hostFor(cfg, prof), "tmux ls ..."]) + "\n");
+      return void process.stdout.write(JSON.stringify(["ssh", hostFor(cfg(), prof), "tmux ls ..."]) + "\n");
     }
-    const r = spawnSync("ssh", [hostFor(cfg, prof), "tmux ls 2>/dev/null || echo '(no open sessions)'"], {
+    const r = spawnSync("ssh", [hostFor(cfg(), prof), "tmux ls 2>/dev/null || echo '(no open sessions)'"], {
       stdio: "inherit",
       env,
     });
@@ -97,7 +110,7 @@ cli
   .option("--force", "overwrite even if the remote copy is live or newer")
   .action(async (project: string | undefined, opts: Record<string, unknown>) => {
     const maps = opts.map ? (Array.isArray(opts.map) ? (opts.map as string[]) : [opts.map as string]) : [];
-    await runPush(cfg, {
+    await runPush(cfg(), {
       project,
       session: opts.session as string | undefined,
       pick: !!opts.pick,
@@ -126,7 +139,7 @@ cli
   .option("--force", "overwrite even if the local copy is live or newer")
   .action(async (project: string | undefined, opts: Record<string, unknown>) => {
     const maps = opts.map ? (Array.isArray(opts.map) ? (opts.map as string[]) : [opts.map as string]) : [];
-    await runPull(cfg, {
+    await runPull(cfg(), {
       project,
       session: opts.session as string | undefined,
       pick: !!opts.pick,
@@ -146,10 +159,10 @@ cli
   .option("-p, --profile <profile>", "target profile")
   .option("--label <label>", "only this mount (for down)")
   .action((action: string | undefined, opts: { profile?: string; label?: string }) => {
-    const prof = resolveProfile(cfg, opts.profile);
+    const prof = resolveProfile(cfg(), opts.profile);
     switch (action ?? "up") {
-      case "up": return runMountUp(cfg, prof);
-      case "down": return runMountDown(cfg, prof, opts.label);
+      case "up": return runMountUp(cfg(), prof);
+      case "down": return runMountDown(cfg(), prof, opts.label);
       case "status": return runMountStatus();
       default: return die(`unknown mount action "${action}" (up|down|status)`);
     }
@@ -159,13 +172,13 @@ cli
   .command("sync [action]", "two-way sync the ~/devbox/<profile> disk with the box (action: up|down|status|pause|resume)")
   .option("-p, --profile <profile>", "target profile")
   .action(async (action: string | undefined, opts: { profile?: string }) => {
-    if ((action ?? "up") === "status") return runSyncStatus(cfg);
-    const prof = resolveProfile(cfg, opts.profile);
+    if ((action ?? "up") === "status") return runSyncStatus(cfg());
+    const prof = resolveProfile(cfg(), opts.profile);
     switch (action ?? "up") {
-      case "up": return runSyncUp(cfg, prof);
-      case "down": return runSyncDown(cfg, prof);
-      case "pause": return runSyncPause(cfg, prof, false);
-      case "resume": return runSyncPause(cfg, prof, true);
+      case "up": return runSyncUp(cfg(), prof);
+      case "down": return runSyncDown(cfg(), prof);
+      case "pause": return runSyncPause(cfg(), prof, false);
+      case "resume": return runSyncPause(cfg(), prof, true);
       default: return die(`unknown sync action "${action}" (up|down|status|pause|resume)`);
     }
   });
@@ -192,7 +205,7 @@ cli
         capacity?: string | number;
       },
     ) => {
-      runAdd(cfg, {
+      runAdd(cfg(), {
         name,
         profile: opts.profile,
         branch: opts.branch,
@@ -215,24 +228,152 @@ cli
   .option("--mosh", "force mosh (shortcut for --transport mosh)")
   .option("--ssh", "force plain ssh+tmux, skipping et/mosh (shortcut for --transport ssh)")
   .action(async (project: string | undefined, opts: { profile?: string; menu?: boolean; shell?: boolean; transport?: string; et?: boolean; mosh?: boolean; ssh?: boolean }) => {
-    const prof = resolveProfile(cfg, opts.profile);
+    const prof = resolveProfile(cfg(), opts.profile);
     const transport = (opts.transport ?? (opts.ssh ? "ssh" : opts.et ? "et" : opts.mosh ? "mosh" : undefined)) as Transport | undefined;
     const co = { shellOnly: !!opts.shell, transport };
-    if (lazyMountOnConnect(cfg, prof) && lazyMountsFor(cfg, prof).length) {
-      try { runMountUp(cfg, prof); } catch (e) { process.stderr.write(`devbox: lazy mount skipped: ${(e as Error).message}\n`); }
+    if (lazyMountOnConnect(cfg(), prof) && lazyMountsFor(cfg(), prof).length) {
+      try { runMountUp(cfg(), prof); } catch (e) { process.stderr.write(`devbox: lazy mount skipped: ${(e as Error).message}\n`); }
     }
-    if (project) return connect(cfg, prof, project, co);
+    if (project) return connect(cfg(), prof, project, co);
     if (!opts.menu) {
-      const m = gitMatch(cfg);
-      if (m.length) return connect(cfg, m[0].profile, m[0].project, co);
+      const m = gitMatch(cfg());
+      if (m.length) return connect(cfg(), m[0].profile, m[0].project, co);
     }
-    const profilesList = cfg.profiles.map((p) => ({ user: p.user, projects: projectsOf(cfg, p.user) }));
+    const profilesList = cfg().profiles.map((p) => ({ user: p.user, projects: projectsOf(cfg(), p.user) }));
     const { profile, result } = await pickUI(profilesList, prof);
     if (result === null) return; // cancelled
     if (profile !== prof) writeState(profile); // persist an in-picker profile switch
-    if (result === "__home__") return connect(cfg, profile, null, co);
+    if (result === "__home__") return connect(cfg(), profile, null, co);
     if (result === "__new__") return newHelp(profile);
-    return connect(cfg, profile, result, co);
+    return connect(cfg(), profile, result, co);
+  });
+
+// ── Provisioning config (devbox.yml) ────────────────────────────────────────────
+// These two commands do NOT read ~/.config/claude-devbox/config.json — they operate
+// on the canonical config in a remote-devbox checkout, so they work on any machine.
+cli
+  .command("plan", "validate devbox.yml and show the resolved provisioning plan")
+  .option("--config <path>", "path to devbox.yml", { default: "devbox.yml" })
+  .option("--write-vars", "also write ansible/.generated/all.yml")
+  .action((opts: { config: string; writeVars?: boolean }) => {
+    const path = resolvePath(opts.config);
+    const spec = loadSpec(path);
+    const { secrets, issues: secretIssues } = loadSecrets(secretsPathFor(path));
+    const issues = [
+      ...spec.issues,
+      ...secretIssues,
+      ...(spec.resolved ? validateSecretRefs(spec.resolved, secrets) : []),
+    ];
+    if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
+    if (!spec.resolved) {
+      process.stderr.write("devbox: plan failed — fix the errors above\n");
+      process.exit(1);
+    }
+    console.log(renderPlan(spec.resolved, issues, describeSecrets(secrets)));
+    if (opts.writeVars) {
+      // The repo root is the directory holding devbox.yml; ansible/ lives beside it.
+      const root = dirname(path);
+      console.log(`\nwrote ${writeGeneratedVars(spec.resolved, root)}`);
+      console.log(`wrote ${writeGeneratedSecrets(secrets, root)}`);
+    }
+    if (hasErrors(issues)) process.exit(1);
+  });
+
+cli
+  .command("migrate-config", "convert a legacy group_vars/all.yml into a devbox.yml")
+  .option("--from <path>", "legacy group_vars file", { default: "ansible/group_vars/all.yml" })
+  .option("--out <path>", "where to write devbox.yml", { default: "devbox.yml" })
+  .option("--write", "save --out instead of printing (refuses to overwrite an existing file)")
+  .action((opts: { from: string; out: string; write?: boolean }) => {
+    const from = resolvePath(opts.from);
+    if (!existsSync(from)) die(`no config at ${from}`);
+    let raw: unknown;
+    try {
+      raw = Bun.YAML.parse(readFileSync(from, "utf8"));
+    } catch (e) {
+      die(`could not parse ${from}: ${(e as Error).message}`);
+    }
+    if (!isLegacyConfig(raw)) die(`${from} has no 'profiles:' list — nothing to migrate`);
+
+    const { spec, issues } = migrateLegacy(raw as Record<string, unknown>);
+    if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
+    const text = renderMigration(spec);
+
+    // Printing is the default on purpose: migration is a review step, not an apply.
+    if (!opts.write) {
+      process.stdout.write(text);
+      process.stderr.write("\n(dry run — pass --write to save; the source file is never modified)\n");
+      return;
+    }
+    const out = resolvePath(opts.out);
+    if (existsSync(out)) die(`refusing to overwrite ${out} — move it aside first`);
+    writeFileSync(out, text);
+    console.log(`wrote ${out}`);
+  });
+
+cli
+  .command("apply [phase]", "regenerate the vars and run the playbook (phase defaults to all)")
+  .option("--config <path>", "path to devbox.yml", { default: "devbox.yml" })
+  .option("--inventory <path>", "ansible inventory", { default: "ansible/inventory.ini" })
+  .option("--check", "ansible dry run (--check --diff): change nothing, show what would change")
+  .action((phase: string | undefined, opts: { config: string; inventory: string; check?: boolean }) => {
+    const path = resolvePath(opts.config);
+    const root = dirname(path);
+
+    // Apply always re-derives the vars first. A playbook run against a stale
+    // .generated/all.yml is the one failure mode that looks like it worked.
+    const spec = loadSpec(path);
+    const { secrets, issues: secretIssues } = loadSecrets(secretsPathFor(path));
+    const issues = [
+      ...spec.issues,
+      ...secretIssues,
+      ...(spec.resolved ? validateSecretRefs(spec.resolved, secrets) : []),
+    ];
+    if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
+    if (!spec.resolved || hasErrors(issues)) die("apply refused — fix the errors above");
+
+    writeGeneratedVars(spec.resolved, root);
+    writeGeneratedSecrets(secrets, root);
+
+    let tags: string[] | null;
+    try {
+      tags = tagsFor(phase);
+    } catch (e) {
+      return die((e as Error).message);
+    }
+
+    const args = ["-i", resolvePath(opts.inventory), "playbook.yml"];
+    if (tags) args.push("--tags", tags.join(","));
+    if (opts.check) args.push("--check", "--diff");
+
+    const cwd = join(root, "ansible");
+    if (process.env.DEVBOX_DRYRUN) {
+      return void process.stdout.write(JSON.stringify(["ansible-playbook", ...args, `(cwd ${cwd})`]) + "\n");
+    }
+    console.log(`devbox: ${phase ?? "all"} -> ansible-playbook ${args.join(" ")}\n`);
+    // Ansible refuses to run against non-blocking stdio, which is what inheriting a
+    // pipe (CI, a wrapper script, an agent harness) hands it. Only inherit on a real
+    // terminal; otherwise capture and relay, losing live progress but not the run.
+    const piped = !process.stdout.isTTY;
+    const r = spawnSync("ansible-playbook", args, {
+      cwd,
+      stdio: piped ? ["ignore", "pipe", "pipe"] : "inherit",
+      encoding: piped ? "utf8" : undefined,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (piped) {
+      if (r.stdout) process.stdout.write(r.stdout);
+      if (r.stderr) process.stderr.write(r.stderr);
+    }
+    process.exit(r.status ?? 0);
+  });
+
+cli
+  .command("phases", "list the provisioning phases 'devbox apply' understands")
+  .action(() => {
+    console.log("phases, in the order they are safe to run:\n");
+    console.log(describePhases());
+    console.log("\n  all         everything, in the order above");
   });
 
 cli.help();

@@ -20,33 +20,12 @@
       - pkg-config
       - sshfs
       - fuse3
+      # ACL support: Ansible needs it to hand a temp file to an unprivileged
+      # become_user; without it every become_user task fails on the chmod fallback.
+      - acl
     state: present
 
-- name: Create non-root sudo user
-  ansible.builtin.user:
-    name: "{{ operator_user }}"
-    groups: sudo
-    append: true
-    shell: /bin/bash
-    create_home: true
-    state: present
-
-- name: Allow operator passwordless sudo
-  ansible.builtin.copy:
-    dest: "/etc/sudoers.d/90-{{ operator_user }}"
-    content: "{{ operator_user }} ALL=(ALL) NOPASSWD:ALL\n"
-    owner: root
-    group: root
-    mode: "0440"
-    validate: "visudo -cf %s"
-  no_log: true
-
-- name: Push operator SSH public key
-  ansible.posix.authorized_key:
-    user: "{{ operator_user }}"
-    key: "{{ operator_ssh_pubkey }}"
-    state: present
-    exclusive: false
+# The operator account lives in its own role — see roles/operator.
 
 # ── Swapfile (idempotent, resize-aware) ──────────────────────────────────────
 - name: Stat existing swapfile
@@ -58,7 +37,7 @@
 # was silently ignored. Tear the old file down first when the size differs.
 - name: Detect swap size change
   ansible.builtin.set_fact:
-    swap_resize: "{{ swap_stat.stat.exists and swap_stat.stat.size != (swap_size | human_to_bytes) }}"
+    swap_resize: "{{ swap_stat.stat.exists and swap_stat.stat.size != (devbox_host.swap_size | human_to_bytes) }}"
 
 - name: Disable old swapfile before resize
   ansible.builtin.command: "swapoff {{ swap_file }}"
@@ -72,7 +51,7 @@
   when: swap_resize | bool
 
 - name: Allocate swapfile
-  ansible.builtin.command: "fallocate -l {{ swap_size }} {{ swap_file }}"
+  ansible.builtin.command: "fallocate -l {{ devbox_host.swap_size }} {{ swap_file }}"
   args:
     creates: "{{ swap_file }}"
   register: swap_created
@@ -110,12 +89,12 @@
 # ── zram (compressed RAM swap) ───────────────────────────────────────────────
 # Used BEFORE the disk swapfile (higher priority). Gives heavy builds extra
 # effective memory at ~2-3x compression so they complete under pressure instead
-# of getting OOM-killed — no hardware upgrade. Gated by zram_enabled.
+# of getting OOM-killed — no hardware upgrade. Gated by host.zram.enabled.
 - name: Install zram-tools
   ansible.builtin.apt:
     name: zram-tools
     state: present
-  when: zram_enabled | default(false)
+  when: devbox_host.zram.enabled
 
 - name: Configure zramswap
   ansible.builtin.copy:
@@ -124,11 +103,11 @@
     group: root
     mode: "0644"
     content: |
-      # Managed by Ansible (claude-devbox).
-      ALGO={{ zram_algo | default('zstd') }}
-      PERCENT={{ zram_percent | default(50) }}
-      PRIORITY={{ zram_priority | default(100) }}
-  when: zram_enabled | default(false)
+      # Managed by Ansible (remote-devbox).
+      ALGO={{ devbox_host.zram.algo }}
+      PERCENT={{ devbox_host.zram.percent }}
+      PRIORITY={{ devbox_host.zram.priority }}
+  when: devbox_host.zram.enabled
   notify: Restart zramswap
 
 - name: Ensure zramswap service is enabled and started
@@ -136,4 +115,4 @@
     name: zramswap.service
     enabled: true
     state: started
-  when: zram_enabled | default(false)
+  when: devbox_host.zram.enabled

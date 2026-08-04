@@ -21,7 +21,7 @@ async function sh(cmd: string[], timeoutMs = 10_000): Promise<string> {
 }
 
 export interface CollectOpts {
-  profileHome: string; // e.g. /home/ilterugur
+  profileHome: string; // e.g. /home/dev-a
   activityWindowSec: number;
   idleAfterSec: number;
 }

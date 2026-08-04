@@ -1,0 +1,43 @@
+---
+# File ownership stops a developer READING another developer's files. It does nothing
+# about /proc: by default every user sees every other user's process list, which leaks
+# command lines — API keys passed as arguments, repo paths, which client a colleague is
+# working for. hidepid=invisible closes that.
+#
+# The gid escape hatch matters: with hidepid and no privileged group, `ps aux` and any
+# monitoring the operator runs go blind too. Members of the group below keep full
+# visibility, so the operator can still administer the box.
+
+- name: Create the process-visibility group
+  ansible.builtin.group:
+    name: "{{ devbox_procview_group | default('procview') }}"
+    system: true
+    state: present
+
+- name: Let the operator see every process
+  ansible.builtin.user:
+    name: "{{ devbox_operator.user }}"
+    groups: "{{ devbox_procview_group | default('procview') }}"
+    append: true
+
+- name: Mount /proc with process metadata hidden
+  ansible.posix.mount:
+    path: /proc
+    src: proc
+    fstype: proc
+    opts: "nosuid,nodev,noexec,relatime,hidepid=invisible,gid={{ devbox_procview_group | default('procview') }}"
+    state: mounted
+
+# systemd's own units run as root and are unaffected, but a running user manager keeps
+# its old view of /proc until it is told to reload.
+- name: Reload systemd so it picks up the new /proc view
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Verify another user's processes are hidden
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      grep -qE '(^|,)hidepid=(2|invisible)([,[:space:]]|$)' /proc/mounts
+    executable: /bin/bash
+  changed_when: false

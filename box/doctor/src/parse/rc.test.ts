@@ -9,7 +9,7 @@ test("parseRcUnits reads unit/load/active/sub", () => {
   const units = parseRcUnits(fixture);
   expect(units).toHaveLength(2);
   expect(units[0]).toEqual({
-    unit: "claude-rc-ilterugur-insurchat.service",
+    unit: "claude-rc-dev-a-example-app.service",
     loaded: true,
     active: "active",
     sub: "exited",

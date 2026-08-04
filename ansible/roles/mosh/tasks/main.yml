@@ -28,16 +28,16 @@
   community.general.locale_gen:
     name: "{{ item }}"
     state: present
-  loop: "{{ locales | default(['en_US.UTF-8']) }}"
+  loop: "{{ devbox_host.locales }}"
 
 - name: Warn when mosh opens its UDP range publicly (no tailnet to scope to)
   ansible.builtin.debug:
     msg: >-
-      mosh is enabled but tailscale_enabled is false — the UDP 60000-61000 range will be
+      mosh is enabled but tailscale is disabled — the UDP 60000-61000 range will be
       opened on ALL interfaces (public internet), not scoped to tailscale0. This is an
       explicit opt-in (you set mosh_enabled: true without Tailscale). Restrict it with your
       own firewall/VPN, or set mosh_enabled: false.
-  when: not (tailscale_enabled | default(true))
+  when: not (devbox_network.tailscale.enabled)
 
 - name: Remove stale public mosh UFW rule (ufw is additive; re-scoping to tailnet)
   # community.general.ufw only adds rules — toggling tailscale_enabled false→true
@@ -50,7 +50,7 @@
     proto: udp
     port: "60000:61000"
     delete: true
-  when: tailscale_enabled | default(true)
+  when: devbox_network.tailscale.enabled
   failed_when: false
 
 - name: Remove stale tailscale-scoped mosh UFW rule (tailscale now disabled)
@@ -63,7 +63,7 @@
     proto: udp
     port: "60000:61000"
     delete: true
-  when: not (tailscale_enabled | default(true))
+  when: not (devbox_network.tailscale.enabled)
   failed_when: false
 
 - name: Allow mosh (UDP 60000-61000)
@@ -73,7 +73,7 @@
   community.general.ufw:
     rule: allow
     direction: in
-    interface: "{{ 'tailscale0' if (tailscale_enabled | default(true)) else omit }}"
+    interface: "{{ 'tailscale0' if (devbox_network.tailscale.enabled) else omit }}"
     proto: udp
     port: "60000:61000"
-    comment: "{{ 'mosh over tailscale' if (tailscale_enabled | default(true)) else 'mosh (public — no tailnet)' }}"
+    comment: "{{ 'mosh over tailscale' if (devbox_network.tailscale.enabled) else 'mosh (public — no tailnet)' }}"

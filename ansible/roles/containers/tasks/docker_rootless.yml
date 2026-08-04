@@ -1,0 +1,169 @@
+---
+# Docker rootless exists for projects whose tooling genuinely needs Docker semantics
+# (Testcontainers, a compose file Podman chokes on). It is per developer: each runs
+# their own dockerd inside their own user slice, on their own socket.
+#
+# Nobody joins the `docker` group. That group is root-equivalent, and on a shared box it
+# would silently undo every isolation guarantee the developers role establishes.
+
+- name: Add the Docker apt signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+# The suite is explicit rather than derived: Docker's repo can lag a brand-new Ubuntu
+# release by months, and a silent fallback to "whatever codename apt guessed" is how you
+# end up debugging a mismatched libc at 2am. devbox_docker_apt_suite makes the choice
+# visible, and the doctor checks it.
+- name: Add the Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'amd64' }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      {{ devbox_docker_apt_suite }} stable
+    filename: docker
+    state: present
+    update_cache: true
+
+# docker-ce is required even though nothing rootful will run: the rootless extras only
+# ship the launcher and rootlesskit, while the dockerd binary itself lives in docker-ce.
+# The system daemon it registers is masked immediately below.
+- name: Install rootless Docker
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-ce-rootless-extras
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+# Installing docker-ce-rootless-extras can pull in the system daemon. Developers must
+# never reach a rootful socket, so unless the operator explicitly runs shared services,
+# it is masked rather than merely stopped.
+- name: Mask the system Docker daemon when no shared services need it
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - docker.service
+    - docker.socket
+  when: not (devbox_shared_services.enabled | bool)
+  failed_when: false
+
+# A unit that failed earlier is rate-limited by systemd, and every later start is
+# refused with "start request repeated too quickly" — which reads like a Docker problem
+# and is not one. Clear the failure state before touching the service.
+- name: Create each developer's Docker config directory
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.config/docker"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# The systemd cgroup driver cannot be used here: rootless runc asks the SYSTEM manager
+# for the container scope and is refused ("requires interactive authentication"), even
+# with Delegate= set. cgroupfs keeps containers working; per-container limits are lost,
+# but the limit that matters on a shared box is the developer's user slice, and every
+# container still runs inside it.
+- name: Pin the rootless Docker cgroup driver
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.config/docker/daemon.json"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+    content: |
+      {
+        "exec-opts": ["native.cgroupdriver=cgroupfs"]
+      }
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  notify: Restart rootless Docker
+
+- name: Clear any previous rootless Docker failure state
+  ansible.builtin.command:
+    argv: [systemctl, --user, reset-failed, docker.service]
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  changed_when: false
+  failed_when: false
+
+- name: Set up rootless Docker per developer
+  # The setuptool both writes the unit and tries to start it. Only the unit is this
+  # task's job — starting is the next task's, which reports a real failure properly.
+  ansible.builtin.command:
+    cmd: /usr/bin/dockerd-rootless-setuptool.sh install --force
+    creates: "/home/{{ item.user }}/.config/systemd/user/docker.service"
+  failed_when: false
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin:/home/{{ item.user }}/bin"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Enable each developer's rootless Docker daemon
+  ansible.builtin.systemd_service:
+    name: docker.service
+    scope: user
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# Without DOCKER_HOST the CLI would look for /var/run/docker.sock — the rootful socket
+# that is masked above — and report a confusing "permission denied".
+- name: Point each developer's Docker CLI at their own daemon
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.config/devbox-docker.env"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      export DOCKER_HOST=unix:///run/user/{{ ansible_facts.getent_passwd[item.user][1] }}/docker.sock
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Source the Docker environment from every login shell
+  ansible.builtin.lineinfile:
+    path: "/home/{{ item.user }}/.bashrc"
+    line: '[ -f "$HOME/.config/devbox-docker.env" ] && . "$HOME/.config/devbox-docker.env"'
+    regexp: 'devbox-docker\.env'
+    # Ahead of Ubuntu's "return unless interactive" guard: appended lines are never
+    # reached by a non-interactive `ssh box docker ps`.
+    insertbefore: BOF
+    create: true
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0644"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"

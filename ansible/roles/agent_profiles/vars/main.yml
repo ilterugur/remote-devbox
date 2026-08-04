@@ -1,0 +1,25 @@
+---
+# One entry per supported agent. Everything provider-specific lives here, so adding an
+# agent is a data change plus (at most) an install command — not a new code path in the
+# tasks. `config_env` is the variable that redirects an agent's whole config/credential
+# tree, which is what makes several logins of the SAME provider possible side by side.
+devbox_agent_adapters:
+  claude:
+    binary: claude
+    # The native installer drops a self-contained binary in ~/.local/bin.
+    install_cmd: "curl -fsSL https://claude.ai/install.sh | bash"
+    install_creates: ".local/bin/claude"
+    bin_path: ".local/bin/claude"
+    config_env: CLAUDE_CONFIG_DIR
+    version_args: "--version"
+    login_hint: "run the wrapper, then /login"
+  codex:
+    binary: codex
+    # --prefix keeps the global install inside the developer's own ~/.local: no root, and
+    # no shared npm prefix another developer could write to.
+    install_cmd: "mise exec -- npm install -g --prefix $HOME/.local @openai/codex"
+    install_creates: ".local/bin/codex"
+    bin_path: ".local/bin/codex"
+    config_env: CODEX_HOME
+    version_args: "--version"
+    login_hint: "run the wrapper, then `codex login`"

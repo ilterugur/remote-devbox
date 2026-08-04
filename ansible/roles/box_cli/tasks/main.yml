@@ -1,0 +1,12 @@
+---
+# The box-side `devbox` command: what a developer types once they are on the box. It
+# reads the same generated data the roles consumed, so it can never disagree with them
+# about which engine, bank or slice applies.
+
+- name: Install the box CLI
+  ansible.builtin.template:
+    src: devbox-cli.sh.j2
+    dest: /usr/local/bin/devbox
+    owner: root
+    group: root
+    mode: "0755"

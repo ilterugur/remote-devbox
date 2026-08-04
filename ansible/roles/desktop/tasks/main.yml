@@ -1,0 +1,147 @@
+---
+# A full Linux desktop for the developers that ask for one. XFCE and xRDP are installed
+# once on the host; each developer gets their own Xorg session, inside their own resource
+# slice, so a heavy browser is charged to the person running it.
+#
+# The transport is deliberately NOT public. RDP has a long history of being scanned and
+# brute-forced, and unlike sshd it authenticates with a PAM password rather than a key.
+# Tailnet-only is the default and the firewall enforces it.
+
+- name: Work out which developers asked for a desktop
+  ansible.builtin.set_fact:
+    _devbox_desktop_users: "{{ devbox_developers | selectattr('desktop.enabled') | list }}"
+
+- name: Install XFCE and xRDP
+  ansible.builtin.apt:
+    name:
+      - xfce4
+      - xfce4-terminal
+      - xrdp
+      - dbus-x11
+      - xorgxrdp
+    state: present
+    update_cache: true
+  when: _devbox_desktop_users | length > 0
+
+- name: Start each session in XFCE
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.xsession"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      exec startxfce4
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# xrdp runs as its own user and needs to read the session certificate; it does NOT need
+# to read anybody's home, so it stays out of the developers' groups.
+- name: Configure xRDP
+  ansible.builtin.template:
+    src: xrdp.ini.j2
+    dest: /etc/xrdp/xrdp.ini
+    owner: root
+    group: root
+    mode: "0644"
+  when: _devbox_desktop_users | length > 0
+  notify: Restart xrdp
+
+- name: Drop disconnected sessions after the configured idle time
+  ansible.builtin.template:
+    src: sesman.ini.j2
+    dest: /etc/xrdp/sesman.ini
+    owner: root
+    group: root
+    mode: "0644"
+  when: _devbox_desktop_users | length > 0
+  notify: Restart xrdp
+
+- name: Enable xRDP
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - xrdp.service
+    - xrdp-sesman.service
+  when: _devbox_desktop_users | length > 0
+
+# RDP authenticates against a PAM password, so a desktop developer must have one. The
+# hash comes from the secrets file — never a plaintext password, never a generated one
+# that would change on every apply.
+- name: Set the RDP password for each desktop developer
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    password: "{{ devbox_secrets['RDP_PASSWORD_HASH_' ~ (item.user | upper | replace('-', '_'))] }}"
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: >-
+    ('RDP_PASSWORD_HASH_' ~ (item.user | upper | replace('-', '_'))) in devbox_secrets
+  no_log: true
+
+- name: Warn about desktop developers with no RDP password
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.user }} has desktop.enabled but no
+      RDP_PASSWORD_HASH_{{ item.user | upper | replace('-', '_') }} in devbox.secrets.yml —
+      they cannot log in over RDP. Generate one with:
+      openssl passwd -6
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: >-
+    ('RDP_PASSWORD_HASH_' ~ (item.user | upper | replace('-', '_'))) not in devbox_secrets
+
+# Password login over SSH stays off regardless: the RDP password is for the RDP PAM
+# stack only, and sshd must not start accepting it.
+- name: Assert SSH password authentication is still disabled
+  ansible.builtin.command: sshd -T
+  changed_when: false
+  register: _devbox_sshd_effective
+  when: _devbox_desktop_users | length > 0
+
+- name: Fail if setting an RDP password re-enabled SSH passwords
+  ansible.builtin.assert:
+    that: "'passwordauthentication no' in (_devbox_sshd_effective.stdout | lower)"
+    fail_msg: >-
+      Developers now have PAM passwords for RDP and sshd accepts password auth — that
+      combination turns a leaked desktop password into full SSH access. Re-run the
+      security role.
+  when: _devbox_desktop_users | length > 0
+
+- name: Restrict RDP to the tailnet
+  community.general.ufw:
+    rule: allow
+    port: "3389"
+    proto: tcp
+    interface: tailscale0
+    direction: in
+    comment: "xrdp over the tailnet"
+  when:
+    - _devbox_desktop_users | length > 0
+    - devbox_network.tailscale.enabled | bool
+
+- name: Remove any public RDP rule
+  # ufw only adds rules, so a box that was once public keeps the old allow until it is
+  # deleted explicitly. Leaving it would silently defeat the tailnet-only setting.
+  community.general.ufw:
+    rule: allow
+    port: "3389"
+    proto: tcp
+    delete: true
+  failed_when: false
+
+- name: Refuse to expose RDP publicly without an explicit opt-out
+  ansible.builtin.assert:
+    that: devbox_network.tailscale.enabled | bool
+    fail_msg: >-
+      desktop.enabled is set but Tailscale is off, so there is no private network to
+      scope RDP to. Enable Tailscale, or set desktop.tailscale_only: false for that
+      developer to accept a publicly reachable RDP port.
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: item.desktop.tailscale_only | bool

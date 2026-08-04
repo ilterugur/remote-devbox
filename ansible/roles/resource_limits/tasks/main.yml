@@ -1,0 +1,59 @@
+---
+# Limits belong on the developer's systemd user slice, not on individual services.
+# Everything a developer runs — login shells, VS Code Server, the desktop session,
+# rootless containers, agent services, builds — lands in user-<uid>.slice, so one
+# runaway `bun install` can slow that developer down and nobody else.
+#
+# CPUWeight rather than CPUQuota on purpose: a quota wastes idle cores, while a weight
+# only matters under contention. MemoryHigh throttles and reclaims (slow but alive);
+# MemoryMax is the hard wall that keeps one developer from taking the host down.
+
+- name: Look up developer uids
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Create the slice drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Write each developer's resource slice
+  ansible.builtin.template:
+    src: slice.conf.j2
+    dest: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-devbox.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  notify: Reload systemd
+
+- name: Apply the systemd change now
+  ansible.builtin.meta: flush_handlers
+
+# daemon-reload alone only affects slices started afterwards. set-property pushes the
+# same values into an already-running slice, so a re-run takes effect without a reboot
+# or a forced logout.
+- name: Push the limits into any already-running slice
+  ansible.builtin.command:
+    argv: >-
+      {{ ['systemctl', 'set-property', 'user-' ~ ansible_facts.getent_passwd[item.user][1] ~ '.slice']
+         + (['MemoryHigh=' ~ item.resources.memory_high] if item.resources.memory_high | default('') else [])
+         + (['MemoryMax=' ~ item.resources.memory_max] if item.resources.memory_max | default('') else [])
+         + (['MemorySwapMax=' ~ item.resources.memory_swap_max] if item.resources.memory_swap_max | default('') else [])
+         + (['CPUWeight=' ~ item.resources.cpu_weight] if item.resources.cpu_weight | default('') else [])
+         + (['IOWeight=' ~ item.resources.io_weight] if item.resources.io_weight | default('') else [])
+         + (['TasksMax=' ~ item.resources.tasks_max] if item.resources.tasks_max | default('') else []) }}
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: item.resources | length > 0
+  changed_when: false
+  failed_when: false # the slice may simply not be running yet — the drop-in still applies

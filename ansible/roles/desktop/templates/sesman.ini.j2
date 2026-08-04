@@ -1,0 +1,28 @@
+; Managed by Ansible (remote-devbox) — do not edit by hand.
+[Globals]
+ListenAddress=127.0.0.1
+ListenPort=3350
+EnableUserWindowManager=true
+UserWindowManager=startwm.sh
+DefaultWindowManager=startwm.sh
+
+[Security]
+AllowRootLogin=false
+MaxLoginRetry=4
+; Only the developers that asked for a desktop may open an RDP session.
+TerminalServerUsers={{ _devbox_desktop_users | map(attribute='user') | join(',') }}
+TerminalServerAdmins=
+
+[Sessions]
+X11DisplayOffset=10
+MaxSessions=50
+; A disconnected session keeps a whole desktop (and its browser) resident. These reap it
+; instead of letting it hold memory in the developer's slice indefinitely.
+KillDisconnected=true
+DisconnectedTimeLimit={{ (_devbox_desktop_users | map(attribute='desktop.idle_logout_minutes') | select('!=', none) | list | min | default(60)) * 60 }}
+IdleTimeLimit=0
+Policy=Default
+
+[Logging]
+LogFile=/var/log/xrdp-sesman.log
+LogLevel=INFO

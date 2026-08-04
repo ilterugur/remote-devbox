@@ -1,13 +1,13 @@
-worktree /home/ilterugur/projects/verti-monorepo
+worktree /home/dev-a/projects/example-monorepo
 HEAD 34fcf73
 branch refs/heads/main
 
-worktree /home/ilterugur/projects/verti-monorepo/.claude/worktrees/bridge-cse_01CVdoCPw3jAccG5ffsXHvs3
+worktree /home/dev-a/projects/example-monorepo/.claude/worktrees/bridge-cse_01CVdoCPw3jAccG5ffsXHvs3
 HEAD 34fcf73
 branch refs/heads/worktree-bridge-cse_01CVdoCPw3jAccG5ffsXHvs3
 locked
 
-worktree /home/ilterugur/projects/verti-monorepo/.claude/worktrees/bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ
+worktree /home/dev-a/projects/example-monorepo/.claude/worktrees/bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ
 HEAD 34fcf73
 branch refs/heads/worktree-bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ
 locked

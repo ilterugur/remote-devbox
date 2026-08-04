@@ -1,0 +1,96 @@
+---
+# A fixture, not a real config: placeholders only, and small enough to reason about.
+# Mirrors what `devbox plan --write-vars` emits.
+devbox_config_version: 3
+devbox_platform:
+  distribution: ubuntu
+  version: "26.04"
+  architecture: amd64
+devbox_runtimes: {}
+devbox_host:
+  swap_size: 1G
+  zram:
+    enabled: false
+    percent: 50
+    algo: zstd
+    priority: 100
+  locales:
+    - en_US.UTF-8
+  mosh: false
+  eternal_terminal: false
+  harden_ssh: false
+  # /proc is not remountable inside an unprivileged container.
+  hide_pids: false
+  umask: "077"
+devbox_operator:
+  user: devbox-admin
+  ssh_authorized_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFIXTUREPLACEMEFIXTUREPLACEMEFIXTUREPL operator@fixture"
+  private_key_path: "~/.ssh/id_ed25519"
+devbox_network:
+  tailscale:
+    enabled: false
+  ssh:
+    exposure: public_only
+devbox_container:
+  default_engine: none
+  install_engines:
+    - none
+devbox_shared_services:
+  enabled: false
+  engine: system-docker
+devbox_developers:
+  - user: dev-a
+    adopt_existing: false
+    login_ssh_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFIXTUREPLACEMEFIXTUREPLACEMEFIXTUREPL dev-a@fixture"
+    resources: {}
+    container_engine: null
+    git_identities:
+      work:
+        name: "Dev A"
+        email: "dev-a@example.com"
+        github_user: null
+      personal:
+        name: "Dev A"
+        email: "dev-a@personal.example"
+        github_user: null
+    # Convenience for verify.yml: subelements needs a list, not a mapping.
+    git_identity_names: [work, personal]
+    default_git_identity: work
+    agent_profiles: {}
+    default_agent_profile: null
+    memory:
+      enabled: false
+      default_space: null
+      instances: {}
+      spaces: {}
+    desktop:
+      enabled: false
+      environment: xfce
+      transport: xrdp
+      tailscale_only: true
+      idle_logout_minutes: null
+    projects: []
+  - user: dev-b
+    adopt_existing: false
+    login_ssh_keys: []
+    resources: {}
+    container_engine: null
+    git_identities: {}
+    git_identity_names: []
+    default_git_identity: null
+    agent_profiles: {}
+    default_agent_profile: null
+    memory:
+      enabled: false
+      default_space: null
+      instances: {}
+      spaces: {}
+    desktop:
+      enabled: false
+      environment: xfce
+      transport: xrdp
+      tailscale_only: true
+      idle_logout_minutes: null
+    projects: []

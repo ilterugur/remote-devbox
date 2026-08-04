@@ -1,0 +1,279 @@
+---
+# Long-term agent memory, split along the two axes the design separates:
+#
+#   instance = a running daemon (provider, model, port) — the machinery
+#   space    = a logical bank inside an instance          — the content
+#
+# By default every agent profile and project of ONE developer shares one space, so the
+# agent remembers that person across their whole working life on the box. Memory is
+# never shared BETWEEN developers: separate daemons, separate ports, separate banks.
+
+- name: Look up developer uids
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Flatten the declared memory instances
+  ansible.builtin.set_fact:
+    _devbox_memory_instances: "{{ _raw_instances | from_json }}"
+  vars:
+    # The port is allocated by position in this list, so it is stable across runs and
+    # identical on every apply — a random port would break every wired-up client.
+    _raw_instances: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers if dev.memory.enabled -%}
+        {%- for name, instance in dev.memory.instances.items() -%}
+          {{- out.append({
+                'user': dev.user,
+                'name': name,
+                'engine': instance.engine,
+                'llm_provider': instance.llm_provider,
+                'llm_model': instance.llm_model,
+                'llm_base_url': instance.llm_base_url,
+                'api_key_env': instance.api_key_env,
+                'port': devbox_memory_base_port + out | length}) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Flatten the agent profiles that have a memory space
+  ansible.builtin.set_fact:
+    _devbox_memory_profiles: "{{ _raw_profiles | from_json }}"
+  vars:
+    # An agent profile's space is the profile's own override when it has one, else the
+    # developer default — the same chain the config layer already resolved for projects.
+    _raw_profiles: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers if dev.memory.enabled -%}
+        {%- for name, profile in dev.agent_profiles.items() -%}
+          {%- set space_name = profile.memory_space or dev.memory.default_space -%}
+          {%- if space_name and space_name != 'none' and space_name in dev.memory.spaces -%}
+            {%- set space = dev.memory.spaces[space_name] -%}
+            {{- out.append({
+                  'user': dev.user,
+                  'profile': name,
+                  'provider': profile.provider,
+                  'space': space_name,
+                  'bank': space.bank,
+                  'instance': space.instance}) or '' -}}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Work out the settings each instance needs
+  ansible.builtin.set_fact:
+    _devbox_memory_settings: "{{ _raw_settings | from_json }}"
+  vars:
+    _raw_settings: >-
+      {%- set out = [] -%}
+      {%- for inst in _devbox_memory_instances -%}
+        {%- set pairs = [
+             {'key': 'HINDSIGHT_USER_ID', 'value': inst.user},
+             {'key': 'HINDSIGHT_API_PORT', 'value': inst.port},
+             {'key': 'HINDSIGHT_API_LLM_PROVIDER', 'value': inst.llm_provider},
+             {'key': 'HINDSIGHT_API_LLM_MODEL', 'value': inst.llm_model},
+             {'key': 'HINDSIGHT_API_LLM_BASE_URL', 'value': inst.llm_base_url},
+             {'key': 'HINDSIGHT_API_LLM_API_KEY',
+              'value': devbox_secrets.get(inst.api_key_env) if inst.api_key_env else none}] -%}
+        {%- for pair in pairs if pair.value -%}
+          {{- out.append([inst, pair]) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Create the per-developer memory directory
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.hindsight"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ devbox_developers | selectattr('memory.enabled') | list }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# hindsight-embed keys everything off a named profile, and the profile's own env file
+# takes precedence over anything the process inherits — so the profile is created first
+# and the file below is the single place the provider is configured.
+- name: Create a hindsight profile per memory instance
+  ansible.builtin.command:
+    cmd: "bash -lc 'uvx hindsight-embed profile create {{ item.name }} --port {{ item.port }}'"
+    creates: "/home/{{ item.user }}/.hindsight/profiles/{{ item.name }}.env"
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+  loop: "{{ _devbox_memory_instances }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+
+# hindsight-embed owns this file and rewrites parts of it, so only the keys we actually
+# decide are set — templating the whole file fought the tool on every run. no_log because
+# one of those keys is the provider credential.
+- name: Configure each memory instance
+  ansible.builtin.lineinfile:
+    path: "/home/{{ item.0.user }}/.hindsight/profiles/{{ item.0.name }}.env"
+    regexp: "^{{ item.1.key }}="
+    line: "{{ item.1.key }}={{ item.1.value }}"
+    owner: "{{ item.0.user }}"
+    group: "{{ item.0.user }}"
+    mode: "0600"
+    create: true
+  loop: "{{ _devbox_memory_settings }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }} {{ item.1.key }}"
+  no_log: true
+  notify: Restart memory daemons
+
+- name: Install the memory daemon service per instance
+  ansible.builtin.template:
+    src: hindsight.service.j2
+    dest: "/home/{{ item.user }}/.config/systemd/user/hindsight-{{ item.name }}.service"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0644"
+  loop: "{{ _devbox_memory_instances }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  notify: Restart memory daemons
+
+# A keyless provider (openai-codex, claude-code) authenticates with the agent's own
+# OAuth session, so the daemon cannot start until that human has logged in. Provisioning
+# must not fail on a step only a person can perform — it reports and moves on.
+- name: Enable and start each memory daemon
+  ansible.builtin.systemd_service:
+    name: "hindsight-{{ item.name }}.service"
+    scope: user
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ _devbox_memory_instances }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  register: _devbox_memory_start
+  failed_when: false
+
+- name: Report memory daemons still waiting on an agent login
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.user }}/{{ item.item.name }} did not start. Provider
+      '{{ item.item.llm_provider }}' is keyless — it uses that developer's agent OAuth
+      session, so run `sudo remote-devbox-login {{ item.item.user }}` first, then
+      re-run with --tags memory.
+  loop: "{{ _devbox_memory_start.results }}"
+  loop_control:
+    label: "{{ item.item.user }}/{{ item.item.name }}"
+  when: item.failed | default(false)
+
+# The bank is what makes two agent profiles of the same human share (or not share)
+# memory. It is written per PROFILE, into that profile's own config tree.
+- name: Point each agent profile at its memory bank
+  ansible.builtin.template:
+    src: hindsight-plugin.json.j2
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}/hindsight.json"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_memory_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.profile }} -> {{ item.bank }}"
+
+- name: Write the memory environment each agent profile sources
+  ansible.builtin.copy:
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}/memory.env"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+    content: |
+      # Managed by Ansible (remote-devbox). Sourced by this profile's launcher.
+      export HINDSIGHT_API_PORT={{
+        (_devbox_memory_instances | selectattr('user', 'equalto', item.user)
+         | selectattr('name', 'equalto', item.instance) | first).port }}
+      export HINDSIGHT_BANK_ID={{ item.bank }}
+  loop: "{{ _devbox_memory_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.profile }}"
+
+- name: Report the memory topology
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.user }}/{{ item.profile }} -> space '{{ item.space }}' (bank {{ item.bank }})
+      on instance '{{ item.instance }}'.
+  loop: "{{ _devbox_memory_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.profile }}"
+
+# ── Claude plugin wiring, per agent profile ──────────────────────────────────
+# The recall/retain hooks live in the Hindsight Claude plugin, and a plugin is
+# registered per CONFIG TREE — which is exactly per agent profile here.
+
+- name: Deploy the tagging retain hook
+  # Stamps each memory with source/developer/profile/project so one shared bank can
+  # still be filtered by where a fact came from.
+  ansible.builtin.copy:
+    src: hindsight-retain-tagged.py
+    dest: /usr/local/bin/hindsight-retain-tagged
+    owner: root
+    group: root
+    mode: "0755"
+  when: _devbox_memory_profiles | length > 0
+
+# Cloned here and registered from the local path on purpose: `claude plugin marketplace
+# add <owner/repo>` makes Claude do its own network clone, which fails with
+# ERR_STREAM_PREMATURE_CLOSE on some versions even where plain git clone works.
+- name: Clone the Hindsight plugin marketplace per agent profile
+  ansible.builtin.git:
+    repo: https://github.com/vectorize-io/hindsight.git
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}/plugins/marketplaces/vectorize-io-hindsight"
+    version: main
+    depth: 1
+    force: true
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+  loop: "{{ _devbox_memory_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.profile }}"
+  when: item.provider == 'claude'
+
+- name: Register the marketplace in each agent profile
+  ansible.builtin.command:
+    cmd: >-
+      /home/{{ item.user }}/.local/bin/claude plugin marketplace add
+      /home/{{ item.user }}/.agent-profiles/{{ item.profile }}/plugins/marketplaces/vectorize-io-hindsight
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+    CLAUDE_CONFIG_DIR: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}"
+  loop: "{{ _devbox_memory_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.profile }}"
+  when: item.provider == 'claude'
+  register: _devbox_marketplace
+  changed_when: "'already' not in (_devbox_marketplace.stdout | default('') | lower)"
+  failed_when: false
+
+# The plugin id comes from the marketplace manifest (name: hindsight), not from the
+# directory it was cloned into — those differ, and the mismatch fails with a misleading
+# "your local copy may be out of date".
+- name: Install the Hindsight plugin in each agent profile
+  ansible.builtin.command:
+    cmd: "/home/{{ item.user }}/.local/bin/claude plugin install hindsight-memory@hindsight"
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+    CLAUDE_CONFIG_DIR: "/home/{{ item.user }}/.agent-profiles/{{ item.profile }}"
+  loop: "{{ _devbox_memory_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.profile }}"
+  when: item.provider == 'claude'
+  register: _devbox_plugin
+  changed_when: "'already' not in (_devbox_plugin.stdout | default('') | lower)"
+  failed_when: false

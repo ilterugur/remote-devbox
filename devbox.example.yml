@@ -1,0 +1,193 @@
+---
+# ============================================================================
+#  remote-devbox canonical configuration
+#
+#    cp devbox.example.yml devbox.yml   # devbox.yml is gitignored — real values
+#    devbox plan                        # validate + show the resolved plan
+#
+#  A DEVELOPER is a real human with their own Linux account. Underneath a
+#  developer, git identities, agent profiles, memory spaces and container
+#  engines are INDEPENDENT dimensions — a project picks any combination.
+#
+#  Everything below is a placeholder. Never commit real names, hosts or keys.
+# ============================================================================
+
+config_version: 3
+
+# The only supported target. Set allow_unsupported_platform: true to override
+# (loud warning, unsupported).
+platform:
+  distribution: ubuntu
+  version: "26.04"
+  architecture: amd64
+
+# Host tuning — nothing here is part of the developer model.
+host:
+  swap_size: 8G
+  zram:
+    enabled: true
+    percent: 25
+  locales:
+    # Keep en_US.UTF-8 first: a Turkish working locale’s dotless-i breaks build tools.
+    - en_US.UTF-8
+  mosh: true              # roaming-resilient terminal (UDP, scoped to the tailnet)
+  eternal_terminal: false # TCP alternative to mosh, without its predictive echo
+  harden_ssh: true        # false adopts an existing box without touching sshd
+  hide_pids: true         # /proc hidepid: developers cannot see each other’s command lines
+  umask: "077"
+
+# Shared toolchain, installed once via mise and resolved on every developer PATH.
+runtimes:
+  node: lts
+  python: "3.12"
+  bun: latest
+  uv: latest
+
+# Maintenance account: sudo, runs Ansible. NOT a developer account.
+operator:
+  user: devbox-admin
+  ssh_authorized_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5REPLACEME operator@client"
+  # Client-side key used for the pre-hardening login probe.
+  private_key_path: "~/.ssh/id_ed25519"
+
+network:
+  tailscale:
+    enabled: true
+  # public_and_tailscale | tailscale_only | public_only
+  # Key-only auth either way; Tailscale is a network layer, not authentication.
+  ssh:
+    exposure: public_and_tailscale
+
+# Rootless engines, per developer. Both can be installed side by side; their
+# image/volume stores are separate and switching never migrates or deletes data.
+container:
+  default_engine: podman-rootless
+  install_engines:
+    - podman-rootless
+    - docker-rootless
+
+# System Docker is operator-owned only — developers are never in the docker group.
+shared_services:
+  enabled: false
+  engine: system-docker
+
+developers:
+  # ── A fully-featured developer, showing every override dimension ───────────
+  - user: dev-a
+    # true = the account already exists on the box; adopt it instead of failing.
+    adopt_existing: true
+
+    # Login keys are per developer: this is who may `ssh dev-a@box`.
+    # Independent of the git keys below and of any agent OAuth session.
+    login_ssh_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5REPLACEME dev-a@client"
+
+    # Applied to the developer's whole systemd user slice — shells, editors,
+    # rootless containers, agents and builds all count against these.
+    resources:
+      memory_high: 10G
+      memory_max: 14G
+      cpu_weight: 100
+      io_weight: 100
+
+    git_identities:
+      work:
+        name: "Dev A"
+        email: "dev-a@example.com"
+        github_user: dev-a-work
+      personal:
+        name: "Dev A"
+        email: "dev-a@personal.example"
+        github_user: dev-a-personal
+    # Optional. With exactly one identity it is inferred; with several and no
+    # default, a project that doesn't pick one is a validation ERROR (which is
+    # what stops a silent push from the wrong account).
+    default_git_identity: work
+
+    # Independent of git identity: one human can drive several agent logins.
+    agent_profiles:
+      claude-work:
+        provider: claude
+      claude-personal:
+        provider: claude
+        # An agent profile may pin its own memory space.
+        memory_space: personal
+      codex-work:
+        provider: codex
+    default_agent_profile: claude-work
+
+    memory:
+      enabled: true
+      # By default every agent profile and project of THIS developer shares one
+      # space. Memory is never shared between developers.
+      default_space: shared
+      instances:
+        primary:
+          engine: hindsight
+          llm_provider: openrouter
+          llm_model: openai/gpt-oss-20b
+          # Name of an env var resolved from devbox.secrets.yml — never the key itself.
+          api_key_env: OPENROUTER_API_KEY
+      spaces:
+        shared:
+          instance: primary
+          bank: dev-a-shared
+        personal:
+          instance: primary
+          bank: dev-a-personal
+
+    desktop:
+      enabled: true
+      environment: xfce
+      transport: xrdp
+      tailscale_only: true
+      idle_logout_minutes: 60
+
+    projects:
+      # Inherits every default: git=work, agent=claude-work, memory=shared,
+      # engine=podman-rootless.
+      - name: main-app
+        repo: "git@github.com:example/main-app.git"
+        branch: main
+        ports: [3000]
+
+      # Different git account AND different agent login for the same human.
+      - name: side-project
+        repo: "git@github.com:example/side-project.git"
+        git_identity: personal
+        agent_profile: claude-personal
+        memory_space: personal
+        ports: [3001]
+
+      # A project whose toolchain needs Docker specifically.
+      - name: legacy-service
+        repo: "git@github.com:example/legacy-service.git"
+        container_engine: docker-rootless
+
+      # Memory off for this one project only; no containers either.
+      - name: scratch
+        repo: "git@github.com:example/scratch.git"
+        memory_space: none
+        container_engine: none
+        install: false
+
+  # ── A minimal developer: one identity, one agent, no memory, no desktop ────
+  - user: dev-b
+    login_ssh_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5REPLACEME dev-b@client"
+    resources:
+      memory_high: 8G
+      memory_max: 12G
+    # Sole identity and sole profile are selected automatically — no defaults needed.
+    git_identities:
+      work:
+        name: "Dev B"
+        email: "dev-b@example.com"
+    agent_profiles:
+      claude-main:
+        provider: claude
+    projects:
+      - name: main-app
+        repo: "git@github.com:example/main-app.git"
+        ports: [4000]

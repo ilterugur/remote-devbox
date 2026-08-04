@@ -84,7 +84,7 @@ describe("detectProject install auto-detection", () => {
 
 describe("titleize", () => {
   test("hyphens and underscores → spaced Title Case", () => {
-    expect(titleize("verti-monorepo")).toBe("Verti Monorepo");
+    expect(titleize("example-monorepo")).toBe("Example Monorepo");
     expect(titleize("ecomm_insight_mcp")).toBe("Ecomm Insight Mcp");
     expect(titleize("app")).toBe("App");
   });
@@ -92,9 +92,9 @@ describe("titleize", () => {
 
 describe("serverEntry", () => {
   test("defaults: titleized name, worktree spawn, capacity 32", () => {
-    expect(serverEntry("verti-monorepo")).toBe(
-      "      - project: verti-monorepo\n" +
-        '        name: "Verti Monorepo" # title shown in the phone app\n' +
+    expect(serverEntry("example-monorepo")).toBe(
+      "      - project: example-monorepo\n" +
+        '        name: "Example Monorepo" # title shown in the phone app\n' +
         "        spawn: worktree # worktree | same-dir | session\n" +
         "        capacity: 32\n",
     );
@@ -112,16 +112,16 @@ describe("serverEntry", () => {
 const YML = `---
 # header comment
 profiles:
-  - user: ilterugur
+  - user: dev-a
     git_name: "Uğur"
     projects:
-      - name: insurchat
-        repo: "git@github.com:InsurUp/insurchat.git"
+      - name: example-app
+        repo: "git@github.com:example-org/example-app.git"
         branch: main
         ports: [3000, 5173]
     servers:
-      - project: insurchat
-        name: "InsurChat"
+      - project: example-app
+        name: "ExampleApp"
   - user: other
     projects:
       - name: alpha
@@ -133,7 +133,7 @@ const snippet = projectEntry({ name: "myproj", repo: "git@github.com:org/myproj.
 
 describe("addProjectToYaml", () => {
   test("inserts at the end of the correct profile's projects, before servers:", () => {
-    const out = addProjectToYaml(YML, "ilterugur", snippet, "myproj");
+    const out = addProjectToYaml(YML, "dev-a", snippet, "myproj");
     const lines = out.split("\n");
     const newIdx = lines.findIndex((l) => l.includes("name: myproj"));
     const serversIdx = lines.findIndex((l) => l.trim() === "servers:");
@@ -143,7 +143,7 @@ describe("addProjectToYaml", () => {
   });
 
   test("preserves comments and every original line", () => {
-    const out = addProjectToYaml(YML, "ilterugur", snippet, "myproj");
+    const out = addProjectToYaml(YML, "dev-a", snippet, "myproj");
     expect(out).toContain("# header comment");
     for (const orig of YML.split("\n").filter((l) => l.trim())) expect(out).toContain(orig);
   });
@@ -155,13 +155,13 @@ describe("addProjectToYaml", () => {
     const alphaIdx = lines.findIndex((l) => l.includes("name: alpha"));
     const newIdx = lines.findIndex((l) => l.includes("name: myproj"));
     expect(newIdx).toBeGreaterThan(alphaIdx);
-    // and NOT inside ilterugur's block (before servers:)
+    // and NOT inside dev-a's block (before servers:)
     const serversIdx = lines.findIndex((l) => l.trim() === "servers:");
     expect(newIdx).toBeGreaterThan(serversIdx);
   });
 
   test("refuses a duplicate project name", () => {
-    expect(() => addProjectToYaml(YML, "ilterugur", snippet, "insurchat")).toThrow(/already has a project named/);
+    expect(() => addProjectToYaml(YML, "dev-a", snippet, "example-app")).toThrow(/already has a project named/);
   });
 
   test("refuses an unknown profile", () => {
@@ -173,13 +173,13 @@ const srv = serverEntry("myproj", { name: "MyProj" });
 
 describe("addServerToYaml", () => {
   test("appends to an existing servers: block", () => {
-    const out = addServerToYaml(YML, "ilterugur", srv, "myproj");
+    const out = addServerToYaml(YML, "dev-a", srv, "myproj");
     const lines = out.split("\n");
     const serversIdx = lines.findIndex((l) => l.trim() === "servers:");
-    const insurIdx = lines.findIndex((l) => l.includes('name: "InsurChat"'));
+    const exampleIdx = lines.findIndex((l) => l.includes('name: "ExampleApp"'));
     const newIdx = lines.findIndex((l) => l.includes("project: myproj"));
     expect(newIdx).toBeGreaterThan(serversIdx);
-    expect(newIdx).toBeGreaterThan(insurIdx); // after the existing server
+    expect(newIdx).toBeGreaterThan(exampleIdx); // after the existing server
   });
 
   test("creates a servers: block when the profile has none, right after projects:", () => {
@@ -200,7 +200,7 @@ describe("addServerToYaml", () => {
   });
 
   test("refuses a duplicate server for the same project", () => {
-    expect(() => addServerToYaml(YML, "ilterugur", srv, "insurchat")).toThrow(/already has a server/);
+    expect(() => addServerToYaml(YML, "dev-a", srv, "example-app")).toThrow(/already has a server/);
   });
 
   test("refuses an unknown profile", () => {

@@ -1,17 +1,63 @@
 # remote-devbox
 
-Provision a cheap remote server into an **always-on, multi-profile Claude Code dev
-box** with one Ansible run from your client. Built for Bun / Turborepo / Vite /
-Docker monorepos.
+Provision a cheap remote server into an **always-on development box shared by several
+people**, with one Ansible run from your machine. Built for Bun / Turborepo / Vite /
+container monorepos.
 
-Each **profile** is its own **Linux user** — isolated `$HOME`, its own SSH key and
-git identity, its own Claude login, its own always-on Remote Control servers. You
-drive it from the **Claude desktop app** (or VS Code Remote-SSH) at your client and
-from the **Claude mobile app** when you're out — client closed.
+A **developer** is a real human with their own Linux account. Underneath that account,
+four things are independent and each is chosen per project:
 
-You edit one vars file, run `ansible-playbook`, add each profile's printed SSH key
-to its GitHub account, and do a single `/login` per profile. After that the box
-runs itself.
+| Dimension | What it is | Example |
+| --- | --- | --- |
+| **git identity** | name, email and SSH key used to push | work vs. personal GitHub |
+| **agent profile** | one login of one agent (Claude, Codex) | two Claude accounts side by side |
+| **container engine** | rootless Podman, rootless Docker, or none | one legacy repo needs Docker |
+| **memory space** | which long-term memory bank the agent uses | one shared bank, one private |
+
+Nothing is implied by anything else: the agent driving a project does not decide which
+account the commit is attributed to, and two agent profiles of the same person can share
+one memory or keep separate ones.
+
+Developers cannot read each other's homes, secrets, git keys, container sockets or even
+each other's process command lines, and none of them can escalate to root.
+
+## The flow
+
+Everything comes from one file, `devbox.yml` (gitignored; start from
+[devbox.example.yml](devbox.example.yml)). The CLI validates it, resolves every default,
+and writes normalized variables that Ansible consumes — the roles contain no policy of
+their own.
+
+```bash
+cp devbox.example.yml devbox.yml            # describe the box
+cp devbox.secrets.example.yml devbox.secrets.yml
+devbox plan                                 # validate + show what will happen
+devbox apply                                # regenerate vars, then run the playbook
+devbox apply containers --check             # one phase, dry run
+```
+
+`devbox plan` refuses to be vague. Two git identities with no default and no per-project
+choice is an **error**, not a silent pick — that ambiguity is exactly how a commit ends
+up on the wrong GitHub account. Run `devbox phases` to see the phases `apply` accepts.
+
+On the box itself, `devbox doctor` checks the properties the roles exist to guarantee:
+
+```text
+isolation
+  ✔ my home is private (0700)
+  ✔ I have no sudo
+  ✔ I am not in the docker group
+  ✔ other users' processes are hidden
+  ✔ /home/other-dev is closed to me
+containers
+  ✔ podman is rootless
+memory
+  ✔ bank dev-a-shared
+```
+
+> **Migrating from the profile-based layout?** `ansible/group_vars/all.yml` is the legacy
+> format. `devbox migrate-config` converts it, warns about everything it cannot represent,
+> and writes nothing unless you pass `--write`.
 
 ---
 
@@ -20,9 +66,12 @@ runs itself.
 - A hardened Ubuntu/Debian box: key-only SSH, UFW, Fail2Ban, Tailscale, swap.
 - **mise** managing a shared toolchain — Node, Python, bun, uv — available even to
   Claude's non-interactive Bash tool (no hand-maintained PATH).
-- **Per-profile Linux users**: real filesystem/process isolation, a **separate git
-  account per profile** (own SSH key + identity), separate Claude logins.
-- Docker for your dev services; your repos cloned + `bun install`ed per profile.
+- **One Linux account per person**: private home, exact SSH key set, no sudo, no docker
+  group, and `/proc` hidden so nobody sees anyone else's command lines.
+- **Per-developer resource slices** (systemd): a runaway build slows down the person who
+  started it and nobody else.
+- **Rootless containers**, Podman or Docker, chosen per project; your repos cloned with
+  the right identity's key and `bun install`ed.
 - One **always-on Remote Control server per (profile, project)** — reachable from
   your phone, no inbound ports.
 - Your portable Claude config (skills, subagents, commands, `CLAUDE.md`, MCP defs)

@@ -1,7 +1,8 @@
 ---
 - name: Install Tailscale via official script
   ansible.builtin.shell:
-    cmd: timeout 300 bash -c 'curl -fsSL https://tailscale.com/install.sh | sh'
+    cmd: set -o pipefail; timeout 300 bash -c 'curl -fsSL https://tailscale.com/install.sh | sh'
+    executable: /bin/bash
     creates: /usr/bin/tailscale
 
 - name: Ensure tailscaled is enabled and running
@@ -23,7 +24,7 @@
   # plain-ssh / et access model. Real sshd works over both tailnet and public IP.
   ansible.builtin.command:
     cmd: >-
-      tailscale up --authkey {{ tailscale_authkey }}
+      tailscale up --authkey {{ devbox_secrets.TAILSCALE_AUTHKEY }}
       --hostname {{ inventory_hostname }}
   when: >-
     ts_status.rc != 0

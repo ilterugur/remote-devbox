@@ -64,6 +64,7 @@
   ansible.builtin.command:
     cmd: "ssh-keygen -t ed25519 -N '' -C '{{ item.git_email }}' -f /home/{{ item.user }}/.ssh/id_ed25519"
     creates: "/home/{{ item.user }}/.ssh/id_ed25519"
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ profiles }}"
   loop_control:
@@ -75,6 +76,7 @@
     name: github.com
     key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 github.com 2>/dev/null') }}"
     state: present
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ profiles }}"
   loop_control:
@@ -97,6 +99,7 @@
           Port 443
           User git
           StrictHostKeyChecking accept-new
+  become: true
   become_user: "{{ item.user }}"
   loop: "{{ profiles }}"
   loop_control:
@@ -149,6 +152,7 @@
   environment:
     MISE_YES: "1"
     HOME: "/home/{{ item.user }}" # pin so tools land in the user's data dir, not root's
+  become: true
   become_user: "{{ item.user }}"
   register: mise_install
   loop: "{{ profiles }}"
@@ -166,6 +170,7 @@
   ansible.builtin.command: mise prune --yes
   environment:
     HOME: "/home/{{ item.user }}"
+  become: true
   become_user: "{{ item.user }}"
   register: mise_pruned
   loop: "{{ profiles }}"
@@ -182,6 +187,7 @@
   ansible.builtin.shell:
     cmd: "timeout 600 bash -c 'curl -fsSL https://claude.ai/install.sh | bash'"
     creates: "/home/{{ item.user }}/.local/bin/claude"
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"
@@ -192,6 +198,7 @@
 - name: Verify Claude Code works for each profile (catches a truncated install)
   when: "'claude' in (item.agents | default(['claude']))"
   ansible.builtin.command: "/home/{{ item.user }}/.local/bin/claude --version"
+  become: true
   become_user: "{{ item.user }}"
   environment:
     HOME: "/home/{{ item.user }}"

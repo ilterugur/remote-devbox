@@ -1,19 +1,19 @@
 ---
-# Hardening order is deliberate: the operator key is proven to work BEFORE root
-# login is disabled, the drop-in is syntax-validated before it lands, and sshd
-# is restarted only via a handler at the very end of the play.
+# Hardening order is deliberate: the operator key is proven to work BEFORE root login is
+# disabled, the drop-in is syntax-validated before it lands, and sshd is restarted only
+# via a handler at the very end.
 #
-# security_harden_ssh (default true) gates the hardening + its probes: set it false
-# to adopt an existing box without touching sshd (root/password login stay as-is) —
-# the UFW + fail2ban tasks below still run. Flip to true later to harden.
+# security_harden_ssh (default true) gates the hardening and its probes: set it false to
+# adopt an existing box without touching sshd (root/password login stay as-is) — the UFW
+# and fail2ban tasks still run. Flip it to true once operator key login is proven.
 
 - name: Pre-flight — confirm operator can log in with key before hardening
-  when: security_harden_ssh | default(true)
+  when: devbox_host.harden_ssh
   ansible.builtin.command:
     cmd: >-
       ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new
-      -o ConnectTimeout=15 -i {{ operator_private_key_path }}
-      {{ operator_user }}@{{ ansible_host }} true
+      -o ConnectTimeout=15 -i {{ devbox_operator.private_key_path }}
+      {{ devbox_operator.user }}@{{ ansible_host }} true
   delegate_to: localhost
   become: false
   register: _ssh_probe
@@ -23,12 +23,12 @@
   changed_when: false
 
 - name: Pre-flight — confirm operator has working passwordless sudo
-  when: security_harden_ssh | default(true)
+  when: devbox_host.harden_ssh
   ansible.builtin.command:
     cmd: >-
       ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new
-      -o ConnectTimeout=15 -i {{ operator_private_key_path }}
-      {{ operator_user }}@{{ ansible_host }} sudo -n true
+      -o ConnectTimeout=15 -i {{ devbox_operator.private_key_path }}
+      {{ devbox_operator.user }}@{{ ansible_host }} sudo -n true
   delegate_to: localhost
   become: false
   register: _sudo_probe
@@ -39,7 +39,7 @@
   # If this fails, the operator can't sudo — abort before locking out root.
 
 - name: Deploy sshd hardening drop-in
-  when: security_harden_ssh | default(true)
+  when: devbox_host.harden_ssh
   ansible.builtin.template:
     src: 99-hardening.conf.j2
     dest: /etc/ssh/sshd_config.d/99-hardening.conf
@@ -53,10 +53,39 @@
   ansible.builtin.meta: flush_handlers
 
 # ── UFW — allow SSH BEFORE enabling, or you lock yourself out ─────────────────
-- name: Allow OpenSSH through UFW
+- name: Allow SSH from anywhere
   community.general.ufw:
     rule: allow
     name: OpenSSH
+  when: devbox_network.ssh.exposure in ['public_and_tailscale', 'public_only']
+
+# Removing the any-interface rule is the one firewall change that can strand you, so it
+# only happens once the tailnet interface is actually up.
+- name: Refuse to restrict SSH to the tailnet before the tailnet exists
+  ansible.builtin.assert:
+    that: "'tailscale0' in ansible_facts.interfaces"
+    fail_msg: >-
+      network.ssh.exposure is tailscale_only but this host has no tailscale0 interface.
+      Bring Tailscale up first, or set exposure to public_and_tailscale.
+  when: devbox_network.ssh.exposure == 'tailscale_only'
+
+- name: Restrict SSH to the tailnet interface only
+  community.general.ufw:
+    rule: allow
+    name: OpenSSH
+    delete: true
+  when: devbox_network.ssh.exposure == 'tailscale_only'
+
+- name: Allow SSH over the tailnet
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    interface: tailscale0
+    direction: in
+  when:
+    - devbox_network.tailscale.enabled | bool
+    - devbox_network.ssh.exposure in ['public_and_tailscale', 'tailscale_only']
 
 - name: Default deny incoming
   community.general.ufw:

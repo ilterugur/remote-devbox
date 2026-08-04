@@ -1,0 +1,22 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# oneshot + RemainAfterExit, because hindsight-embed forks its own daemon: a simple
+# unit would see the launcher exit and declare the service dead.
+#
+# A user service, not a system one: the daemon runs as the developer, inside their
+# resource slice. linger (developers role) keeps it up after logout.
+[Unit]
+Description=Hindsight memory daemon ({{ item.name }}) for {{ item.user }}
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon start'
+ExecStop=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon stop'
+TimeoutStartSec=600
+# Background service, not interactive work: yield under contention.
+Nice=5
+
+[Install]
+WantedBy=default.target

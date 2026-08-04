@@ -1,0 +1,16 @@
+---
+# A running daemon keeps its provider configuration until it is restarted, so a changed
+# key or model is invisible until this fires.
+- name: Restart memory daemons
+  ansible.builtin.systemd_service:
+    name: "hindsight-{{ item.name }}.service"
+    scope: user
+    state: restarted
+    daemon_reload: true
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.user][1] }}"
+  loop: "{{ _devbox_memory_instances }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"

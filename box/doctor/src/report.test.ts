@@ -7,11 +7,11 @@ const health: Health = {
   mem: { totalBytes: 8131299328, usedBytes: 6979321856, freeBytes: 811597824, availableBytes: 1073741824 },
   swap: [{ name: "/swapfile", type: "file", sizeBytes: 8589934592, usedBytes: 0, priority: -1 }],
   oom: [{ at: 1, atText: "Thu Jun 18 07:53:25 2026", process: "bun", pid: 273394, uid: 1001 }],
-  units: [{ unit: "claude-rc-x-verti.service", loaded: true, active: "failed", sub: "failed" }],
+  units: [{ unit: "claude-rc-x-example.service", loaded: true, active: "failed", sub: "failed" }],
   sessions: [],
   worktrees: [],
   conditions: [
-    { id: "rc-x-failed", severity: "high", facts: { unit: "claude-rc-x-verti.service" }, candidateAction: "restart-failed-rc", guard: "pass" },
+    { id: "rc-x-failed", severity: "high", facts: { unit: "claude-rc-x-example.service" }, candidateAction: "restart-failed-rc", guard: "pass" },
   ],
 };
 
@@ -22,6 +22,6 @@ test("formatJson round-trips the Health object", () => {
 test("formatHuman includes a conditions section naming the candidate action", () => {
   const out = formatHuman(health);
   expect(out).toContain("restart-failed-rc");
-  expect(out).toContain("claude-rc-x-verti.service");
+  expect(out).toContain("claude-rc-x-example.service");
   expect(out).toContain("OOM");
 });

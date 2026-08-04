@@ -1,9 +1,12 @@
 # Managed by Ansible (remote-devbox) — do not edit by hand.
-# Lockout recovery: from the Hetzner console/rescue system, edit this file to add
+# Lockout recovery: from the provider's console/rescue system, edit this file to add
 # `AllowUsers root` (and temporarily set PermitRootLogin yes), then `systemctl
 # restart ssh`.
+#
+# Key-only either way. Tailscale is a network layer, not authentication: a key listed
+# here works over the public interface too, unless the firewall says otherwise.
 PermitRootLogin no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
-AllowUsers {{ ([operator_user] + (profiles | default([]) | map(attribute='user') | list)) | join(' ') }}
+AllowUsers {{ ([devbox_operator.user] + (devbox_developers | map(attribute='user') | list)) | join(' ') }}

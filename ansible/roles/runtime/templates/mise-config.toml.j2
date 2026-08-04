@@ -1,6 +1,6 @@
 # Managed by Ansible (remote-devbox). Shared toolchain for all profiles.
 [tools]
-{% for tool, version in runtimes.items() %}
+{% for tool, version in devbox_runtimes.items() %}
 {{ tool }} = "{{ version }}"
 {% endfor %}
 

@@ -1,2 +1,2 @@
-claude-rc-ilterugur-insurchat.service      loaded active exited Claude remote-control (ilterugur-insurchat)
-claude-rc-ilterugur-verti-monorepo.service loaded failed failed Claude remote-control (ilterugur-verti-monorepo)
+claude-rc-dev-a-example-app.service      loaded active exited Claude remote-control (dev-a-example-app)
+claude-rc-dev-a-example-monorepo.service loaded failed failed Claude remote-control (dev-a-example-monorepo)

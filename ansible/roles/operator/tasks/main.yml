@@ -1,0 +1,37 @@
+---
+# The maintenance account: sudo, runs Ansible, owns shared services. Deliberately NOT a
+# developer — developer hardening (no sudo, private home, no docker group) cannot apply
+# to an account that must administer the box.
+
+- name: Create the operator account
+  ansible.builtin.user:
+    name: "{{ devbox_operator.user }}"
+    groups: sudo
+    append: true
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Grant the operator passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ devbox_operator.user }}"
+    content: "{{ devbox_operator.user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+  no_log: true
+
+# Not exclusive: an operator may legitimately have keys this config doesn't know about
+# (a colleague's recovery key, a CI runner). Removing those is a lockout risk with no
+# security win — the developer accounts below are where exact key sets matter.
+- name: Install the operator's authorized keys
+  ansible.posix.authorized_key:
+    user: "{{ devbox_operator.user }}"
+    key: "{{ item }}"
+    state: present
+    exclusive: false
+  loop: "{{ devbox_operator.ssh_authorized_keys }}"
+  loop_control:
+    label: "{{ item.split()[-1] | default('key') }}"
+  no_log: true

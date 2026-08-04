@@ -1,136 +1,209 @@
 ---
-- name: Clone project repos (as each profile's user, with its own SSH key)
-  ansible.builtin.git:
-    repo: "{{ item.1.repo }}"
-    dest: "/home/{{ item.0.user }}/projects/{{ item.1.name }}"
-    version: "{{ item.1.branch | default('main') }}"
-    # Use .get(), NOT item.1.update or item.1['update']: on ansible-core 2.21 both
-    # resolve 'update' to the dict's built-in .update() METHOD (which `default` can't
-    # rescue, since a method is "defined") and crash with a builtin_function_or_method
-    # error. .get('update', false) does a real key lookup.
-    update: "{{ item.1.get('update', false) }}" # never clobber Claude's edits
-    accept_hostkey: true
-  become_user: "{{ item.0.user }}"
-  environment:
-    GIT_TERMINAL_PROMPT: "0" # fail fast instead of hanging on private repos
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
-  loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-  register: clone_results
-  failed_when: false # don't abort the whole run if a key isn't on GitHub yet
+# A project is where the independent dimensions finally meet: it is cloned as its
+# developer, with the SSH key of the git identity it selected, and its repo-local
+# .git/config pins that identity so a commit can never pick up the wrong account —
+# not even when a different agent profile is driving the work.
 
-- name: "Report any clones that failed"
-  # Only blame a missing GitHub SSH key on a REAL auth/permission error; for anything
-  # else (e.g. a templating crash) surface the git module's actual message instead of
-  # masking it with misleading SSH-key advice.
+- name: Flatten the resolved projects
+  ansible.builtin.set_fact:
+    _devbox_projects: "{{ _raw__devbox_projects | from_json }}"
+  vars:
+    _raw__devbox_projects: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers -%}
+        {%- for project in dev.projects -%}
+          {{- out.append(project | combine({
+                'user': dev.user,
+                'home': '/home/' ~ dev.user,
+                'path': '/home/' ~ dev.user ~ '/projects/' ~ project.name,
+                'identity': dev.git_identities.get(project.git_identity, none)
+                            if project.git_identity else none,
+                'key_path': ('/home/' ~ dev.user ~ '/.ssh/git-identities/'
+                             ~ project.git_identity ~ '/id_ed25519')
+                            if project.git_identity else none,
+                'agent_provider': (dev.agent_profiles[project.agent_profile].provider
+                                   if project.agent_profile else none)})) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Clone each project with its own git identity key
+  ansible.builtin.git:
+    repo: "{{ item.repo }}"
+    dest: "{{ item.path }}"
+    version: "{{ item.branch }}"
+    # Never pull over local work: the box is where edits happen, not a mirror.
+    update: false
+    accept_hostkey: true
+    key_file: "{{ item.key_path if item.key_path else omit }}"
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "{{ item.home }}"
+    GIT_TERMINAL_PROMPT: "0" # fail fast instead of hanging on a private repo
+  loop: "{{ _devbox_projects }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  register: _devbox_clones
+  failed_when: false # one unreachable repo shouldn't abort provisioning
+
+- name: Explain any clone that failed
   ansible.builtin.debug:
     msg: >-
-      {% if (item.msg | default('')) is search('Permission denied|publickey|[Aa]uthentication failed|access rights|Could not read from remote|Host key verification') %}
-      Clone failed for {{ item.item.0.user }}/{{ item.item.1.name }} — add that
-      profile's printed SSH public key to its GitHub account, then re-run.
+      {% set auth = 'Permission denied|publickey|[Aa]uthentication failed'
+         ~ '|access rights|Could not read from remote|Host key verification' %}
+      {% if (item.msg | default('')) is search(auth) %}
+      Clone failed for {{ item.item.user }}/{{ item.item.name }} — register the
+      {{ item.item.user }}/{{ item.item.git_identity | default('(none)') }} public key on the
+      GitHub account that owns {{ item.item.repo }}, then re-run with --tags projects.
       {% else %}
-      Clone failed for {{ item.item.0.user }}/{{ item.item.1.name }}: {{ item.msg | default('see the task output above') }}
+      Clone failed for {{ item.item.user }}/{{ item.item.name }}: {{ item.msg | default('see above') }}
       {% endif %}
-  loop: "{{ clone_results.results | default([]) | selectattr('failed', 'defined') | selectattr('failed') | list }}"
+  loop: "{{ _devbox_clones.results | selectattr('failed', 'defined') | selectattr('failed') | list }}"
   loop_control:
-    label: "{{ item.item.0.user }}/{{ item.item.1.name }}"
+    label: "{{ item.item.user }}/{{ item.item.name }}"
 
-# Gate the post-clone steps on a REAL remote check (the `exists` Jinja test runs
-# on the controller, not the box, so it can't be used to detect a remote clone).
-- name: Check which project repos are present on the box
+# Everything below only makes sense on a repo that actually landed. The `exists` Jinja
+# test runs on the controller, so the presence check has to be a real remote stat.
+- name: Check which repos are present
   ansible.builtin.stat:
-    path: "/home/{{ item.0.user }}/projects/{{ item.1.name }}/.git"
-  become_user: "{{ item.0.user }}"
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
+    path: "{{ item.path }}/.git"
+  loop: "{{ _devbox_projects }}"
   loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-  register: repo_git
+    label: "{{ item.user }}/{{ item.name }}"
+  register: _devbox_repo_git
 
-- name: Pre-accept Claude's workspace-trust + Remote Control dialogs (the RC server runs claude headlessly)
-  # An untrusted workspace, or the first-run "Enable Remote Control?" prompt, makes
-  # `claude remote-control` block forever in the non-interactive service. Seed the
-  # flags in the profile's ~/.claude.json so the always-on server connects on its own.
-  # Trust the project dir AND the profile's HOME — the `devbox` command launches claude
-  # from a login shell (cwd = HOME), which would otherwise prompt to trust the folder.
+- name: Pin user.name per repo
+  community.general.git_config:
+    name: user.name
+    value: "{{ item.0.identity.name }}"
+    scope: local
+    repo: "{{ item.0.path }}"
+  become: true
+  become_user: "{{ item.0.user }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists and item.0.identity is not none
+
+- name: Pin user.email per repo
+  community.general.git_config:
+    name: user.email
+    value: "{{ item.0.identity.email }}"
+    scope: local
+    repo: "{{ item.0.path }}"
+  become: true
+  become_user: "{{ item.0.user }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists and item.0.identity is not none
+
+- name: Pin the identity's SSH key per repo
+  community.general.git_config:
+    name: core.sshCommand
+    value: "ssh -i {{ item.0.key_path }} -o IdentitiesOnly=yes"
+    scope: local
+    repo: "{{ item.0.path }}"
+  become: true
+  become_user: "{{ item.0.user }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists and item.0.identity is not none
+
+- name: Trust each repo's own mise config so its pinned versions are honoured
   ansible.builtin.command:
-    cmd: >-
-      python3 -c 'import json,os,sys;
-      p=os.path.expanduser("~/.claude.json");
-      d=json.load(open(p)) if os.path.exists(p) else {};
-      d["remoteDialogSeen"]=True;
-      pr=d.setdefault("projects",{});
-      pr.setdefault(sys.argv[1],{})["hasTrustDialogAccepted"]=True;
-      pr.setdefault(os.path.expanduser("~"),{})["hasTrustDialogAccepted"]=True;
-      json.dump(d,open(p,"w"),indent=2)'
-      "/home/{{ item.0.user }}/projects/{{ item.1.name }}"
+    cmd: "mise trust {{ item.0.path }}"
+  become: true
   become_user: "{{ item.0.user }}"
   environment:
-    HOME: "/home/{{ item.0.user }}"
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
+    HOME: "{{ item.0.home }}"
+    MISE_YES: "1"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
   loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-    index_var: ridx
-  when: repo_git.results[ridx].stat.exists
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists
   changed_when: false
 
-- name: Trust each repo's own mise config (so its pinned versions are honored)
+- name: Install each repo's pinned toolchain
   ansible.builtin.command:
-    cmd: "mise trust /home/{{ item.0.user }}/projects/{{ item.1.name }}"
+    cmd: "mise -C {{ item.0.path }} install --yes"
+  become: true
   become_user: "{{ item.0.user }}"
   environment:
-    HOME: "/home/{{ item.0.user }}"
+    HOME: "{{ item.0.home }}"
     MISE_YES: "1"
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
   loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-    index_var: ridx
-  when: repo_git.results[ridx].stat.exists
-  changed_when: false
-
-- name: Install each repo's pinned toolchain (mise reads the repo's mise.toml/.tool-versions/.nvmrc)
-  ansible.builtin.command:
-    cmd: "mise -C /home/{{ item.0.user }}/projects/{{ item.1.name }} install --yes"
-  become_user: "{{ item.0.user }}"
-  environment:
-    HOME: "/home/{{ item.0.user }}"
-    MISE_YES: "1"
-  register: repo_mise
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
-  loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-    index_var: ridx
-  when: repo_git.results[ridx].stat.exists
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists
+  # mise is silent on a no-op and only names a tool when it actually fetches one.
   changed_when: >-
-    (repo_mise.stdout | default('')) is search('install(ing|ed)')
-    or (repo_mise.stderr | default('')) is search('install(ing|ed)')
+    (stdout | default('')) is search('install(ing|ed)')
+    or (stderr | default('')) is search('install(ing|ed)')
 
-- name: Install dependencies (bun via mise) per project
+- name: Check which projects have a JavaScript manifest
+  ansible.builtin.stat:
+    path: "{{ item.0.path }}/package.json"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists
+  register: _devbox_manifests
+
+# `install: true` means "install dependencies", not "assume this is a JS project" — a
+# Python or Ansible repo has nothing for bun to do, and failing there is noise.
+- name: Install project dependencies
   ansible.builtin.command:
     cmd: "mise exec -- bun install"
-    chdir: "/home/{{ item.0.user }}/projects/{{ item.1.name }}"
+    chdir: "{{ item.0.path }}"
+  become: true
   become_user: "{{ item.0.user }}"
   environment:
-    HOME: "/home/{{ item.0.user }}"
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
+    HOME: "{{ item.0.home }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results, _devbox_manifests.results) | list }}"
   loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-    index_var: ridx
+    label: "{{ item.0.user }}/{{ item.0.name }}"
   when:
-    - item.1.get('install', true)
-    - repo_git.results[ridx].stat.exists
+    - item.1.stat.exists
+    - item.0.install
+    - item.2.stat.exists | default(false)
   changed_when: false
 
 - name: Scaffold .env files from .env.example (never overwrites)
   ansible.builtin.shell:
-    executable: /bin/bash # need bash: `read -d ''` is unsupported by dash (/bin/sh on Debian/Ubuntu)
+    executable: /bin/bash # `read -d ''` is unsupported by dash
     cmd: >-
-      find "/home/{{ item.0.user }}/projects/{{ item.1.name }}" -name '.env.example'
-      -not -path '*/node_modules/*' -print0 |
+      set -o pipefail;
+      find "{{ item.0.path }}" -name '.env.example' -not -path '*/node_modules/*' -print0 |
       while IFS= read -r -d '' f; do t="${f%.example}"; [ -f "$t" ] || cp "$f" "$t"; done
+  become: true
   become_user: "{{ item.0.user }}"
-  loop: "{{ profiles | subelements('projects', skip_missing=True) }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
   loop_control:
-    label: "{{ item.0.user }}/{{ item.1.name }}"
-    index_var: ridx
-  when: repo_git.results[ridx].stat.exists
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists
+  changed_when: false
+
+- name: Pre-trust each project in the agent profile that will open it
+  # Trust is per (profile, directory): seeding it in the profile that actually opens the
+  # project is what keeps a headless agent from blocking on the folder-trust prompt.
+  ansible.builtin.command:
+    cmd: >-
+      python3 -c 'import json,os,sys;
+      p=os.path.join(sys.argv[1],".claude.json");
+      d=json.load(open(p)) if os.path.exists(p) else {};
+      d.setdefault("projects",{}).setdefault(sys.argv[2],{})["hasTrustDialogAccepted"]=True;
+      json.dump(d,open(p,"w"),indent=2)'
+      "{{ item.0.home }}/.agent-profiles/{{ item.0.agent_profile }}"
+      "{{ item.0.path }}"
+  become: true
+  become_user: "{{ item.0.user }}"
+  environment:
+    HOME: "{{ item.0.home }}"
+  loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.0.name }}"
+  when: item.1.stat.exists and item.0.agent_provider == 'claude'
   changed_when: false

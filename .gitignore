@@ -4,6 +4,11 @@ ansible/group_vars/all.yml
 ansible/host_vars/*.yml
 !ansible/host_vars/*.example.yml
 
+# v3 canonical config — real values stay local; only devbox.example.yml is committed
+devbox.yml
+devbox.secrets.yml
+ansible/.generated/
+
 # Ansible
 *.retry
 .vault_pass

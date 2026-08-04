@@ -1,0 +1,116 @@
+---
+# Container engines are per developer and rootless. Nobody is in the docker group: a
+# rootful daemon socket is root-equivalent and would hand every developer every other
+# developer's containers, volumes and bind mounts.
+#
+# Two engines can be installed side by side. Their image/volume/network stores are
+# completely separate, and switching a project from one to the other neither migrates
+# nor deletes anything — that stays a deliberate, manual act.
+
+# Own lookup rather than relying on another role: --tags containers must work on its own.
+- name: Ensure the user-manager drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/user@.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Look up developer uids
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Install the rootless prerequisites
+  ansible.builtin.apt:
+    name:
+      - uidmap # newuidmap/newgidmap: the whole basis of rootless containers
+      - dbus-user-session # user systemd needs it to run engine services after logout
+      - fuse-overlayfs # copy-on-write layers without root
+      - slirp4netns # userspace networking
+    state: present
+    update_cache: true
+  when: devbox_container.install_engines | difference(['none']) | length > 0
+
+# An adopted account can predate /etc/subuid, and without a subordinate range rootless
+# containers fail with a confusing "newuidmap: write to uid_map failed".
+- name: Ensure every developer has subordinate uid/gid ranges
+  # usermod exits 0 whether or not it changed anything, so the file itself is the check.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      grep -q "^{{ item.user }}:" /etc/subuid && grep -q "^{{ item.user }}:" /etc/subgid && exit 90
+      usermod --add-subuids 100000-165535 --add-subgids 100000-165535 {{ item.user }}
+    executable: /bin/bash
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_subid
+  changed_when: _devbox_subid.rc == 0
+  failed_when: _devbox_subid.rc not in [0, 90]
+  when: devbox_container.install_engines | difference(['none']) | length > 0
+
+# Without an explicit Delegate=, a rootless engine cannot create cgroups under the
+# developer's own user manager and falls back to asking the SYSTEM manager — which
+# refuses with "requires interactive authentication". Delegation is also what makes the
+# resource_limits slice actually bind container workloads.
+- name: Delegate cgroup controllers to every user manager
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/user@.service.d/10-devbox-delegate.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      [Service]
+      Delegate=cpu cpuset io memory pids
+  when: devbox_container.install_engines | difference(['none']) | length > 0
+  notify: Restart user managers
+
+- name: Apply the delegation change before any engine starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Install Podman (rootless)
+  ansible.builtin.include_tasks: podman_rootless.yml
+  when: "'podman-rootless' in devbox_container.install_engines"
+
+- name: Install Docker (rootless)
+  ansible.builtin.include_tasks: docker_rootless.yml
+  when: "'docker-rootless' in devbox_container.install_engines"
+
+- name: Configure operator-owned shared services
+  ansible.builtin.include_tasks: shared_services.yml
+
+# The resolved engine per developer and per project, written once so the box-side CLI
+# never has to re-derive policy — it looks the answer up, exactly like the roles do.
+- name: Create the box configuration directory
+  ansible.builtin.file:
+    path: /etc/remote-devbox
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Build the resolved engine map
+  ansible.builtin.set_fact:
+    _devbox_engine_map: "{{ _raw_engine_map | from_json }}"
+  vars:
+    _raw_engine_map: >-
+      {%- set out = {} -%}
+      {%- for dev in devbox_developers -%}
+        {%- set projects = {} -%}
+        {%- for project in dev.projects -%}
+          {{- projects.update({project.name: project.container_engine}) or '' -}}
+        {%- endfor -%}
+        {{- out.update({dev.user: {
+              'default': dev.container_engine or devbox_container.default_engine,
+              'projects': projects}}) or '' -}}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Publish the resolved engine map
+  ansible.builtin.copy:
+    dest: /etc/remote-devbox/engines.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ _devbox_engine_map | to_nice_json }}\n"
