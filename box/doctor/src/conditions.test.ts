@@ -4,13 +4,13 @@ import type { ProcRef, RcUnit, Worktree } from "./types";
 
 test("detectConditions: a failed RC unit => restart-failed-rc, guard pass", () => {
   const units: RcUnit[] = [
-    { unit: "claude-rc-x-verti.service", loaded: true, active: "failed", sub: "failed" },
+    { unit: "claude-rc-x-example.service", loaded: true, active: "failed", sub: "failed" },
     { unit: "claude-rc-x-ins.service", loaded: true, active: "active", sub: "exited" },
   ];
   const conds = detectConditions({ units, worktrees: [], procs: [] });
   const failed = conds.filter((c) => c.candidateAction === "restart-failed-rc");
   expect(failed).toHaveLength(1);
-  expect(failed[0].facts.unit).toBe("claude-rc-x-verti.service");
+  expect(failed[0].facts.unit).toBe("claude-rc-x-example.service");
   expect(failed[0].guard).toBe("pass");
   expect(failed[0].severity).toBe("high");
 });
