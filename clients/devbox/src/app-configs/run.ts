@@ -119,17 +119,79 @@ function pullPayloadToClient(cfg: Config, profile: string, e: ResolvedEntry): vo
   writeFileSync(dst, r.stdout ?? "");
 }
 
-/** Mirror of pullPayloadToClient: push the just-seeded client-side payload up to the
- *  box's own store via ssh, so the box's own `link` (run right after this) does not
- *  point at content that only appears once the sync engine catches up. No-op for "dir"
- *  mode, which has no single payload file. */
-function pushPayloadToBox(cfg: Config, profile: string, e: ResolvedEntry): void {
+/**
+ * Mirror of pullPayloadToClient: push the just-seeded client-side payload up to the
+ * box's own store via ssh, so the box's own `link` (run right after this) does not
+ * point at content that only appears once the sync engine catches up. No-op for "dir"
+ * mode, which has no single payload file.
+ *
+ * Unlike pullPayloadToClient, this cannot just trust the `box` SideState computed
+ * earlier in the loop: for "ssh-include" that state only reflects whether the box's
+ * boxpath already carries the managed Include block, never what its store *payload*
+ * actually holds — a box can read as bare (absent/empty/linked) while its own store
+ * already has real, never-synced-to-this-client content (e.g. a freshly re-imaged
+ * client: `devbox sync up` created `~/devbox/<profile>` but nothing has propagated yet,
+ * and `link` never waits for an active sync session). `computeStoreKind` only checks
+ * the *client's* local copy, which is always accurate (it's a plain local stat) — the
+ * box side has no equivalent, so this function re-checks the box payload itself, over
+ * ssh, right before writing.
+ *
+ * `allowOverwrite: true` (use-client): the decision to prefer the client was already
+ * made deliberately, so an unexpectedly non-empty box payload is renamed aside first —
+ * same no-delete discipline as everywhere else — then overwritten.
+ * `allowOverwrite: false` (seed-empty): overwriting real content with a zero-byte file
+ * is never the right outcome, so this refuses outright and reports instead of guessing.
+ *
+ * Payloads are read/written as utf8 text — correct for the shipped entries (SSH config,
+ * JSON-ish settings files); a binary "file"-mode entry would need Buffer handling here.
+ */
+export type PushConflictAction = "write" | "rename-then-write" | "refuse";
+
+/**
+ * Pure decision for pushPayloadToBox's conflict handling, factored out so it is
+ * directly testable without ssh (the ssh round-trips themselves are not unit-tested —
+ * see pushPayloadToBox's doc comment for the full rationale):
+ *   - no existing box content: always safe to write.
+ *   - existing box content + allowOverwrite (use-client, a deliberate choice already
+ *     made): rename the box's copy aside first, then write.
+ *   - existing box content + !allowOverwrite (seed-empty): refuse outright rather than
+ *     destroy content the planner never saw.
+ */
+export function resolvePushConflict(boxHasContent: boolean, allowOverwrite: boolean): PushConflictAction {
+  if (!boxHasContent) return "write";
+  return allowOverwrite ? "rename-then-write" : "refuse";
+}
+
+function pushPayloadToBox(cfg: Config, profile: string, e: ResolvedEntry, opts: { allowOverwrite: boolean }): void {
   if (e.mode === "dir") return;
   const host = hostFor(cfg, profile);
   const boxPayload = boxPayloadPath(profile, e);
+  const sshRun = (cmd: string, input?: string) =>
+    spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { input, encoding: "utf8" });
+
+  const check = sshRun(`[ -s ${shQuote(boxPayload)} ] && echo yes || echo no`);
+  if (check.error || check.status !== 0) die(`could not check ${e.label}'s box payload on ${host}: ${(check.stderr || check.error?.message || "").trim() || "ssh failed"}`);
+
+  switch (resolvePushConflict(check.stdout.trim() === "yes", opts.allowOverwrite)) {
+    case "refuse":
+      die(
+        `${e.label}: the box already has content at ${boxPayload} that was never seen locally — ` +
+        `refusing to overwrite it with an empty payload. Re-run \`devbox config link\` once the box ` +
+        `side has synced so the decision accounts for it.`,
+      );
+      break; // unreachable — die() never returns — kept for readability
+    case "rename-then-write": {
+      const aside = `${boxPayload}.pre-devbox-${stamp()}`;
+      const rename = sshRun(`mv ${shQuote(boxPayload)} ${shQuote(aside)}`);
+      if (rename.error || rename.status !== 0) die(`could not rename aside ${e.label}'s existing box payload on ${host}: ${(rename.stderr || rename.error?.message || "").trim() || "ssh failed"}`);
+      break;
+    }
+    case "write":
+      break;
+  }
+
   const body = readFileSync(clientPayload(profile, e), "utf8");
-  const cmd = `mkdir -p ${shQuote(dirname(boxPayload))} && cat > ${shQuote(boxPayload)}`;
-  const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { input: body, encoding: "utf8" });
+  const r = sshRun(`mkdir -p ${shQuote(dirname(boxPayload))} && cat > ${shQuote(boxPayload)}`, body);
   if (r.error || r.status !== 0) die(`could not push ${e.label} payload to ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`);
 }
 
@@ -206,12 +268,16 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
           // Mirror of the use-box case: the box's own store does not have this payload
           // yet either, and boxSh(["link", …]) below does not wait for sync to carry it
           // over — push it up now so the box's own link has something real to point at.
-          pushPayloadToBox(cfg, profile, e);
+          // allowOverwrite: the client was already chosen deliberately, so an
+          // unexpectedly non-empty box payload gets renamed aside, not refused.
+          pushPayloadToBox(cfg, profile, e, { allowOverwrite: true });
         }
         break;
       case "seed-empty":
         seedEmpty(profile, e);
-        pushPayloadToBox(cfg, profile, e); // same race as above, just with an empty payload
+        // allowOverwrite: false — pushing a zero-byte payload over content the planner
+        // never saw would be destruction, not a fix; refuse and let the user re-run.
+        pushPayloadToBox(cfg, profile, e, { allowOverwrite: false });
         break;
     }
     linkClient(profile, e);

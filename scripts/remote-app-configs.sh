@@ -168,7 +168,23 @@ case "$cmd" in
       # nothing at $boxpath at all. Check first, and copy-then-swap so a failure never
       # touches the existing link.
       [ -e "$(payload)" ] || { echo "app-configs: $label payload is missing on the box — leaving the link in place" >&2; exit 0; }
-      cp -a "$(payload)" "$boxpath.new" && mv -f "$boxpath.new" "$boxpath"
+      # A leftover .new from a previous crashed run would otherwise make `cp -a` copy
+      # *into* it (cp -a onto an existing directory nests, it doesn't replace).
+      rm -rf "$boxpath.new"
+      if cp -a "$(payload)" "$boxpath.new"; then
+        # For "dir" mode $boxpath is a symlink to a directory: `mv src dst` onto an
+        # existing symlink-to-directory follows the link and moves src *inside* the
+        # target directory instead of replacing it — that both left the link in place
+        # (never actually unlinked) and dropped a stray copy inside the shared store.
+        # `rm -f` on a symlink only ever removes the link entry itself, never what it
+        # points at, for both "file" and "dir" modes — so clear it first, then mv onto
+        # the now-empty path, which is a plain rename either way.
+        rm -f "$boxpath"
+        mv "$boxpath.new" "$boxpath"
+      else
+        rm -rf "$boxpath.new" # never leave a half-copied .new lying around on failure
+        exit 1
+      fi
     fi
     ;;
   ensure) # playbook path: link only when unambiguous, never destroy

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, runConfigUnlink, seedEmpty, seedFromClient, unlinkClient } from "./run";
+import { clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, resolvePushConflict, runConfigStatus, runConfigUnlink, seedEmpty, seedFromClient, unlinkClient } from "./run";
 import type { ResolvedEntry } from "./registry";
 import type { Config } from "../config";
 
@@ -228,6 +228,27 @@ describe("computeStoreKind", () => {
     } finally {
       cleanupProfile(profile);
     }
+  });
+});
+
+describe("resolvePushConflict", () => {
+  // Regression: pushPayloadToBox used to overwrite the box's own store payload
+  // unconditionally — including real content the planner never saw (e.g. a re-imaged
+  // client where the box already carries a synced ssh_config payload that has not
+  // propagated down yet: box reads as bare "linked", storeKind reads "absent" from the
+  // client's own local check alone, decision comes out "seed-empty", and pushing an
+  // empty payload used to erase every shared Host entry with nothing renamed aside).
+  test("no existing box content: always safe to write, regardless of allowOverwrite", () => {
+    expect(resolvePushConflict(false, true)).toBe("write");
+    expect(resolvePushConflict(false, false)).toBe("write");
+  });
+
+  test("existing box content + allowOverwrite (use-client): rename aside, then write", () => {
+    expect(resolvePushConflict(true, true)).toBe("rename-then-write");
+  });
+
+  test("existing box content + !allowOverwrite (seed-empty): refuse outright, never overwrite with an empty payload", () => {
+    expect(resolvePushConflict(true, false)).toBe("refuse");
   });
 });
 
