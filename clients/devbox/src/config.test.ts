@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { profilesFromYaml } from "./config";
 
 /** Make a throwaway claude-devbox checkout with the given all.yml body; return its root. */
@@ -67,5 +67,67 @@ describe("profilesFromYaml", () => {
 
   test("returns null on malformed YAML", () => {
     expect(profilesFromYaml(repoWithYaml(`profiles:\n  - user: x\n   bad: : :\n`))).toBeNull();
+  });
+});
+
+describe("profilesFromYaml — which config file wins", () => {
+  const DEVBOX_YML = [
+    "config_version: 3",
+    "developers:",
+    "  - user: dev-a",
+    "    projects:",
+    '      - name: app',
+    '        repo: "git@github.com:example-org/app.git"',
+    "  - user: dev-b",
+    "    projects: []",
+    "",
+  ].join("\n");
+
+  const LEGACY_YML = [
+    "profiles:",
+    "  - user: legacy-user",
+    "    projects:",
+    "      - name: legacy-app",
+    '        repo: "git@github.com:example-org/legacy.git"',
+    "",
+  ].join("\n");
+
+  const repo = (files: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), "devbox-repo-"));
+    for (const [rel, body] of Object.entries(files)) {
+      const path = join(dir, rel);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+    }
+    return dir;
+  };
+
+  test("devbox.yml is read when present", () => {
+    const out = profilesFromYaml(repo({ "devbox.yml": DEVBOX_YML }));
+    expect(out?.map((p) => p.user)).toEqual(["dev-a", "dev-b"]);
+    expect(out?.[0]!.projects).toEqual([{ name: "app", repo: "git@github.com:example-org/app.git" }]);
+  });
+
+  test("devbox.yml wins over a legacy file that is still lying around", () => {
+    const out = profilesFromYaml(
+      repo({ "devbox.yml": DEVBOX_YML, "ansible/group_vars/all.yml": LEGACY_YML }),
+    );
+    expect(out?.map((p) => p.user)).toEqual(["dev-a", "dev-b"]);
+  });
+
+  test("a checkout that has not been migrated still works", () => {
+    const out = profilesFromYaml(repo({ "ansible/group_vars/all.yml": LEGACY_YML }));
+    expect(out?.map((p) => p.user)).toEqual(["legacy-user"]);
+  });
+
+  test("neither file present yields null so the cache is used", () => {
+    expect(profilesFromYaml(repo({}))).toBeNull();
+  });
+
+  test("a devbox.yml with no developers falls through to the legacy file", () => {
+    const out = profilesFromYaml(
+      repo({ "devbox.yml": "config_version: 3\ndevelopers: []\n", "ansible/group_vars/all.yml": LEGACY_YML }),
+    );
+    expect(out?.map((p) => p.user)).toEqual(["legacy-user"]);
   });
 });
