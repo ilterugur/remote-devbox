@@ -196,7 +196,7 @@ Claude Code / Codex, Hermes Desktop, etc.) share that same memory, wire it in
 box stays the **single source of truth** (never a local daemon/bank).
 
 Read `docs/memory.md` first. Core rule: set `hindsightApiUrl` to the served URL and
-`bankId` to the profile name (e.g. `ilterugur`). With `hindsightApiUrl` set, the
+`bankId` to the profile name (e.g. `dev-a`). With `hindsightApiUrl` set, the
 plugin is external-only and can NEVER fall back to a local store. No LLM key is needed
 client-side (the box does extraction). Confirm the client is on the tailnet and can
 reach the URL (`curl .../health`).

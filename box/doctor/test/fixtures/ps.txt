@@ -1,3 +1,3 @@
 276320 claude remote-control --name Verti --spawn worktree --capacity 32
-279938 /home/ilterugur/.local/share/claude/versions/2.1.181 --print --sdk-url https://api.anthropic.com/v1/code/sessions/cse_01CVdoCPw3jAccG5ffsXHvs3 --session-id cse_01CVdoCPw3jAccG5ffsXHvs3 --input-format stream-json
-289264 /bin/bash -c cd /home/ilterugur/projects/verti-monorepo/.claude/worktrees/bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ/packages/eden && bun run prepare-types
+279938 /home/dev-a/.local/share/claude/versions/2.1.181 --print --sdk-url https://api.anthropic.com/v1/code/sessions/cse_01CVdoCPw3jAccG5ffsXHvs3 --session-id cse_01CVdoCPw3jAccG5ffsXHvs3 --input-format stream-json
+289264 /bin/bash -c cd /home/dev-a/projects/example-monorepo/.claude/worktrees/bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ/packages/eden && bun run prepare-types

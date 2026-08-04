@@ -72,7 +72,7 @@ export function projectEntry(d: Detected): string {
   );
 }
 
-/** Human-friendly title from a repo name: "verti-monorepo" → "Verti Monorepo". */
+/** Human-friendly title from a repo name: "example-monorepo" → "Example Monorepo". */
 export function titleize(name: string): string {
   return name
     .split(/[-_]+/)

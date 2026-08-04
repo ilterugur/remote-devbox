@@ -32,7 +32,7 @@ test("classifySession: no pid => dead", () => {
 
 test("isWorktreeProtected: another live process referencing the path protects it", () => {
   const wtPath =
-    "/home/ilterugur/projects/verti-monorepo/.claude/worktrees/bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ";
+    "/home/dev-a/projects/example-monorepo/.claude/worktrees/bridge-cse_01XYmhZXmWvZ8hXg9nj2dQXZ";
   const procs: ProcRef[] = [
     {
       pid: 289264,
@@ -43,7 +43,7 @@ test("isWorktreeProtected: another live process referencing the path protects it
 });
 
 test("isWorktreeProtected: no process references the path => not protected", () => {
-  const wtPath = "/home/ilterugur/projects/verti-monorepo/.claude/worktrees/bridge-cse_dead";
+  const wtPath = "/home/dev-a/projects/example-monorepo/.claude/worktrees/bridge-cse_dead";
   const procs: ProcRef[] = [
     { pid: 1, cmd: "/sbin/init" },
     { pid: 279938, cmd: "claude --print --session-id cse_other" },
@@ -60,7 +60,7 @@ test("classifySession: activity in the middle band (between window and idle) => 
 });
 
 test("isWorktreeProtected: a trailing slash on the worktree path still matches", () => {
-  const wt = "/home/ilterugur/projects/x/.claude/worktrees/bridge-cse_z";
+  const wt = "/home/dev-a/projects/x/.claude/worktrees/bridge-cse_z";
   const procs: ProcRef[] = [{ pid: 5, cmd: `bun build --cwd ${wt}/src` }];
   expect(isWorktreeProtected(wt + "/", procs)).toBe(true);
 });

@@ -26,7 +26,7 @@ function LiftListenerCap() {
   return null;
 }
 
-/** Subsequence fuzzy match (e.g. "isc" matches "insurchat"). */
+/** Subsequence fuzzy match (e.g. "isc" matches "example-app"). */
 function fuzzy(label: string, query: string): boolean {
   const s = label.toLowerCase();
   const q = query.toLowerCase();

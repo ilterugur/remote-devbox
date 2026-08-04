@@ -17,14 +17,14 @@ describe("profilesFromYaml", () => {
   test("maps profiles, projects, and the snake_case profile options to camelCase", () => {
     const repo = repoWithYaml(
       `profiles:\n` +
-        `  - user: ilterugur\n` +
+        `  - user: dev-a\n` +
         `    git_name: "U"\n` +
         `    projects:\n` +
-        `      - name: insurchat\n` +
-        `        repo: "git@github.com:InsurUp/insurchat.git"\n` +
+        `      - name: example-app\n` +
+        `        repo: "git@github.com:example-org/example-app.git"\n` +
         `        branch: main\n` +
-        `      - name: verti-monorepo\n` +
-        `        repo: "git@github.com:vertiplatform/verti-monorepo.git"\n` +
+        `      - name: example-monorepo\n` +
+        `        repo: "git@github.com:example-org/example-monorepo.git"\n` +
         `        branch: feat/agent-skills\n` +
         `    lazy_mounts:\n` +
         `      - { label: desktop, path: ~/Desktop }\n` +
@@ -36,9 +36,9 @@ describe("profilesFromYaml", () => {
     expect(profs).not.toBeNull();
     expect(profs!.length).toBe(1);
     const p = profs![0];
-    expect(p.user).toBe("ilterugur");
-    expect(p.projects.map((pr) => pr.name)).toEqual(["insurchat", "verti-monorepo"]);
-    expect(p.projects[1].repo).toBe("git@github.com:vertiplatform/verti-monorepo.git");
+    expect(p.user).toBe("dev-a");
+    expect(p.projects.map((pr) => pr.name)).toEqual(["example-app", "example-monorepo"]);
+    expect(p.projects[1].repo).toBe("git@github.com:example-org/example-monorepo.git");
     expect(p.lazyMounts).toEqual([{ label: "desktop", path: "~/Desktop" }]);
     expect(p.syncEngine).toBe("syncthing");
     expect(p.syncDisk).toBe(true);

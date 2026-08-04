@@ -6,7 +6,7 @@ import { encodeCwd } from "./config";
 import { applyMappings, backupLocal, buildMappings, rewriteJsonl } from "./transcript";
 
 describe("buildMappings", () => {
-  const src = "/Users/alnzy/Documents/Projects/ilterugur/claude-devbox";
+  const src = "/Users/alnzy/Documents/Projects/dev-a/claude-devbox";
   const remote = "/home/devbox/projects/claude-devbox";
 
   test("includes the project root and its dash-encoded variant, longest-first", () => {
@@ -37,7 +37,7 @@ describe("buildMappings", () => {
 });
 
 describe("applyMappings / rewriteJsonl", () => {
-  const src = "/Users/alnzy/Documents/Projects/ilterugur/claude-devbox";
+  const src = "/Users/alnzy/Documents/Projects/dev-a/claude-devbox";
   const remote = "/home/devbox/projects/claude-devbox";
 
   test("push: rewrites cwd + dash-encoded reference, keeps valid JSON", () => {

@@ -24,7 +24,7 @@ export interface OomEvent {
 }
 
 export interface RcUnit {
-  unit: string; // e.g. "claude-rc-ilterugur-verti-monorepo.service"
+  unit: string; // e.g. "claude-rc-dev-a-example-monorepo.service"
   loaded: boolean;
   active: string; // "active" | "failed" | "inactive" | ...
   sub: string; // "exited" | "failed" | "running" | ...

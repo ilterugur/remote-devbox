@@ -107,7 +107,7 @@ Each profile gets **one profile-wide memory bank** (the `bankId` is the profile'
 Linux username). It's intentionally not per-project: Hindsight is meant as a
 personal-assistant layer that accumulates continuity across all your projects over
 time, not an isolated per-conversation scratchpad. This mirrors how Verti
-(verti-monorepo) uses Hindsight — a single user-scoped bank with tag-based
+(example-monorepo) uses Hindsight — a single user-scoped bank with tag-based
 filtering rather than per-project silos.
 
 Every retained memory is auto-tagged:
