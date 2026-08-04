@@ -116,3 +116,17 @@
     enabled: true
     state: started
   when: devbox_host.zram.enabled
+
+# Heavy build heaps should stay RESIDENT rather than be paged eagerly into zram — zram
+# lives in RAM, so swapping into it double-counts against memory and brings the host
+# OOM-killer closer instead of further away. Left alone unless asked for, because the
+# kernel default is right for a machine that is not mostly compiling.
+- name: Tune vm.swappiness
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "{{ devbox_host.swappiness }}"
+    sysctl_file: /etc/sysctl.d/60-remote-devbox.conf
+    sysctl_set: true
+    state: present
+    reload: true
+  when: devbox_host.swappiness is not none

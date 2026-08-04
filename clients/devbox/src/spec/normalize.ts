@@ -56,6 +56,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       harden_ssh: resolved.host?.harden_ssh ?? true,
       hide_pids: resolved.host?.hide_pids ?? true,
       umask: resolved.host?.umask ?? "077",
+      swappiness: resolved.host?.swappiness ?? null,
     },
     devbox_operator: {
       user: resolved.operator.user,

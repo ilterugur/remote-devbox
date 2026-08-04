@@ -40,6 +40,8 @@ export interface HostSpec {
   harden_ssh?: boolean;
   hide_pids?: boolean;
   umask?: string;
+  /** Left at the kernel default when unset. */
+  swappiness?: number;
 }
 
 export interface NetworkSpec {
