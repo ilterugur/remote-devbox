@@ -4,9 +4,10 @@
  * Detects the project (origin remote → canonical SSH url, branch, name), targets a
  * profile, and either PREVIEWS the YAML snippets + the playbook command (default, and
  * whenever DEVBOX_DRYRUN is set) or — with --write — does a comment-preserving textual
- * insert into ansible/group_vars/all.yml under that profile's `projects:` AND (by
- * default) an always-on Remote Control server under its `servers:` (pass --no-server
- * to skip). The servers: block is created if the profile doesn't have one yet.
+ * insert into the repo's config under that developer's `projects:`. The canonical
+ * `devbox.yml` is preferred; `ansible/group_vars/all.yml` is only used on a checkout
+ * that has not been migrated yet. Always-on Remote Control servers exist only in the
+ * legacy layout, so on devbox.yml no `servers:` entry is written.
  *
  * It NEVER runs the playbook: that has remote side effects and needs the operator /
  * Tailscale secrets, which aren't present on every client. The `/<prefix>-add-project`
@@ -113,7 +114,7 @@ function findProfile(lines: string[], user: string): { start: number; end: numbe
       break;
     }
   }
-  if (start < 0) die(`profile "${user}" not found in group_vars/all.yml`);
+  if (start < 0) die(`developer "${user}" not found in the config`);
 
   let end = lines.length;
   for (let j = start + 1; j < lines.length; j++) {
@@ -146,7 +147,9 @@ function listEnd(lines: string[], keyLine: number, end: number, keyIndent: numbe
 }
 
 /**
- * Insert `snippet` at the end of `user`'s `projects:` list in an all.yml `content`,
+ * Insert `snippet` at the end of `user`'s `projects:` list. The `- user:` /
+ * `projects:` shape is identical in devbox.yml and the legacy group_vars file, so one
+ * implementation serves both.
  * preserving every other line (comments included). Refuses (via die) if the profile
  * or its projects: block is missing, or a project of `name` already exists there.
  * Pure: returns the new content, touches no files.
@@ -157,7 +160,7 @@ export function addProjectToYaml(content: string, user: string, snippet: string,
   const keyIndent = userIndent + 2;
 
   const pj = findKeyLine(lines, start, end, keyIndent, "projects");
-  if (pj < 0) die(`profile "${user}" has no projects: block in group_vars/all.yml`);
+  if (pj < 0) die(`developer "${user}" has no projects: block in the config`);
   const pend = listEnd(lines, pj, end, keyIndent);
 
   for (let j = pj + 1; j < pend; j++) {
@@ -213,11 +216,24 @@ export type AddOpts = {
   capacity?: number;
 };
 
+/**
+ * Which config file owns the developer list. devbox.yml is the source of truth; the
+ * legacy group_vars file is a fallback so a checkout mid-migration still works.
+ * `servers` is false for the canonical layout — always-on RC servers are not part of it.
+ */
+export function targetConfig(repoPath: string): { path: string; canonical: boolean } {
+  const canonical = join(repoPath, "devbox.yml");
+  if (existsSync(canonical)) return { path: canonical, canonical: true };
+  return { path: join(repoPath, "ansible", "group_vars", "all.yml"), canonical: false };
+}
+
 /** CLI entrypoint for `devbox add`. Preview unless --write (and never on DEVBOX_DRYRUN). */
 export function runAdd(cfg: Config, opts: AddOpts) {
   const prof = resolveProfile(cfg, opts.profile);
   const d = detectProject(opts);
-  const wantServer = opts.server !== false;
+  const target = cfg.repoPath ? targetConfig(cfg.repoPath) : null;
+  // No servers: block to write into on the canonical layout, so don't pretend otherwise.
+  const wantServer = opts.server !== false && target?.canonical !== true;
   const projSnippet = projectEntry(d);
   const srvSnippet = wantServer
     ? serverEntry(d.name, { name: opts.serverName, spawn: opts.spawn, capacity: opts.capacity })
@@ -225,29 +241,37 @@ export function runAdd(cfg: Config, opts: AddOpts) {
   const repoForCmd = cfg.repoPath ?? "<claude-devbox-repo>";
   // `remote` brings the new always-on RC server online; drop it when --no-server.
   const tags = wantServer ? "projects,remote" : "projects";
-  const playbookCmd = `cd ${repoForCmd}/ansible && ansible-playbook -i inventory.ini playbook.yml --tags ${tags}`;
+  // On the canonical layout the CLI applies it; the legacy one still needs raw ansible
+  // because `devbox apply` regenerates vars from devbox.yml, which does not exist there.
+  const playbookCmd = target?.canonical
+    ? `devbox apply projects`
+    : `cd ${repoForCmd}/ansible && ansible-playbook -i inventory.ini playbook.yml --tags ${tags}`;
 
   const preview = !opts.write || !!process.env.DEVBOX_DRYRUN;
   if (preview) {
-    const target = cfg.repoPath
-      ? join(cfg.repoPath, "ansible", "group_vars", "all.yml")
-      : "ansible/group_vars/all.yml  (repoPath not set — `--write` will fail until you re-run gen-editor-config.py --cli)";
+    const where =
+      target?.path ??
+      "devbox.yml  (repoPath not set — `--write` will fail until you re-run gen-editor-config.py --cli)";
     const serverBlock = wantServer
       ? `\nand an always-on Remote Control server under its servers:\n\n${srvSnippet}\n`
-      : "\n(--no-server: no Remote Control server will be added)\n";
+      : target?.canonical
+        ? "\n(devbox.yml has no servers: block — declare always-on agents separately)\n"
+        : "\n(--no-server: no Remote Control server will be added)\n";
     process.stdout.write(
       `Add project '${d.name}' to profile '${prof}'.\n\n` +
-        `Would insert under that profile's projects: in\n  ${target}\n\n${projSnippet}` +
+        `Would insert under that developer's projects: in\n  ${where}\n\n${projSnippet}` +
         `${serverBlock}\n` +
         `Then apply on the box:\n  ${playbookCmd}\n`,
     );
     return;
   }
 
-  // --write: edit all.yml in place. Still does NOT run the playbook.
-  if (!cfg.repoPath) die("config has no repoPath — re-run `gen-editor-config.py --cli` to record the repo location");
-  const ymlPath = join(cfg.repoPath, "ansible", "group_vars", "all.yml");
-  if (!existsSync(ymlPath)) die(`group_vars not found at ${ymlPath}`);
+  // --write: edit the config in place. Still does NOT run the playbook.
+  if (!cfg.repoPath || !target) {
+    die("config has no repoPath — re-run `gen-editor-config.py --cli` to record the repo location");
+  }
+  const ymlPath = target.path;
+  if (!existsSync(ymlPath)) die(`no devbox.yml or group_vars/all.yml under ${cfg.repoPath}`);
   let after = addProjectToYaml(readFileSync(ymlPath, "utf8"), prof, projSnippet, d.name);
   if (wantServer) after = addServerToYaml(after, prof, srvSnippet, d.name);
   writeFileSync(ymlPath, after);

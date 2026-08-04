@@ -44,11 +44,11 @@ import { describePhases, tagsFor } from "./spec/phases";
 function newHelp(prof: string) {
   const lines = [
     "",
-    `  Add a new project to profile '${prof}' (edit the claude-devbox repo, re-run the playbook):`,
-    `    1) ansible/group_vars/all.yml — add under that profile's projects:`,
+    `  Add a new project to developer '${prof}' (edit devbox.yml, then apply):`,
+    `    1) devbox.yml — add under that developer's projects:`,
     `         - { name: myproj, repo: "git@github.com:org/myproj.git", branch: main }`,
-    `    2) cd ansible && ansible-playbook -i inventory.ini playbook.yml --tags projects`,
-    `    3) private repo? add the profile's SSH key to GitHub, then re-run.`,
+    `    2) devbox apply projects`,
+    `    3) private repo? register that git identity's SSH key on GitHub, then re-run.`,
     `    Then:  devbox myproj`,
     "",
   ];

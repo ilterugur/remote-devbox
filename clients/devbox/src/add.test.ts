@@ -1,9 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { addProjectToYaml, addServerToYaml, detectProject, projectEntry, serverEntry, titleize, toSshUrl } from "./add";
+import {
+  addProjectToYaml,
+  addServerToYaml,
+  detectProject,
+  projectEntry,
+  serverEntry,
+  targetConfig,
+  titleize,
+  toSshUrl,
+} from "./add";
 
 /** Make a throwaway git repo with an origin remote; optionally drop a package.json. */
 function makeRepo(withPackageJson: boolean): string {
@@ -205,5 +214,35 @@ describe("addServerToYaml", () => {
 
   test("refuses an unknown profile", () => {
     expect(() => addServerToYaml(YML, "nope", srv, "myproj")).toThrow(/not found/);
+  });
+});
+
+describe("targetConfig", () => {
+  const repo = (files: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "devbox-target-"));
+    for (const rel of files) {
+      const path = join(dir, rel);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "");
+    }
+    return dir;
+  };
+
+  test("devbox.yml is the canonical target", () => {
+    const dir = repo(["devbox.yml"]);
+    expect(targetConfig(dir)).toEqual({ path: join(dir, "devbox.yml"), canonical: true });
+  });
+
+  test("devbox.yml wins even when a legacy file is still present", () => {
+    const dir = repo(["devbox.yml", "ansible/group_vars/all.yml"]);
+    expect(targetConfig(dir).canonical).toBe(true);
+  });
+
+  test("a checkout without devbox.yml falls back to group_vars, marked non-canonical", () => {
+    const dir = repo(["ansible/group_vars/all.yml"]);
+    expect(targetConfig(dir)).toEqual({
+      path: join(dir, "ansible", "group_vars", "all.yml"),
+      canonical: false,
+    });
   });
 });

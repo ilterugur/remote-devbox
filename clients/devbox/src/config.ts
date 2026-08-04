@@ -60,13 +60,49 @@ export function loadConfig(): Config {
 }
 
 /**
- * Read profiles/projects live from `<repoPath>/ansible/group_vars/all.yml`, mapping
- * the Ansible snake_case keys to the CLI's camelCase shape. MUST mirror the mapping in
- * gen-editor-config.py's write_cli_config (the cache it writes to config.json), so the
- * live read and the fallback cache behave identically. Returns null on any problem
- * (missing file, parse error, no/invalid profiles) so callers fall back to the cache.
+ * Read the developer list live from the repo checkout, so a change to the config shows
+ * up without regenerating anything.
+ *
+ * Two shapes are accepted, canonical first: `devbox.yml` (developers) is the source of
+ * truth, and `ansible/group_vars/all.yml` (profiles) is the legacy layout kept readable
+ * for boxes that have not been migrated yet. Returns null on any problem so callers fall
+ * back to the cache written into config.json.
+ *
+ * The CLI's own vocabulary stays "profile": it means "the account you connect as", which
+ * is exactly a developer. Only the file it reads changed.
  */
 export function profilesFromYaml(repoPath: string): Profile[] | null {
+  return developersFromDevboxYaml(repoPath) ?? profilesFromLegacyYaml(repoPath);
+}
+
+/** Canonical layout: `<repoPath>/devbox.yml`, `developers:`. */
+function developersFromDevboxYaml(repoPath: string): Profile[] | null {
+  try {
+    const doc = Bun.YAML.parse(readFileSync(join(repoPath, "devbox.yml"), "utf8")) as any;
+    const devs = doc?.developers;
+    if (!Array.isArray(devs) || devs.length === 0) return null;
+    const out: Profile[] = [];
+    for (const d of devs) {
+      if (!d?.user) return null; // malformed — prefer the cache over a partial list
+      out.push({
+        user: String(d.user),
+        projects: Array.isArray(d.projects)
+          ? d.projects.map((pr: any) => ({ name: String(pr.name), repo: pr.repo ? String(pr.repo) : "" }))
+          : [],
+      });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Legacy layout: `<repoPath>/ansible/group_vars/all.yml`, `profiles:`. Mirrors the
+ * mapping in gen-editor-config.py's write_cli_config so the live read and the fallback
+ * cache behave identically.
+ */
+function profilesFromLegacyYaml(repoPath: string): Profile[] | null {
   try {
     const path = join(repoPath, "ansible", "group_vars", "all.yml");
     const doc = Bun.YAML.parse(readFileSync(path, "utf8")) as any;
@@ -74,7 +110,7 @@ export function profilesFromYaml(repoPath: string): Profile[] | null {
     if (!Array.isArray(profs) || profs.length === 0) return null;
     const out: Profile[] = [];
     for (const p of profs) {
-      if (!p?.user) return null; // malformed — prefer the cache over a partial list
+      if (!p?.user) return null;
       const profile: Profile = {
         user: String(p.user),
         projects: Array.isArray(p.projects)
