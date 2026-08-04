@@ -12,17 +12,15 @@ import {
   type DevboxSpec,
   type EngineId,
   SUPPORTED_PLATFORM,
-  type SshExposure,
+  type SshAccess,
 } from "./types";
 
 export const USERNAME_RE = /^[a-z_][a-z0-9_-]*$/;
 const PROJECT_NAME_RE = /^[A-Za-z0-9._-]+$/;
+/** XKB layout/variant/model names: lowercase, no spaces — `tr`, `f`, `intl`, `pc105`. */
+const XKB_NAME_RE = /^[a-z0-9_+-]+$/;
 const ENGINES: readonly string[] = ["podman-rootless", "docker-rootless", "none"] satisfies EngineId[];
-const EXPOSURES: readonly string[] = [
-  "public_and_tailscale",
-  "tailscale_only",
-  "public_only",
-] satisfies SshExposure[];
+const SSH_ACCESS: readonly string[] = ["public", "tailnet"] satisfies SshAccess[];
 const PROVIDERS: readonly string[] = ["claude", "codex"];
 const DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];
 const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -182,15 +180,44 @@ function validateNetwork(raw: Record<string, unknown>, issues: Issue[]): void {
     issues.push(err("network.tailscale.enabled", "must be true or false"));
   }
   const ssh = isRecord(n.ssh) ? n.ssh : null;
-  const exposure = ssh?.exposure;
-  if (typeof exposure !== "string" || !EXPOSURES.includes(exposure)) {
-    issues.push(err("network.ssh.exposure", `must be one of: ${EXPOSURES.join(", ")}`));
+  if (ssh?.exposure !== undefined) {
+    issues.push(
+      err(
+        "network.ssh.exposure",
+        "replaced by 'access' — public_and_tailscale becomes [public, tailnet], tailscale_only becomes [tailnet], public_only becomes [public]",
+      ),
+    );
+  }
+  validateAccessList(ssh?.access, "network.ssh.access", SSH_ACCESS, issues);
+  if (Array.isArray(ssh?.access) && ssh.access.length && !ssh.access.includes("public") && ts?.enabled === false) {
+    issues.push(
+      err("network.ssh.access", "a tailnet-only sshd needs network.tailscale.enabled: true"),
+    );
+  }
+}
+
+/**
+ * Shared shape check for the access lists: non-empty, known values, no repeats. The
+ * per-value consequences (does this path exist? is it dangerous?) belong to the caller.
+ */
+function validateAccessList(
+  access: unknown,
+  path: string,
+  allowed: readonly string[],
+  issues: Issue[],
+): void {
+  if (access === undefined) return;
+  if (!Array.isArray(access) || access.length === 0) {
+    issues.push(err(path, `must be a non-empty list of: ${allowed.join(", ")}`));
     return;
   }
-  if (exposure === "tailscale_only" && ts?.enabled === false) {
-    issues.push(
-      err("network.ssh.exposure", "tailscale_only requires network.tailscale.enabled: true"),
-    );
+  const unknown = access.filter((a) => !allowed.includes(String(a)));
+  if (unknown.length) {
+    issues.push(err(path, `unknown value(s) ${unknown.join(", ")} (have: ${allowed.join(", ")})`));
+    return;
+  }
+  if (new Set(access.map(String)).size !== access.length) {
+    issues.push(err(path, "lists the same access path twice"));
   }
 }
 
@@ -428,25 +455,38 @@ function validateDesktop(d: unknown, base: string, issues: Issue[]): void {
   if (idle !== undefined && !(typeof idle === "number" && Number.isInteger(idle) && idle > 0)) {
     issues.push(err(`${base}.idle_logout_minutes`, "must be a positive integer"));
   }
+  validateKeyboard(d.keyboard, `${base}.keyboard`, issues);
+}
+
+/**
+ * The fields go to `setxkbmap` unquoted, so they are checked against XKB's own naming
+ * rather than merely "is a string" — a layout with a space in it would otherwise become
+ * two arguments on the box and fail there instead of here.
+ */
+function validateKeyboard(k: unknown, base: string, issues: Issue[]): void {
+  if (k === undefined) return;
+  if (!isRecord(k)) {
+    issues.push(err(base, "must be a mapping"));
+    return;
+  }
+  if (typeof k.layout !== "string" || !XKB_NAME_RE.test(k.layout)) {
+    issues.push(err(`${base}.layout`, `'${String(k.layout)}' must be an XKB layout such as 'tr' or 'us'`));
+  }
+  if (k.variant !== undefined && (typeof k.variant !== "string" || !XKB_NAME_RE.test(k.variant))) {
+    issues.push(err(`${base}.variant`, `'${String(k.variant)}' must be an XKB variant such as 'f' or 'intl'`));
+  }
+  if (k.model !== undefined && (typeof k.model !== "string" || !XKB_NAME_RE.test(k.model))) {
+    issues.push(err(`${base}.model`, `'${String(k.model)}' must be an XKB model such as 'pc105'`));
+  }
 }
 
 function validateDesktopAccess(access: unknown, base: string, issues: Issue[]): void {
-  if (access === undefined) return;
-  if (!Array.isArray(access) || access.length === 0) {
-    issues.push(err(base, `must be a non-empty list of: ${DESKTOP_ACCESS.join(", ")}`));
-    return;
-  }
-  const unknown = access.filter((a) => !DESKTOP_ACCESS.includes(String(a)));
-  if (unknown.length) {
-    issues.push(err(base, `unknown value(s) ${unknown.join(", ")} (have: ${DESKTOP_ACCESS.join(", ")})`));
-    return;
-  }
-  const seen = new Set(access.map(String));
-  if (seen.size !== access.length) {
-    issues.push(err(base, "lists the same access path twice"));
-  }
+  const before = issues.length;
+  validateAccessList(access, base, DESKTOP_ACCESS, issues);
+  if (issues.length !== before || !Array.isArray(access)) return;
   // Binding the wildcard alongside a specific address on the same port does not work,
   // so this is an error rather than a redundancy warning: xrdp would fail to start.
+  const seen = new Set(access.map(String));
   if (seen.has("unsafe-public") && seen.size > 1) {
     issues.push(
       err(base, "'unsafe-public' already listens on every interface — it cannot be combined with tunnel or tailnet"),

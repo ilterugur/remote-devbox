@@ -1,0 +1,8 @@
+# Managed by Ansible (remote-devbox).
+{% if item.desktop.keyboard %}
+# The layout is set here rather than left to the RDP client. xrdp ships keymap files for
+# a fixed set of RDP layout ids and falls back to us for the rest — Turkish is one of the
+# missing ones — so a client whose layout xrdp doesn't know types on us with no error.
+setxkbmap -model {{ item.desktop.keyboard.model }} -layout {{ item.desktop.keyboard.layout }}{% if item.desktop.keyboard.variant %} -variant {{ item.desktop.keyboard.variant }}{% endif %} || true
+{% endif %}
+exec startxfce4

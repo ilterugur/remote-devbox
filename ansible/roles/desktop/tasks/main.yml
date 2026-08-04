@@ -10,6 +10,9 @@
 - name: Work out which developers asked for a desktop
   ansible.builtin.set_fact:
     _devbox_desktop_users: "{{ devbox_developers | selectattr('desktop.enabled') | list }}"
+    # sesman gates RDP on one group name, so the "who may open a session" list has to
+    # exist as a real group on the box rather than as a list in a config file.
+    _devbox_desktop_group: devbox-rdp
 
 # xrdp is one host-level service, so its listen set is the union across everyone who
 # asked for a desktop — not a per-developer choice.
@@ -30,15 +33,45 @@
     update_cache: true
   when: _devbox_desktop_users | length > 0
 
-- name: Start each session in XFCE
-  ansible.builtin.copy:
+- name: Create the group that gates RDP
+  ansible.builtin.group:
+    name: "{{ _devbox_desktop_group }}"
+    state: present
+  when: _devbox_desktop_users | length > 0
+
+- name: Let the desktop developers open an RDP session
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: "{{ _devbox_desktop_group }}"
+    append: true
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Read who is currently in the RDP group
+  ansible.builtin.getent:
+    database: group
+    key: "{{ _devbox_desktop_group }}"
+  when: _devbox_desktop_users | length > 0
+
+# A gate that only ever adds is not a gate: turning desktop.enabled off would otherwise
+# leave the account able to open a session until somebody noticed.
+- name: Take RDP away from developers who no longer ask for a desktop
+  ansible.builtin.command:
+    cmd: "gpasswd --delete {{ item }} {{ _devbox_desktop_group }}"
+  loop: >-
+    {{ (ansible_facts.getent_group[_devbox_desktop_group][2] | default('')).split(',')
+       | select | difference(_devbox_desktop_users | map(attribute='user') | list) }}
+  changed_when: true
+  when: _devbox_desktop_users | length > 0
+
+- name: Start each session in XFCE, on the developer's keyboard
+  ansible.builtin.template:
+    src: xsession.j2
     dest: "/home/{{ item.user }}/.xsession"
     owner: "{{ item.user }}"
     group: "{{ item.user }}"
     mode: "0700"
-    content: |
-      # Managed by Ansible (remote-devbox).
-      exec startxfce4
   loop: "{{ _devbox_desktop_users }}"
   loop_control:
     label: "{{ item.user }}"

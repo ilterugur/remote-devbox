@@ -76,7 +76,9 @@ export function validateReferences(spec: DevboxSpec): Issue[] {
 
     // Cross-section, so it belongs here rather than in the structural pass: whether
     // "tailnet" is reachable depends on network.tailscale, not on the desktop block.
-    const access = dev.desktop?.access ?? ["tunnel"];
+    // Only an explicit ask can conflict: the default already omits tailnet when there
+    // is no tailnet, so "I just want a desktop" never trips this.
+    const access = dev.desktop?.access ?? [];
     if (dev.desktop?.enabled && access.includes("tailnet") && !spec.network.tailscale.enabled) {
       issues.push(
         err(

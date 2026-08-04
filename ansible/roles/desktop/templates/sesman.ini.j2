@@ -9,8 +9,11 @@ DefaultWindowManager=startwm.sh
 [Security]
 AllowRootLogin=false
 MaxLoginRetry=4
-; Only the developers that asked for a desktop may open an RDP session.
-TerminalServerUsers={{ _devbox_desktop_users | map(attribute='user') | join(',') }}
+; Only the developers that asked for a desktop may open an RDP session. This names ONE
+; GROUP, not a user list — sesman looks the value up with getgrnam and, when it doesn't
+; resolve, logs "group ... doesn't exist" and lets EVERYONE in. A list of usernames
+; therefore reads as a restriction while being none at all.
+TerminalServerUsers={{ _devbox_desktop_group }}
 TerminalServerAdmins=
 
 [Sessions]
@@ -26,3 +29,40 @@ Policy=Default
 [Logging]
 LogFile=/var/log/xrdp-sesman.log
 LogLevel=INFO
+
+; This file REPLACES the one xrdp ships, so everything sesman needs has to be here. The
+; X server command is the part that bites: with no [Xorg] section sesman starts a session
+; with an empty command, logs "Starting X server on display 10:" with nothing after the
+; colon, and fails with "X server could not be started" — which reads like a broken Xorg
+; rather than a config this file left out.
+[Xorg]
+; The non-suid binary on purpose: /usr/bin/Xorg goes through Xorg.wrap, which refuses
+; anyone who isn't a console user, and an RDP session never is one.
+param=/usr/lib/xorg/Xorg
+param=-config
+param=xrdp/xorg.conf
+param=-noreset
+param=-nolisten
+param=tcp
+param=-logfile
+param=.xorgxrdp.%s.log
+
+[Xvnc]
+param=Xvnc
+param=-bs
+param=-nolisten
+param=tcp
+param=-localhost
+param=-dpi
+param=96
+
+[Chansrv]
+FuseMountName=thinclient_drives
+; Clipboard and drive redirection both cross the boundary between the box and the
+; client, so they stay at xrdp's own defaults rather than being widened here.
+EnableFuseMount=true
+RestrictOutboundClipboard=none
+RestrictInboundClipboard=none
+
+[SessionVariables]
+PULSE_SCRIPT=/etc/xrdp/pulse/default.pa

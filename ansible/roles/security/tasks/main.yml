@@ -57,7 +57,7 @@
   community.general.ufw:
     rule: allow
     name: OpenSSH
-  when: devbox_network.ssh.exposure in ['public_and_tailscale', 'public_only']
+  when: "'public' in devbox_network.ssh.access"
 
 # Removing the any-interface rule is the one firewall change that can strand you, so it
 # only happens once the tailnet interface is actually up.
@@ -65,16 +65,16 @@
   ansible.builtin.assert:
     that: "'tailscale0' in ansible_facts.interfaces"
     fail_msg: >-
-      network.ssh.exposure is tailscale_only but this host has no tailscale0 interface.
-      Bring Tailscale up first, or set exposure to public_and_tailscale.
-  when: devbox_network.ssh.exposure == 'tailscale_only'
+      network.ssh.access omits 'public' but this host has no tailscale0 interface —
+      applying that would strand you. Bring Tailscale up first, or add 'public' back.
+  when: "'public' not in devbox_network.ssh.access"
 
-- name: Restrict SSH to the tailnet interface only
+- name: Remove the any-interface SSH rule when only the tailnet is wanted
   community.general.ufw:
     rule: allow
     name: OpenSSH
     delete: true
-  when: devbox_network.ssh.exposure == 'tailscale_only'
+  when: "'public' not in devbox_network.ssh.access"
 
 - name: Allow SSH over the tailnet
   community.general.ufw:
@@ -85,7 +85,7 @@
     direction: in
   when:
     - devbox_network.tailscale.enabled | bool
-    - devbox_network.ssh.exposure in ['public_and_tailscale', 'tailscale_only']
+    - "'tailnet' in devbox_network.ssh.access"
 
 - name: Default deny incoming
   community.general.ufw:

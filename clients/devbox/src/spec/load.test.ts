@@ -30,7 +30,7 @@ test("a reference error stops the pipeline before resolution", () => {
     write(`config_version: 3
 platform: {distribution: ubuntu, version: "26.04", architecture: amd64}
 operator: {user: devbox-admin, ssh_authorized_keys: ["ssh-ed25519 AAAA k@c"]}
-network: {tailscale: {enabled: true}, ssh: {exposure: public_and_tailscale}}
+network: {tailscale: {enabled: true}, ssh: {access: [public, tailnet]}}
 container: {default_engine: podman-rootless, install_engines: [podman-rootless]}
 developers:
   - user: dev-a

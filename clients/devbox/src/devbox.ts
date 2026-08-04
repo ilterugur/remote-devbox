@@ -38,6 +38,7 @@ import { formatIssues, hasErrors } from "./spec/issues";
 import { loadSpec, secretsPathFor, writeGeneratedVars } from "./spec/load";
 import { describeSecrets, loadSecrets, validateSecretRefs, writeGeneratedSecrets } from "./spec/secrets";
 import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
+import { detectClientKeyboard } from "./keyboard";
 import { renderPlan } from "./spec/plan";
 import { describePhases, tagsFor } from "./spec/phases";
 
@@ -269,11 +270,12 @@ cli
       process.stderr.write("devbox: plan failed — fix the errors above\n");
       process.exit(1);
     }
-    console.log(renderPlan(spec.resolved, issues, describeSecrets(secrets)));
+    const client = { keyboard: detectClientKeyboard() };
+    console.log(renderPlan(spec.resolved, issues, describeSecrets(secrets), client));
     if (opts.writeVars) {
       // The repo root is the directory holding devbox.yml; ansible/ lives beside it.
       const root = dirname(path);
-      console.log(`\nwrote ${writeGeneratedVars(spec.resolved, root)}`);
+      console.log(`\nwrote ${writeGeneratedVars(spec.resolved, root, client)}`);
       console.log(`wrote ${writeGeneratedSecrets(secrets, root)}`);
     }
     if (hasErrors(issues)) process.exit(1);
@@ -332,7 +334,7 @@ cli
     if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
     if (!spec.resolved || hasErrors(issues)) die("apply refused — fix the errors above");
 
-    writeGeneratedVars(spec.resolved, root);
+    writeGeneratedVars(spec.resolved, root, { keyboard: detectClientKeyboard() });
     writeGeneratedSecrets(secrets, root);
 
     let tags: string[] | null;

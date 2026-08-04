@@ -13,6 +13,8 @@
  */
 import { type Issue, err, hasErrors } from "./issues";
 import type {
+  DesktopAccess,
+  SshAccess,
   DeveloperSpec,
   DevboxSpec,
   EngineId,
@@ -21,6 +23,22 @@ import type {
   ResolvedProject,
   ResolvedSpec,
 } from "./types";
+
+/**
+ * Every private path that exists, and nothing that does not. Defaulting to a list that
+ * names the tailnet on a box without Tailscale would turn "I just want a desktop" into a
+ * validation error; asking for it explicitly still does, which is the useful half.
+ */
+export const defaultDesktopAccess = (tailscaleEnabled: boolean): DesktopAccess[] =>
+  tailscaleEnabled ? ["tunnel", "tailnet"] : ["tunnel"];
+
+/**
+ * SSH keeps a public path by default on purpose: losing Tailscale must not lock you out
+ * of the box. That asymmetry with the desktop — which has no such recovery role — is the
+ * whole reason these are two separate settings.
+ */
+export const defaultSshAccess = (tailscaleEnabled: boolean): SshAccess[] =>
+  tailscaleEnabled ? ["public", "tailnet"] : ["public"];
 
 interface Choice {
   value: string | null;

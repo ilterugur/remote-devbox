@@ -9,12 +9,15 @@
  *     in a template is a real bug rather than a silent policy decision.
  */
 import type {
+  ClientFacts,
   GitIdentity,
   MemoryInstance,
   MemorySpace,
   ResolvedDeveloper,
   ResolvedSpec,
+  XkbKeyboard,
 } from "./types";
+import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { toYaml } from "./yaml";
 
 const GENERATED_HEADER = [
@@ -24,7 +27,11 @@ const GENERATED_HEADER = [
   "",
 ].join("\n");
 
-export function normalize(resolved: ResolvedSpec): Record<string, unknown> {
+/** No client facts is the honest default: detection is best-effort and may find nothing. */
+const NO_CLIENT_FACTS: ClientFacts = { keyboard: null };
+
+export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIENT_FACTS): Record<string, unknown> {
+  const tailscale = resolved.network.tailscale.enabled;
   return {
     devbox_config_version: resolved.config_version,
     devbox_platform: {
@@ -56,7 +63,7 @@ export function normalize(resolved: ResolvedSpec): Record<string, unknown> {
     },
     devbox_network: {
       tailscale: { enabled: resolved.network.tailscale.enabled },
-      ssh: { exposure: resolved.network.ssh.exposure },
+      ssh: { access: resolved.network.ssh.access ?? defaultSshAccess(resolved.network.tailscale.enabled) },
     },
     devbox_container: {
       default_engine: resolved.container.default_engine,
@@ -66,11 +73,15 @@ export function normalize(resolved: ResolvedSpec): Record<string, unknown> {
       enabled: resolved.shared_services?.enabled ?? false,
       engine: resolved.shared_services?.engine ?? "system-docker",
     },
-    devbox_developers: resolved.developers.map(normalizeDeveloper),
+    devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client)),
   };
 }
 
-function normalizeDeveloper(dev: ResolvedDeveloper): Record<string, unknown> {
+function normalizeDeveloper(
+  dev: ResolvedDeveloper,
+  tailscale: boolean,
+  client: ClientFacts,
+): Record<string, unknown> {
   return {
     user: dev.user,
     adopt_existing: dev.adopt_existing ?? false,
@@ -103,8 +114,9 @@ function normalizeDeveloper(dev: ResolvedDeveloper): Record<string, unknown> {
       transport: dev.desktop?.transport ?? "xrdp",
       // Tunnel-only by default: the RDP prompt is then unreachable without an SSH key,
       // which turns the PAM password from the exposed gate into a second factor.
-      access: [...(dev.desktop?.access ?? ["tunnel"])],
+      access: [...(dev.desktop?.access ?? defaultDesktopAccess(tailscale))],
       idle_logout_minutes: dev.desktop?.idle_logout_minutes ?? null,
+      keyboard: resolveKeyboard(dev, client),
     },
     projects: dev.projects.map((p) => ({
       name: p.name,
@@ -135,6 +147,20 @@ const normalizeInstance = (i: MemoryInstance) => ({
   api_key_env: i.api_key_env ?? null,
 });
 
+/**
+ * The layout the session comes up on: what the developer wrote, else what the client
+ * running the CLI types on, else nothing (the box default, `us`).
+ *
+ * The detected fallback is the operator's own keyboard, so on a box with several
+ * developers it is a guess for everyone but the operator — which is why `devbox plan`
+ * prints where the layout came from rather than just what it is.
+ */
+function resolveKeyboard(dev: ResolvedDeveloper, client: ClientFacts): XkbKeyboard | null {
+  const stated = dev.desktop?.keyboard;
+  if (!stated) return client.keyboard;
+  return { layout: stated.layout, variant: stated.variant ?? null, model: stated.model ?? "pc105" };
+}
+
 function mapValues<T, R>(
   source: Record<string, T> | undefined,
   fn: (value: T) => R,
@@ -145,6 +171,6 @@ function mapValues<T, R>(
 }
 
 /** The full generated vars file, header included. */
-export function renderVars(resolved: ResolvedSpec): string {
-  return GENERATED_HEADER + toYaml(normalize(resolved));
+export function renderVars(resolved: ResolvedSpec, client: ClientFacts = NO_CLIENT_FACTS): string {
+  return GENERATED_HEADER + toYaml(normalize(resolved, client));
 }

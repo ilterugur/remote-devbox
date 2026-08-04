@@ -9,7 +9,12 @@
 export const CONFIG_VERSION = 3;
 
 export type EngineId = "podman-rootless" | "docker-rootless" | "none";
-export type SshExposure = "public_and_tailscale" | "tailscale_only" | "public_only";
+/**
+ * Which paths sshd is reachable over. A list rather than three named combinations,
+ * matching desktop.access — the old enum was a two-bit set encoded as names, and it had
+ * no way to say "neither" (which is simply invalid).
+ */
+export type SshAccess = "public" | "tailnet";
 export type AgentProvider = "claude" | "codex";
 
 export interface PlatformSpec {
@@ -39,7 +44,8 @@ export interface HostSpec {
 
 export interface NetworkSpec {
   tailscale: { enabled: boolean };
-  ssh: { exposure: SshExposure };
+  /** Defaults to public plus tailnet when Tailscale is on — see defaultSshAccess. */
+  ssh: { access?: SshAccess[] };
 }
 
 export interface ContainerSpec {
@@ -95,13 +101,44 @@ export interface MemorySpec {
  */
 export type DesktopAccess = "tunnel" | "tailnet" | "unsafe-public";
 
+/**
+ * A keyboard as XKB names it — the vocabulary the box speaks, not the client's. `tr`
+ * with no variant is the Turkish Q keyboard; `tr` variant `f` is the F one.
+ */
+export interface KeyboardSpec {
+  layout: string;
+  variant?: string;
+  model?: string;
+}
+
+/** A keyboard with every field decided — what the desktop role receives. */
+export interface XkbKeyboard {
+  layout: string;
+  variant: string | null;
+  model: string;
+}
+
+/**
+ * What the machine running the CLI can tell us about itself. Injected rather than read,
+ * so spec/ stays a pure function of the config plus these.
+ */
+export interface ClientFacts {
+  keyboard: XkbKeyboard | null;
+}
+
 export interface DesktopSpec {
   enabled: boolean;
   environment: "xfce";
   transport: "xrdp";
-  /** Defaults to ["tunnel"]: reachable only through an SSH tunnel. */
+  /** Defaults to tunnel plus tailnet when Tailscale is on — see defaultDesktopAccess. */
   access?: DesktopAccess[];
   idle_logout_minutes?: number;
+  /**
+   * Defaults to whatever keyboard the client is typing on (see keyboard.ts). xrdp has no
+   * keymap file for every RDP layout id and falls back to `us` in silence, so an
+   * undetected and unstated layout is the one case where the desktop is quietly wrong.
+   */
+  keyboard?: KeyboardSpec;
 }
 
 export interface ResourceSpec {

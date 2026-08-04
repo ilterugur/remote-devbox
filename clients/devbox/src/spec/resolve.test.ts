@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { resolveSpec } from "./resolve";
+import { defaultDesktopAccess, defaultSshAccess, resolveSpec } from "./resolve";
 import type { DeveloperSpec, DevboxSpec } from "./types";
 
 const ID = { name: "N", email: "e@example.com" };
@@ -9,7 +9,7 @@ const spec = (dev: Partial<DeveloperSpec>): DevboxSpec => ({
   config_version: 3,
   platform: { distribution: "ubuntu", version: "26.04", architecture: "amd64" },
   operator: { user: "devbox-admin", ssh_authorized_keys: ["ssh-ed25519 AAAA k@c"] },
-  network: { tailscale: { enabled: true }, ssh: { exposure: "public_and_tailscale" } },
+  network: { tailscale: { enabled: true }, ssh: { access: ["public", "tailnet"] } },
   container: { default_engine: "podman-rootless", install_engines: ["podman-rootless", "docker-rootless"] },
   developers: [{ user: "dev-a", login_ssh_keys: [], ...dev }],
 });
@@ -178,4 +178,12 @@ test("a developer with no projects resolves to an empty list", () => {
   const r = resolveSpec(spec({}));
   expect(r.issues).toEqual([]);
   expect(r.resolved!.developers[0]!.projects).toEqual([]);
+});
+
+test("access defaults name every private path that exists, and none that don't", () => {
+  expect(defaultDesktopAccess(true)).toEqual(["tunnel", "tailnet"]);
+  expect(defaultDesktopAccess(false)).toEqual(["tunnel"]);
+  // SSH keeps a public path either way: a Tailscale outage must not lock you out.
+  expect(defaultSshAccess(true)).toEqual(["public", "tailnet"]);
+  expect(defaultSshAccess(false)).toEqual(["public"]);
 });

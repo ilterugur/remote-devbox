@@ -12,7 +12,7 @@ import { type Issue, err, hasErrors } from "./issues";
 import { renderVars } from "./normalize";
 import { validateReferences } from "./references";
 import { resolveSpec } from "./resolve";
-import type { ResolvedSpec } from "./types";
+import type { ClientFacts, ResolvedSpec } from "./types";
 import { validateStructure } from "./validate";
 
 export interface LoadResult {
@@ -50,10 +50,14 @@ export const secretsPathFor = (configPath: string): string =>
   join(dirname(configPath), "devbox.secrets.yml");
 
 /** Write the normalized vars Ansible consumes. Returns the path written. */
-export function writeGeneratedVars(resolved: ResolvedSpec, repoRoot: string): string {
+export function writeGeneratedVars(
+  resolved: ResolvedSpec,
+  repoRoot: string,
+  client: ClientFacts = { keyboard: null },
+): string {
   const dir = join(repoRoot, "ansible", ".generated");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "all.yml");
-  writeFileSync(path, renderVars(resolved));
+  writeFileSync(path, renderVars(resolved, client));
   return path;
 }
