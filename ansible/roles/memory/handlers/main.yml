@@ -1,6 +1,11 @@
 ---
 # A running daemon keeps its provider configuration until it is restarted, so a changed
 # key or model is invisible until this fires.
+#
+# Non-fatal for the same reason the start task is: a keyless provider authenticates with
+# that developer's own agent OAuth session, so the daemon cannot come up until they have
+# logged in. Failing the play on a step only a human can perform would mean nobody else's
+# changes could be applied either.
 - name: Restart memory daemons
   ansible.builtin.systemd_service:
     name: "hindsight-{{ item.name }}.service"
@@ -14,3 +19,18 @@
   loop: "{{ _devbox_memory_instances }}"
   loop_control:
     label: "{{ item.user }}/{{ item.name }}"
+  register: _devbox_memory_restart
+  failed_when: false
+
+- name: Report memory daemons that did not come back
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.user }}/{{ item.item.name }} did not restart. Provider
+      '{{ item.item.llm_provider }}' is keyless — it uses that developer's agent OAuth
+      session, so run `sudo remote-devbox-login {{ item.item.user }}` first, then re-run
+      with --tags memory.
+  loop: "{{ _devbox_memory_restart.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.user }}/{{ item.item.name }}"
+  when: item.failed | default(false)
+  listen: Restart memory daemons
