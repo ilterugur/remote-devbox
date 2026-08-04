@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, resolvePushConflict, runConfigStatus, runConfigUnlink, seedEmpty, seedFromClient, unlinkClient } from "./run";
+import { clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, resolvePushConflict, runConfigStatus, runConfigUnlink, seedEmpty, seedEmptyGuarded, seedFromClient, unlinkClient } from "./run";
 import type { ResolvedEntry } from "./registry";
 import type { Config } from "../config";
 
@@ -404,6 +404,52 @@ describe("seedEmpty", () => {
       expect(existsSync(target)).toBe(true);
       expect(lstatSync(target).isFile()).toBe(true);
       expect(readFileSync(target, "utf8")).toBe("");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+});
+
+describe("seedEmptyGuarded", () => {
+  // Regression pin: seed-empty used to call seedEmpty unconditionally and only let
+  // pushPayloadToBox refuse afterwards — by then the 0-byte payload was already sitting
+  // in the synced tree, and a re-run saw that leftover as storeKind:"content" and never
+  // re-escalated. The fix moves the refusal in front of the write; this pins that no
+  // payload of any kind exists in the store after a refusal.
+  test("refuses without writing anything when the box already has content the plan never saw", () => {
+    const profile = testProfile();
+    const e = sshEntry("/unused");
+    try {
+      expect(() => seedEmptyGuarded(profile, e, true)).toThrow(/box already has content/);
+      expect(existsSync(clientPayload(profile, e))).toBe(false); // nothing written — the regression this pins
+      expect(existsSync(dirname(clientPayload(profile, e)))).toBe(false); // not even the store dir
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("writes the empty payload as normal when the box has no content", () => {
+    const profile = testProfile();
+    const e = sshEntry("/unused");
+    try {
+      seedEmptyGuarded(profile, e, false);
+      const target = clientPayload(profile, e);
+      expect(existsSync(target)).toBe(true);
+      expect(readFileSync(target, "utf8")).toBe("");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("dir mode: never refuses (there is no single payload to conflict over)", () => {
+    const profile = testProfile();
+    const e = genericDirEntry("/unused");
+    try {
+      // Even passing boxHasContent: true must not refuse for "dir" mode — the caller in
+      // runConfigLink always passes `false` for "dir" for this exact reason, but
+      // seedEmptyGuarded itself should not depend on that discipline to stay safe.
+      seedEmptyGuarded(profile, e, true);
+      expect(existsSync(clientPayload(profile, e))).toBe(true);
     } finally {
       cleanupProfile(profile);
     }
