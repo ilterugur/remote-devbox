@@ -158,6 +158,12 @@ export interface FileBridgeSpec {
   engine?: SyncEngineId;
 }
 
+export interface AppConfigsSpec {
+  enabled?: boolean;
+  /** Registry key (string) or a full definition (object). */
+  paths?: (string | Record<string, unknown>)[];
+}
+
 export interface ResourceSpec {
   memory_high?: string;
   memory_max?: string;
@@ -193,6 +199,7 @@ export interface DeveloperSpec {
   memory?: MemorySpec;
   desktop?: DesktopSpec;
   file_bridge?: FileBridgeSpec;
+  app_configs?: AppConfigsSpec;
   projects?: ProjectSpec[];
 }
 

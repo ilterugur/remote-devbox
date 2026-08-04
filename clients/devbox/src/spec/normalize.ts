@@ -20,6 +20,7 @@ import type {
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { rdpLayoutId } from "./rdp-layouts";
 import { toYaml } from "./yaml";
+import { resolveEntry } from "../app-configs/registry";
 
 const GENERATED_HEADER = [
   "---",
@@ -123,6 +124,14 @@ function normalizeDeveloper(
     file_bridge: {
       sync_disk: dev.file_bridge?.sync_disk ?? false,
       engine: dev.file_bridge?.engine ?? "mutagen",
+    },
+    app_configs: {
+      enabled: dev.app_configs?.enabled ?? false,
+      paths: (dev.app_configs?.paths ?? []).flatMap((raw) => {
+        const r = resolveEntry(raw);
+        // validate.ts already rejected anything unresolvable; a survivor here is a bug.
+        return "entry" in r ? [{ ...r.entry, excludes: [...r.entry.excludes] }] : [];
+      }),
     },
     projects: dev.projects.map((p) => ({
       name: p.name,

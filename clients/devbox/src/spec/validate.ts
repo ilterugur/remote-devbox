@@ -14,6 +14,8 @@ import {
   SUPPORTED_PLATFORM,
   type SshAccess,
 } from "./types";
+import { resolveEntry } from "../app-configs/registry";
+import { normalizePath, pathsOverlap } from "../bridge";
 
 export const USERNAME_RE = /^[a-z_][a-z0-9_-]*$/;
 const PROJECT_NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -305,7 +307,53 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   validateMemory(d.memory, `${base}.memory`, issues);
   validateDesktop(d.desktop, `${base}.desktop`, issues);
   validateFileBridge(d.file_bridge, `${base}.file_bridge`, issues);
+  validateAppConfigs(d, base, issues);
   validateProjects(d.projects, `${base}.projects`, issues);
+}
+
+function validateAppConfigs(d: Record<string, unknown>, base: string, issues: Issue[]): void {
+  const ac = d.app_configs;
+  if (ac === undefined) return;
+  const path = `${base}.app_configs`;
+  if (!isRecord(ac)) {
+    issues.push(err(path, "must be a mapping"));
+    return;
+  }
+  if (ac.enabled !== undefined && typeof ac.enabled !== "boolean") {
+    issues.push(err(`${path}.enabled`, "must be true or false"));
+  }
+  // The feature stores its real files inside the sync disk — without it there is
+  // nowhere to link to, and a dangling symlink makes apps write fresh empty configs.
+  const bridge = isRecord(d.file_bridge) ? d.file_bridge : {};
+  if (ac.enabled === true && bridge.sync_disk !== true) {
+    issues.push(err(`${path}.enabled`, "needs file_bridge.sync_disk: true — app configs live inside the sync disk"));
+  }
+  if (ac.paths === undefined) return;
+  if (!Array.isArray(ac.paths)) {
+    issues.push(err(`${path}.paths`, "must be a list of registry keys or entry mappings"));
+    return;
+  }
+  const disk = normalizePath(`~/devbox/${String(d.user)}`);
+  const seen = new Set<string>();
+  ac.paths.forEach((raw, i) => {
+    const at = `${path}.paths[${i}]`;
+    if (typeof raw !== "string" && !isRecord(raw)) {
+      issues.push(err(at, "must be a registry key or an entry mapping"));
+      return;
+    }
+    const r = resolveEntry(raw as string | Record<string, unknown>);
+    if ("error" in r) {
+      issues.push(err(at, r.error));
+      return;
+    }
+    if (seen.has(r.entry.label)) issues.push(err(at, `duplicate app config "${r.entry.label}"`));
+    seen.add(r.entry.label);
+    // The store lives inside the disk; the app-visible path must stay outside it,
+    // otherwise the link would point at itself.
+    if (pathsOverlap(r.entry.client, disk)) {
+      issues.push(err(`${at}.client`, `overlaps the sync disk ${disk}`));
+    }
+  });
 }
 
 const SYNC_ENGINES = ["mutagen", "syncthing"];
