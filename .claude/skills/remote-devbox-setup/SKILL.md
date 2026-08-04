@@ -1,23 +1,42 @@
 ---
 name: remote-devbox-setup
 description: >-
-  Set up and drive the remote-devbox toolkit from the user's client — provision a
-  remote, multi-profile, always-on Claude Code dev box (Ansible + mise + per-profile
-  Linux users). Use this WHENEVER the user wants to set up, provision, configure,
-  bootstrap, or deploy remote-devbox or "a remote Claude Code dev box / dev server";
-  fill in or generate its Ansible inventory or group_vars; add a profile, account,
-  project, or runtime to the box; run its playbook; or do the post-install steps
-  (adding per-profile SSH keys to GitHub, `sudo remote-devbox-login`). Trigger even
-  when they don't name the tool — e.g. "set up my remote dev box", "configure the
-  claude server", "add a work profile to the box", or when they paste box IP / SSH /
-  Tailscale details expecting provisioning.
+  Set up and drive the remote-devbox toolkit from the user's machine — provision a
+  remote, always-on development box shared by several people (Ansible + mise + one
+  Linux account per developer). Use this WHENEVER the user wants to set up, provision,
+  configure, bootstrap, or deploy remote-devbox or "a remote dev box / dev server";
+  fill in or generate its devbox.yml or inventory; add a developer, git identity,
+  agent profile, project, container engine, memory space or runtime to the box; run
+  `devbox plan` / `devbox apply`; or do the manual steps (registering each git
+  identity's SSH key on GitHub, `sudo remote-devbox-login` per agent profile).
+  Trigger even when they don't name the tool — e.g. "set up my remote dev box",
+  "add someone to the box", "give this project its own GitHub account", or when they
+  paste box IP / SSH / Tailscale details expecting provisioning.
 ---
 
 # remote-devbox setup
 
-Drive the local side of **remote-devbox**: gather inputs → generate the config →
-run the playbook → guide the few manual steps. The repo already documents the
-architecture; this skill is the interactive wizard that wires it up for the user.
+Drive the local side of **remote-devbox**: gather inputs → write `devbox.yml` →
+`devbox plan` → `devbox apply` → guide the few manual steps. The repo documents the
+architecture; this skill is the interactive wizard that wires it up.
+
+## The model, in one paragraph
+
+A **developer** is a real human with their own Linux account. Underneath it, four
+things are independent and each is picked per project: **git identity** (who the commit
+is from), **agent profile** (which Claude/Codex login drives it), **container engine**
+(rootless Podman, rootless Docker, or none) and **memory space** (which long-term memory
+bank). None implies another. Ask about them separately, and never assume a person's
+second GitHub account should get its own Linux user — it should not.
+
+Everything lives in `devbox.yml` (gitignored; copy `devbox.example.yml`), with
+credentials in `devbox.secrets.yml`. The roles read only what `devbox plan` generates,
+so **editing `ansible/group_vars/all.yml` no longer does anything** — that is the legacy
+format, and `devbox migrate-config` converts it.
+
+`devbox plan` refuses ambiguity: two git identities with no default and no per-project
+choice is an error, because that is exactly how a commit lands on the wrong account.
+When the user has several of anything, make them state the default.
 
 Be a careful operator. Provisioning **hardens SSH and installs software on a real
 remote box** — confirm before the run, never commit or echo secrets, and never
