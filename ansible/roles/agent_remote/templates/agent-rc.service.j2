@@ -38,7 +38,7 @@ Environment=PATH=/home/{{ item.0.user }}/.local/bin:/usr/local/sbin:/usr/local/b
    (~/.claude.json in HOME). The run script defaults its credential-check path to
    ~/.claude on its own. #}
 Environment=CLAUDE_RC_PROJECT_DIR=/home/{{ item.0.user }}/projects/{{ item.1.project }}
-{# Quote values: names like "Verti Monorepo" contain spaces — unquoted, systemd
+{# Quote values: names like "Example Monorepo" contain spaces — unquoted, systemd
    parses everything after the space as a second, invalid env assignment. #}
 Environment="CLAUDE_RC_NAME={{ item.1.name | default(item.0.user ~ ' · ' ~ item.1.project) }}"
 Environment=CLAUDE_RC_SPAWN={{ item.1.spawn | default('worktree') }}
