@@ -27,10 +27,16 @@ export function planAppConfigLink(
   if (client.kind === "linked" && box.kind === "linked") {
     return { decision: "already-linked", reason: `${entry.label}: already linked on both sides` };
   }
-  // Once the store holds the canonical copy, a bare side just gets linked to it —
-  // there is nothing left to choose.
-  if (store === "content" && bare(client) && bare(box)) {
-    return { decision: "use-client", reason: `${entry.label}: linking to the existing synced copy` };
+  if (store === "content") {
+    // Once the store holds the canonical copy, a fully bare pair just gets linked to it —
+    // there is nothing left to choose. Anything else means a side has unlinked content that
+    // would silently overwrite the synced copy, so ask instead of guessing.
+    if (bare(client) && bare(box)) {
+      return { decision: "use-client", reason: `${entry.label}: linking to the existing synced copy` };
+    }
+    const clientPart = hasContent(client) ? `client: ${client.summary}` : `client: no unlinked content`;
+    const boxPart = hasContent(box) ? `box: ${box.summary}` : `synced copy: ${box.summary || "existing content"}`;
+    return { decision: "ask", reason: `${entry.label} — ${clientPart} · ${boxPart}` };
   }
   if (hasContent(client) && hasContent(box)) {
     return {

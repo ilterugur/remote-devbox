@@ -14,6 +14,10 @@ test("a link pointing somewhere else is refused", () => {
   expect(planAppConfigLink(fz, s("absent"), s("foreign-link"), "absent").decision).toBe("refuse");
 });
 
+test("a foreign link is refused even when the other side has content", () => {
+  expect(planAppConfigLink(fz, s("foreign-link"), s("content", "41 sites"), "absent").decision).toBe("refuse");
+});
+
 test("content on exactly one side wins without asking", () => {
   expect(planAppConfigLink(fz, s("content", "41 sites"), s("absent"), "absent").decision).toBe("use-client");
   expect(planAppConfigLink(fz, s("empty"), s("content", "3 sites"), "absent").decision).toBe("use-box");
@@ -32,6 +36,12 @@ test("nothing anywhere seeds an empty store", () => {
 
 test("an already-seeded store links a bare side without asking", () => {
   expect(planAppConfigLink(fz, s("absent"), s("linked"), "content").decision).toBe("use-client");
+});
+
+test("an already-seeded store asks instead of silently overwriting when a side has unlinked content", () => {
+  const r = planAppConfigLink(fz, s("content", "12 sites"), s("linked"), "content");
+  expect(r.decision).toBe("ask");
+  expect(r.reason).toContain("12 sites");
 });
 
 test("unlink restores a linked side and skips an unlinked one", () => {
