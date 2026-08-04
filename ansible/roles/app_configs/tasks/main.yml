@@ -11,6 +11,22 @@
     group: root
     mode: "0755"
 
+- name: Ensure the sync root exists and is developer-owned
+  # No canonical role creates ~/sync before this one runs: `developers` creates only
+  # the home, and syncthing/users (which do create it) aren't wired into playbook.yml.
+  # The file module below would happily auto-create this as a missing PARENT, but only
+  # applies owner/group/mode to the leaf — left implicit, ~/sync would land root-owned
+  # and the developer's sync engine (writing here as itself) could never use it. Create
+  # it explicitly, same permission choice as the home dir in roles/developers.
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/sync"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ devbox_developers | selectattr('app_configs.enabled') | list }}"
+  loop_control: { label: "{{ item.user }}" }
+
 - name: Ensure the app-configs store exists for each developer
   ansible.builtin.file:
     path: "/home/{{ item.user }}/sync/.app-configs"
@@ -32,6 +48,9 @@
       - "/home/{{ item.0.user }}/sync/.app-configs/{{ item.1.label }}"
   become_user: "{{ item.0.user }}"
   register: _app_link
+  # ensure is idempotent by construction (link-if-safe, no-op otherwise); its stderr,
+  # not Ansible's changed/unchanged bookkeeping, is the signal. This also means
+  # --check always reports no change here, even on a run that would create a link.
   changed_when: false
   loop: "{{ devbox_developers | selectattr('app_configs.enabled') | subelements('app_configs.paths') }}"
   loop_control: { label: "{{ item.0.user }}/{{ item.1.label }}" }
