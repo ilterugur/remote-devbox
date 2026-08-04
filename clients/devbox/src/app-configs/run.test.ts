@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { clientPayload, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, seedFromClient } from "./run";
+import { dirname, join } from "node:path";
+import { clientPayload, countSyncConflicts, inspectClient, linkClient, matches, runConfigStatus, seedEmpty, seedFromClient } from "./run";
 import type { ResolvedEntry } from "./registry";
 import type { Config } from "../config";
 
@@ -14,6 +14,23 @@ const tmp = () => mkdtempSync(join(tmpdir(), "app-configs-"));
 const testProfile = () => `app-configs-test-${Math.random().toString(36).slice(2)}`;
 const cleanupProfile = (profile: string) => rmSync(join(homedir(), "devbox", profile), { recursive: true, force: true });
 const backupOf = (dir: string, base: string) => readdirSync(dir).filter((n) => n.startsWith(`${base}.pre-devbox-`));
+
+/** Capture everything written to stdout while `fn` runs (restores the real write after). */
+async function captureOut(fn: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const spy = process.stdout.write;
+  process.stdout.write = ((s: string) => { lines.push(s); return true; }) as typeof process.stdout.write;
+  try {
+    await fn();
+  } finally {
+    process.stdout.write = spy;
+  }
+  return lines;
+}
+
+const baseCfg = (profile: string): Config => ({
+  prefix: "devbox", default: profile, locale: "C", launch: "", profiles: [{ user: profile, projects: [], appConfigs: [] }],
+});
 
 const dirEntry = (client: string): ResolvedEntry => ({
   label: "filezilla", client, box: "~/.config/filezilla", mode: "dir", excludes: ["queue.sqlite3", "*.lock"],
@@ -250,18 +267,104 @@ describe("countSyncConflicts", () => {
   });
 });
 
+describe("seedEmpty", () => {
+  test("dir mode: creates the store directory itself", () => {
+    const profile = testProfile();
+    const e = genericDirEntry("/unused"); // client path is never touched by seedEmpty
+    try {
+      seedEmpty(profile, e);
+      const target = clientPayload(profile, e);
+      expect(existsSync(target)).toBe(true);
+      expect(lstatSync(target).isDirectory()).toBe(true);
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("ssh-include mode: creates an empty payload FILE inside the store, not just the directory — " +
+    "a literal (non-glob) Include line pointing at a missing file is a hard error for OpenSSH", () => {
+    const profile = testProfile();
+    const e = sshEntry("/unused");
+    try {
+      seedEmpty(profile, e);
+      const target = clientPayload(profile, e);
+      expect(existsSync(target)).toBe(true);
+      expect(lstatSync(target).isFile()).toBe(true);
+      expect(readFileSync(target, "utf8")).toBe("");
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+});
+
 describe("runConfigStatus", () => {
   test("reports the 'no app_configs declared' line and touches nothing else when none are configured", async () => {
     const cfg: Config = { prefix: "devbox", default: "work", locale: "C", launch: "", profiles: [{ user: "work", projects: [] }] };
-    const lines: string[] = [];
-    const spy = process.stdout.write;
-    process.stdout.write = ((s: string) => { lines.push(s); return true; }) as typeof process.stdout.write;
-    try {
-      await runConfigStatus(cfg, "work");
-    } finally {
-      process.stdout.write = spy;
-    }
+    const lines = await captureOut(() => runConfigStatus(cfg, "work"));
     expect(lines).toEqual([`devbox: no app_configs declared for profile "work"\n`]);
+  });
+
+  test("dir mode: flags a missing target as store=MISSING with the data-loss warning", async () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "cfg");
+    const e = genericDirEntry(p);
+    const target = clientPayload(profile, e); // never created — the store dir does not exist
+    symlinkSync(target, p); // client-side symlink is correctly "linked" even though the target is dangling
+    const cfg = baseCfg(profile);
+    cfg.profiles[0]!.appConfigs = [e];
+    try {
+      const lines = (await captureOut(() => runConfigStatus(cfg, profile))).join("");
+      expect(lines).toContain(`client=linked`);
+      expect(lines).toContain(`store=MISSING`);
+      expect(lines).toContain(`the link has no target — the app will write a fresh empty config`);
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("ssh-include mode: store=ok requires the payload FILE, not just the store directory — " +
+    "this is the case Finding 1 caught: a store dir that exists but is empty must still read MISSING", async () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "config");
+    const e = sshEntry(p);
+    const target = clientPayload(profile, e); // .../.app-configs/ssh_config/config
+    writeFileSync(p, `# >>> devbox app-configs\nInclude ${target}\n# <<< devbox app-configs\n`); // client-side: linked
+    mkdirSync(join(homedir(), "devbox", profile, ".app-configs", "ssh_config"), { recursive: true }); // store DIR exists...
+    // ...but the payload file inside it does not — the exact shape Finding 1 missed.
+    expect(existsSync(target)).toBe(false);
+    const cfg = baseCfg(profile);
+    cfg.profiles[0]!.appConfigs = [e];
+    try {
+      const lines = (await captureOut(() => runConfigStatus(cfg, profile))).join("");
+      expect(lines).toContain(`client=linked`);
+      expect(lines).toContain(`store=MISSING`); // would have wrongly read "ok" before the fix
+      expect(lines).toContain(`the link has no target — the app will write a fresh empty config`);
+    } finally {
+      cleanupProfile(profile);
+    }
+  });
+
+  test("store=ok and no warning once the payload file actually exists", async () => {
+    const profile = testProfile();
+    const root = tmp();
+    const p = join(root, "config");
+    const e = sshEntry(p);
+    const target = clientPayload(profile, e);
+    writeFileSync(p, `# >>> devbox app-configs\nInclude ${target}\n# <<< devbox app-configs\n`);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "Host foo\n");
+    const cfg = baseCfg(profile);
+    cfg.profiles[0]!.appConfigs = [e];
+    try {
+      const lines = (await captureOut(() => runConfigStatus(cfg, profile))).join("");
+      expect(lines).toContain(`client=linked`);
+      expect(lines).toContain(`store=ok`);
+      expect(lines).not.toContain(`the link has no target`);
+    } finally {
+      cleanupProfile(profile);
+    }
   });
 });
 

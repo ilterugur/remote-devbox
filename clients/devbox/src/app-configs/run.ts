@@ -138,7 +138,7 @@ export async function runConfigLink(cfg: Config, profile: string, opts: { fromCl
       case "refuse": out(`  ! ${plan.reason}`); continue;
       case "use-box": boxSh(cfg, profile, ["seed", e.label, e.box, e.mode, boxStorePath(profile, e), ...e.excludes]); break;
       case "use-client": if (client.kind === "content") seedFromClient(profile, e); break;
-      case "seed-empty": mkdirSync(join(disk, storeRelPath(e)), { recursive: true }); break;
+      case "seed-empty": seedEmpty(profile, e); break;
     }
     linkClient(profile, e);
     boxSh(cfg, profile, ["link", e.label, e.box, e.mode, boxStorePath(profile, e)]);
@@ -175,8 +175,16 @@ export async function runConfigStatus(cfg: Config, profile: string): Promise<voi
   // one profile name happens to be a substring of another (e.g. "eng" inside "engineer").
   const sessions = await engineFor(syncEngineFor(cfg, profile)).status();
   const session = sessions.find((s) => s.name === `devbox-${profile}`);
-  if (!session) out(`  ! sync is not running — edits are NOT propagating (devbox sync up)`);
-  else if (session.conflicts > 0) out(`  ! ${session.conflicts} conflict(s) reported by the sync engine — resolve before continuing`);
+  if (!session) {
+    out(`  ! sync is not running — edits are NOT propagating (devbox sync up)`);
+  } else {
+    // A session that exists is not necessarily syncing: `devbox sync pause` (Mutagen) or
+    // a paused Syncthing folder both leave the session/folder in place but stop
+    // propagation just as thoroughly as it being torn down — worded distinctly so a user
+    // can tell "never started" apart from "started, then paused".
+    if (/pause|disconnect/i.test(session.state)) out(`  ! sync is paused (${session.state}) — edits are NOT propagating (devbox sync resume)`);
+    if (session.conflicts > 0) out(`  ! ${session.conflicts} conflict(s) reported by the sync engine — resolve before continuing`);
+  }
 
   for (const e of entries) {
     const client = inspectClient(profile, e);
@@ -189,13 +197,20 @@ export async function runConfigStatus(cfg: Config, profile: string): Promise<voi
       boxKind = "unreachable";
     }
 
-    const storePath = join(disk, storeRelPath(e));
-    const storeOk = existsSync(storePath);
-    const conflicts = countSyncConflicts(storePath);
+    // The store *directory* (storeRelPath) only IS the link target for "dir" mode; for
+    // "file"/"ssh-include" the real target is a specific file inside it (clientPayload,
+    // same path linkClient's symlink/Include line points at). Checking the directory
+    // instead of the payload path is exactly how a missing ssh_config payload went
+    // undetected: the directory existed, so "store=ok" printed even though the included
+    // file was gone.
+    const storeDir = join(disk, storeRelPath(e));
+    const target = clientPayload(profile, e);
+    const targetOk = existsSync(target);
+    const conflicts = countSyncConflicts(storeDir);
 
-    out(`  ${e.label}: client=${client.kind} box=${boxKind} store=${storeOk ? "ok" : "MISSING"}` +
+    out(`  ${e.label}: client=${client.kind} box=${boxKind} store=${targetOk ? "ok" : "MISSING"}` +
         (conflicts ? ` ⚠ ${conflicts} conflict file(s)` : ""));
-    if (client.kind === "linked" && !storeOk) {
+    if (client.kind === "linked" && !targetOk) {
       out(`    ! the link has no target — the app will write a fresh empty config`);
     }
   }
@@ -203,6 +218,22 @@ export async function runConfigStatus(cfg: Config, profile: string): Promise<voi
 
 /** Stub so the CLI wiring typechecks — Task 10 implements this. */
 export const runConfigUnlink = async (_cfg: Config, _profile: string, _label?: string): Promise<void> => {};
+
+/** Create an empty store when neither side has content. For "dir" mode the target
+ *  itself is the store directory, so mkdir is enough. For "file"/"ssh-include" the
+ *  target is a specific file *inside* the store directory (clientPayload/payloadRelPath)
+ *  — creating only the directory would leave `linkClient`'s Include/symlink pointing at
+ *  a file that doesn't exist, which OpenSSH treats as a hard error for a literal (non-glob)
+ *  Include path. So a real (empty) file has to exist at the payload path too. */
+export function seedEmpty(profile: string, e: ResolvedEntry): void {
+  const target = clientPayload(profile, e);
+  if (e.mode === "dir") {
+    mkdirSync(target, { recursive: true });
+    return;
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, "");
+}
 
 export function seedFromClient(profile: string, e: ResolvedEntry): void {
   const src = normalizePath(e.client);
