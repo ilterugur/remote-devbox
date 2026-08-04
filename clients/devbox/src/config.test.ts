@@ -108,6 +108,23 @@ describe("profilesFromYaml — which config file wins", () => {
     expect(out?.[0]!.projects).toEqual([{ name: "app", repo: "git@github.com:example-org/app.git" }]);
   });
 
+  test("canonical devbox.yml carries the file bridge onto the profile", () => {
+    const out = profilesFromYaml(
+      repo({
+        "devbox.yml": [
+          "developers:",
+          "  - user: work",
+          "    file_bridge:",
+          "      sync_disk: true",
+          "      engine: syncthing",
+          "",
+        ].join("\n"),
+      }),
+    );
+    expect(out?.[0]!.syncDisk).toBe(true);
+    expect(out?.[0]!.syncEngine).toBe("syncthing");
+  });
+
   test("devbox.yml wins over a legacy file that is still lying around", () => {
     const out = profilesFromYaml(
       repo({ "devbox.yml": DEVBOX_YML, "ansible/group_vars/all.yml": LEGACY_YML }),

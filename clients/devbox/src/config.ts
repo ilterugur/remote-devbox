@@ -84,12 +84,15 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
     const out: Profile[] = [];
     for (const d of devs) {
       if (!d?.user) return null; // malformed — prefer the cache over a partial list
-      out.push({
+      const profile: Profile = {
         user: String(d.user),
         projects: Array.isArray(d.projects)
           ? d.projects.map((pr: any) => ({ name: String(pr.name), repo: pr.repo ? String(pr.repo) : "" }))
           : [],
-      });
+      };
+      if (d.file_bridge?.sync_disk) profile.syncDisk = true;
+      if (d.file_bridge?.engine) profile.syncEngine = d.file_bridge.engine as EngineId;
+      out.push(profile);
     }
     return out;
   } catch {
