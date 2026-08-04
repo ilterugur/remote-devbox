@@ -121,7 +121,7 @@ profiles:
         ports: [3000, 5173]
     servers:
       - project: example-app
-        name: "InsurChat"
+        name: "ExampleApp"
   - user: other
     projects:
       - name: alpha
@@ -176,10 +176,10 @@ describe("addServerToYaml", () => {
     const out = addServerToYaml(YML, "dev-a", srv, "myproj");
     const lines = out.split("\n");
     const serversIdx = lines.findIndex((l) => l.trim() === "servers:");
-    const insurIdx = lines.findIndex((l) => l.includes('name: "InsurChat"'));
+    const exampleIdx = lines.findIndex((l) => l.includes('name: "ExampleApp"'));
     const newIdx = lines.findIndex((l) => l.includes("project: myproj"));
     expect(newIdx).toBeGreaterThan(serversIdx);
-    expect(newIdx).toBeGreaterThan(insurIdx); // after the existing server
+    expect(newIdx).toBeGreaterThan(exampleIdx); // after the existing server
   });
 
   test("creates a servers: block when the profile has none, right after projects:", () => {
