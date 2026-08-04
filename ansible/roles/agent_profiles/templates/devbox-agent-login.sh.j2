@@ -6,10 +6,25 @@
 #
 #   sudo remote-devbox-login                 # walk every profile that isn't logged in
 #   sudo remote-devbox-login <dev> <profile> # just this one
+#
+# Over SSH this needs a terminal: `ssh -t <box> 'sudo remote-devbox-login ...'`.
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
   echo "remote-devbox-login: run me with sudo (it switches to each developer)." >&2
+  exit 1
+fi
+
+# Checked up front rather than left to each agent: without a terminal, Claude falls into
+# --print mode and Codex aborts, so you get two different confusing errors for one cause.
+if [[ ! -t 0 || ! -t 1 ]]; then
+  cat >&2 <<'NOTTY'
+remote-devbox-login: no terminal attached, and an OAuth login needs one.
+
+`ssh <box> '<command>'` does not allocate one. Add -t:
+
+  ssh -t <box> 'sudo remote-devbox-login [developer] [profile]'
+NOTTY
   exit 1
 fi
 
