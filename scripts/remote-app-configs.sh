@@ -53,8 +53,33 @@ case "$cmd" in
     # nothing left to seed from.
     if [ -e "$boxpath" ] && [ ! -L "$boxpath" ]; then
       mkdir -p "$(dirname "$(payload)")"
-      if [ "$mode" = dir ]; then mkdir -p "$store"; cp -a "$boxpath/." "$store/" 2>/dev/null || true
-      else cp -a "$boxpath" "$(payload)"; fi
+      if [ "$mode" = dir ]; then
+        mkdir -p "$store"
+        shift 5
+        # Trailing args are exclude patterns (shell globs, matched against each path
+        # component's basename) — e.g. filezilla's queue.sqlite3 / *.lock, which are
+        # machine-local and must never enter the shared store. file/ssh-include modes
+        # copy a single named payload, so excludes only apply here in dir mode.
+        ( cd "$boxpath" && find . -mindepth 1 -print ) 2>/dev/null | while IFS= read -r rel; do
+          skip=0
+          save_ifs=$IFS; IFS=/
+          for comp in $rel; do
+            for pat in "$@"; do
+              case "$comp" in $pat) skip=1 ;; esac
+            done
+          done
+          IFS=$save_ifs
+          [ "$skip" -eq 1 ] && continue
+          if [ -d "$boxpath/$rel" ]; then
+            mkdir -p "$store/$rel"
+          else
+            mkdir -p "$store/$(dirname "$rel")"
+            cp -a "$boxpath/$rel" "$store/$rel"
+          fi
+        done
+      else
+        cp -a "$boxpath" "$(payload)"
+      fi
       mv "$boxpath" "$boxpath.pre-devbox-$stamp"
     fi
     ;;
