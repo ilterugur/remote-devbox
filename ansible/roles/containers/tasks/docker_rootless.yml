@@ -93,7 +93,8 @@
   notify: Restart rootless Docker
 
 - name: Clear any previous rootless Docker failure state
-  ansible.builtin.command: "systemctl --user reset-failed docker.service"
+  ansible.builtin.command:
+    argv: [systemctl, --user, reset-failed, docker.service]
   become: true
   become_user: "{{ item.user }}"
   environment:
