@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseApiKey, parseGuiPort, folderPayload, devicePayload, folderId } from "./syncthing";
+import { parseApiKey, parseGuiPort, folderPayload, devicePayload, folderId, ignoreRequest } from "./syncthing";
 
 const xml = `<configuration version="37">
   <gui enabled="true" tls="false">
@@ -37,5 +37,27 @@ describe("REST payload builders", () => {
   test("devicePayload pins addresses (Tailscale) or dynamic", () => {
     expect(devicePayload("BBB", "box", ["tcp://100.1.2.3:22000"]).addresses).toEqual(["tcp://100.1.2.3:22000"]);
     expect(devicePayload("AAA", "client", []).addresses).toEqual(["dynamic"]);
+  });
+});
+
+describe("ignoreRequest", () => {
+  test("targets the folder's ignore list and sends the patterns verbatim", () => {
+    // Syncthing keeps ignores per folder, not inside the folder config object, so they
+    // cannot ride along in folderPayload.
+    const r = ignoreRequest("devbox-work", ["node_modules", "/.app-configs/filezilla/queue.sqlite3"]);
+    expect(r.path).toBe("/rest/db/ignores?folder=devbox-work");
+    expect(r.body).toEqual({ ignore: ["node_modules", "/.app-configs/filezilla/queue.sqlite3"] });
+  });
+
+  test("a folder id needing escaping does not break the query", () => {
+    expect(ignoreRequest("devbox-a b", []).path).toBe("/rest/db/ignores?folder=devbox-a%20b");
+  });
+
+  test("the patterns the engines share mean the same thing to Syncthing", () => {
+    // A bare name matches at any depth and a leading slash anchors to the folder root in
+    // both engines' syntax, which is what lets one ignore list drive either of them.
+    const { body } = ignoreRequest("devbox-work", ["*.swp", "/.app-configs/filezilla/lockfile"]);
+    expect(body.ignore[0]!.startsWith("/")).toBe(false);
+    expect(body.ignore[1]!.startsWith("/")).toBe(true);
   });
 });

@@ -46,6 +46,18 @@ export function devicePayload(deviceID: string, name: string, addresses: string[
   return { deviceID, name, addresses: addresses.length ? addresses : ["dynamic"] };
 }
 
+/**
+ * Syncthing stores ignores per folder rather than inside the folder config, so they need
+ * their own call — they cannot ride along in folderPayload.
+ *
+ * The pattern strings are shared with Mutagen unchanged: in both syntaxes a bare name
+ * matches at any depth and a leading slash anchors to the folder root, which is what lets
+ * one ignore list drive either engine.
+ */
+export function ignoreRequest(id: string, ignores: string[]): { path: string; body: { ignore: string[] } } {
+  return { path: `/rest/db/ignores?folder=${encodeURIComponent(id)}`, body: { ignore: [...ignores] } };
+}
+
 // ── REST client + engine ─────────────────────────────────────────────────────
 type Endpoint = { base: string; key: string };
 
@@ -73,6 +85,11 @@ async function ensureFolder(ep: Endpoint, id: string, label: string, path: strin
   if (folders.some((f) => f.id === id)) return;
   const defaults = await api(ep, "GET", "/rest/config/defaults/folder");
   await api(ep, "PUT", `/rest/config/folders/${id}`, folderPayload(defaults, { id, label, path, deviceIds }));
+}
+
+async function setIgnores(ep: Endpoint, id: string, ignores: string[]): Promise<void> {
+  const { path, body } = ignoreRequest(id, ignores);
+  await api(ep, "POST", path, body);
 }
 
 function clientEndpoint(): Endpoint {
@@ -115,6 +132,13 @@ export class SyncthingEngine implements SyncEngine {
       const id = folderId(o.profile);
       await ensureFolder(client, id, `devbox · ${o.profile}`, o.localRoot, [clientID, boxID]);
       await ensureFolder(box, id, `devbox · ${o.profile}`, o.remoteRoot, [clientID, boxID]);
+
+      // Set on every `up`, not just when the folder is created: ensureFolder leaves an
+      // existing folder alone, so a changed ignore set would otherwise never reach a
+      // client that already had one — and an app config's excludes (FileZilla's transfer
+      // queue, its lock marker) would keep propagating.
+      await setIgnores(client, id, o.ignores);
+      await setIgnores(box, id, o.ignores);
     } catch (e) {
       die(`syncthing wiring failed: ${(e as Error).message}`);
     } finally {
