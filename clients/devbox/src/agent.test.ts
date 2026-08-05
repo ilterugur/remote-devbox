@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { agentsFor, plistPath, renderPlist, resolveArgv } from "./agent";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { agentsFor, bootoutIfLoaded, plistPath, renderPlist, resolveArgv } from "./agent";
 import type { Config } from "./config";
 
 const cfg = (profile: Record<string, unknown>): Config => ({
@@ -9,6 +12,39 @@ const cfg = (profile: Record<string, unknown>): Config => ({
   launch: "",
   profiles: [{ user: "ilterugur", projects: [], ...profile } as any],
 });
+
+/**
+ * A fake `launchctl` on PATH so bootoutIfLoaded's tests can force isLoaded/bootout to
+ * whatever result they need, without touching this machine's real launchd state.
+ * PATH is the only env this touches — deliberately not HOME: Bun caches os.homedir()
+ * at process start, so mutating process.env.HOME here would NOT redirect plistPath()/
+ * logDirFor() inside a live test process, and a test that assumed it would could end
+ * up writing a real plist into the developer's real ~/Library/LaunchAgents. That's why
+ * these tests exercise bootoutIfLoaded directly rather than the full runAgentUp/Down —
+ * the fs-touching parts of those are covered structurally (they're direct callers of
+ * this same, now-tested, checked helper) and manually via DEVBOX_DRYRUN dry runs.
+ */
+function withFakeLaunchctl(behavior: { print?: number; bootout?: number }, fn: () => void): void {
+  const bin = mkdtempSync(join(tmpdir(), "devbox-agent-bin-"));
+  const script = `#!/bin/sh
+case "$1" in
+  print) exit ${behavior.print ?? 0} ;;
+  bootout) exit ${behavior.bootout ?? 0} ;;
+  *) exit 0 ;;
+esac
+`;
+  const path = join(bin, "launchctl");
+  writeFileSync(path, script);
+  chmodSync(path, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath}`;
+  try {
+    fn();
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
 
 describe("agentsFor", () => {
   test("a desktop profile gets a keep-alive ssh tunnel on its own port", () => {
@@ -88,5 +124,37 @@ describe("resolveArgv", () => {
 
   test("leaves an already-absolute command alone", () => {
     expect(resolveArgv(["/usr/bin/ssh", "-N"])).toEqual(["/usr/bin/ssh", "-N"]);
+  });
+
+  test("a dry run never aborts, even when the command is not on PATH", () => {
+    const original = process.env.DEVBOX_DRYRUN;
+    process.env.DEVBOX_DRYRUN = "1";
+    try {
+      const argv = ["devbox-agent-fixture-does-not-exist", "mount", "up"];
+      expect(resolveArgv(argv)).toEqual(argv);
+    } finally {
+      if (original === undefined) delete process.env.DEVBOX_DRYRUN;
+      else process.env.DEVBOX_DRYRUN = original;
+    }
+  });
+});
+
+describe("bootoutIfLoaded", () => {
+  test("does nothing, and does not throw, when the label isn't loaded", () => {
+    withFakeLaunchctl({ print: 1 }, () => {
+      expect(() => bootoutIfLoaded("com.devbox.not-loaded")).not.toThrow();
+    });
+  });
+
+  test("a failed bootout throws naming bootout, not whatever the caller does next", () => {
+    withFakeLaunchctl({ print: 0, bootout: 1 }, () => {
+      expect(() => bootoutIfLoaded("com.devbox.ilterugur.desktop")).toThrow(/bootout failed/);
+    });
+  });
+
+  test("a successful bootout of a loaded label does not throw", () => {
+    withFakeLaunchctl({ print: 0, bootout: 0 }, () => {
+      expect(() => bootoutIfLoaded("com.devbox.ilterugur.desktop")).not.toThrow();
+    });
   });
 });

@@ -115,16 +115,37 @@ export function resolveArgv(argv: string[]): string[] {
   if (!cmd || cmd.startsWith("/")) return argv;
   const r = spawnSync("sh", ["-c", `command -v ${cmd}`], { encoding: "utf8" });
   const path = (r.stdout || "").trim();
-  if (!path) die(`cannot find '${cmd}' on PATH — launchd needs an absolute path`);
+  if (!path) {
+    // A dry run must print what would happen and change nothing, even on a checkout
+    // where the command isn't installed yet — show the bare command rather than abort.
+    if (isDry()) return argv;
+    die(`cannot find '${cmd}' on PATH — launchd needs an absolute path`);
+  }
   return [path, ...rest];
 }
 
-const launchctl = (...args: string[]) => spawnSync("launchctl", args, { encoding: "utf8" });
+// env is passed explicitly (not left to spawnSync's default) so a PATH change in the
+// current process — e.g. a test pointing at a fake launchctl — actually takes effect;
+// otherwise the executable search resolves against a stale, process-start snapshot.
+const launchctl = (...args: string[]) => spawnSync("launchctl", args, { encoding: "utf8", env: process.env });
 
 const domain = (): string => `gui/${process.getuid?.() ?? 0}`;
 
 function isLoaded(label: string): boolean {
   return launchctl("print", `${domain()}/${label}`).status === 0;
+}
+
+/**
+ * Bootout `label` if launchd currently has it loaded — and check the result. A failed
+ * bootout (permission issue, launchd race, stale state) must not be swallowed: callers
+ * write a new plist or delete the old one right after this, and if the label is still
+ * loaded afterward it ends up pointing at a file that changed or vanished out from
+ * under it, while the CLI goes on to report success.
+ */
+export function bootoutIfLoaded(label: string): void {
+  if (!isLoaded(label)) return;
+  const r = launchctl("bootout", `${domain()}/${label}`);
+  if (r.status !== 0) die(`launchctl bootout failed for ${label}: ${(r.stderr || "").trim()}`);
 }
 
 function requireMac(): void {
@@ -164,7 +185,7 @@ export function runAgentUp(cfg: Config, profile: string): void {
     writeFileSync(path, wanted);
     // bootout first: bootstrap on an already-loaded label is an error, and reloading is
     // the only way a changed plist takes effect.
-    if (isLoaded(spec.label)) launchctl("bootout", `${domain()}/${spec.label}`);
+    bootoutIfLoaded(spec.label);
     const r = launchctl("bootstrap", domain(), path);
     if (r.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(r.stderr || "").trim()}`);
     out(`  ✓ ${spec.label} — ${spec.description}`);
@@ -179,7 +200,9 @@ export function runAgentDown(cfg: Config, profile: string): void {
   for (const spec of specs) {
     const path = plistPath(spec.label);
     if (isDry()) { out(`  ── would remove ${path}`); continue; }
-    if (isLoaded(spec.label)) launchctl("bootout", `${domain()}/${spec.label}`);
+    // Abort before removing anything if bootout fails — don't delete the plist and
+    // claim success while the agent is still (or now orphan-)loaded.
+    bootoutIfLoaded(spec.label);
     rmSync(path, { force: true });
     out(`  ✓ ${spec.label} removed`);
   }
