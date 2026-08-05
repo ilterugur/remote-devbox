@@ -413,6 +413,55 @@ function validateFileBridge(fb: unknown, base: string, issues: Issue[]): void {
   if (fb.engine !== undefined && !SYNC_ENGINES.includes(String(fb.engine))) {
     issues.push(err(`${base}.engine`, `must be one of: ${SYNC_ENGINES.join(", ")}`));
   }
+  if (fb.lazy_mount_on_connect !== undefined && typeof fb.lazy_mount_on_connect !== "boolean") {
+    issues.push(err(`${base}.lazy_mount_on_connect`, "must be true or false"));
+  }
+  validateLazyMounts(fb.lazy_mounts, `${base}.lazy_mounts`, issues);
+}
+
+/** A mount label becomes the box directory ~/mnt/<label>, so it has to be a filename. */
+const MOUNT_LABEL_RE = /^[A-Za-z0-9._-]+$/;
+
+function validateLazyMounts(raw: unknown, base: string, issues: Issue[]): void {
+  if (raw === undefined) return;
+  if (!Array.isArray(raw)) {
+    issues.push(err(base, "must be a list of { label, path }"));
+    return;
+  }
+  const seen = new Set<string>();
+  raw.forEach((m, i) => {
+    const at = `${base}[${i}]`;
+    if (!isRecord(m)) {
+      issues.push(err(at, "must be a mapping with label and path"));
+      return;
+    }
+    const label = String(m.label ?? "");
+    if (!MOUNT_LABEL_RE.test(label)) {
+      issues.push(err(`${at}.label`, `'${label}' is not usable as a directory name`));
+    } else if (seen.has(label)) {
+      // Two mounts sharing a label would land on one box directory, and the second would
+      // silently take the first one's place.
+      issues.push(err(`${at}.label`, `duplicate label '${label}'`));
+    } else {
+      seen.add(label);
+    }
+    if (!isNonEmptyString(m.path)) {
+      issues.push(err(`${at}.path`, "must be a client path"));
+    }
+  });
+
+  // Nesting one served path inside another means the box sees the same files under two
+  // mountpoints, and unmounting either can pull the ground out from under the other.
+  const paths = raw
+    .filter(isRecord)
+    .map((m) => (isNonEmptyString(m.path) ? normalizePath(m.path) : null));
+  paths.forEach((a, i) => {
+    if (!a) return;
+    paths.forEach((b, j) => {
+      if (j <= i || !b) return;
+      if (pathsOverlap(a, b)) issues.push(err(`${base}[${j}].path`, `overlaps ${base}[${i}].path (${a})`));
+    });
+  });
 }
 
 function validateResources(r: unknown, base: string, issues: Issue[]): void {

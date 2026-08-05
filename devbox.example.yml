@@ -190,6 +190,14 @@ developers:
     # file_bridge:
     #   sync_disk: true
     #   engine: mutagen          # mutagen (default) | syncthing
+    #   # Client paths the box can see ON DEMAND, read-only, only while `devbox mount`
+    #   # is running — nothing is copied and nothing persists. Independent of the sync
+    #   # disk above; either can be used without the other. Each label becomes the box
+    #   # directory ~/mnt/<label>, so labels must be filenames and must not repeat, and
+    #   # two paths may not nest inside one another.
+    #   lazy_mounts:
+    #     - { label: desktop, path: "~/Desktop" }
+    #   lazy_mount_on_connect: true   # bring them up on connect instead of on request
     # app_configs:
     #   enabled: true
     #   paths:

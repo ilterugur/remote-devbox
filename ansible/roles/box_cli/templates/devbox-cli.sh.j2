@@ -291,6 +291,12 @@ if bridge.get("sync_disk"):
     # was never configured.
     if bridge.get("engine"):
         profile["syncEngine"] = bridge["engine"]
+# Independent of the disk: a developer can serve client paths on demand without syncing
+# anything, so these are carried whether or not sync_disk is set.
+if bridge.get("lazy_mounts"):
+    profile["lazyMounts"] = bridge["lazy_mounts"]
+    if bridge.get("lazy_mount_on_connect"):
+        profile["lazyMountOnConnect"] = True
 # paths are already fully resolved by the generator — nothing to look up client-side.
 if apps.get("enabled") and apps.get("paths"):
     profile["appConfigs"] = apps["paths"]

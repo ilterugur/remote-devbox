@@ -83,7 +83,12 @@ test("declared resources survive normalization", () => {
 
 test("file_bridge defaults to off with the mutagen engine", () => {
   const dev = dev0();
-  expect(dev.file_bridge).toEqual({ sync_disk: false, engine: "mutagen" });
+  expect(dev.file_bridge).toEqual({
+    sync_disk: false,
+    engine: "mutagen",
+    lazy_mounts: [],
+    lazy_mount_on_connect: false,
+  });
 });
 
 test("a declared file_bridge survives normalization", () => {
@@ -92,7 +97,12 @@ test("a declared file_bridge survives normalization", () => {
     developers: [{ ...resolved.developers[0]!, file_bridge: { sync_disk: true, engine: "syncthing" } }],
   };
   const dev = (normalize(withBridge).devbox_developers as Record<string, unknown>[])[0]!;
-  expect(dev.file_bridge).toEqual({ sync_disk: true, engine: "syncthing" });
+  expect(dev.file_bridge).toEqual({
+    sync_disk: true,
+    engine: "syncthing",
+    lazy_mounts: [],
+    lazy_mount_on_connect: false,
+  });
 });
 
 test("app_configs is emitted fully resolved", () => {

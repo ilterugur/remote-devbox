@@ -152,6 +152,12 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       };
       if (d.file_bridge?.sync_disk) profile.syncDisk = true;
       if (d.file_bridge?.engine) profile.syncEngine = d.file_bridge.engine as EngineId;
+      if (Array.isArray(d.file_bridge?.lazy_mounts) && d.file_bridge.lazy_mounts.length)
+        profile.lazyMounts = d.file_bridge.lazy_mounts.map((m: any) => ({
+          label: String(m.label),
+          path: String(m.path),
+        }));
+      if (d.file_bridge?.lazy_mount_on_connect) profile.lazyMountOnConnect = true;
       const rawPaths = d.app_configs?.enabled ? (d.app_configs.paths ?? []) : [];
       const entries = rawPaths.flatMap((raw: any) => {
         const r = resolveEntry(raw);

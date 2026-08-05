@@ -70,9 +70,10 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
     });
   }
 
-  // Only a profile whose lazy mounts are known gets the reconciler, and today that means
-  // a legacy all.yml checkout: neither devbox.yml nor the box's client.json describes lazy
-  // mounts yet, so on the canonical path there is nothing to reconcile and no agent.
+  // Only a profile that declares lazy mounts gets the reconciler — there is otherwise
+  // nothing to reconcile. `devbox mount up` is idempotent (it skips labels already live),
+  // which is what makes re-running it every minute the whole recovery story for a mount
+  // that a sleep, a wake or a dropped link took down.
   if (lazyMountsFor(cfg, profile).length) {
     out.push({
       label: `com.devbox.${profile}.mount`,

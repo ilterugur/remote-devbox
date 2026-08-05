@@ -35,6 +35,7 @@ import { runAgentDown, runAgentStatus, runAgentUp } from "./agent";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { runConfigLink, runConfigStatus, runConfigUnlink } from "./app-configs/run";
 import { runEditors } from "./editors";
+import { runUi } from "./ui";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
@@ -399,6 +400,18 @@ cli
       if (r.stderr) process.stderr.write(r.stderr);
     }
     process.exit(r.status ?? 0);
+  });
+
+cli
+  .command("ui [service]", "reach a box service (dashboard, control plane, desktop) over ssh")
+  .option("-p, --profile <profile>", "target profile")
+  .option("--port <local>", "local port to bind (default: the same port the box uses)")
+  .option("--no-open", "do not open a browser")
+  .action((service: string | undefined, opts: { profile?: string; port?: string; open?: boolean }) => {
+    runUi(cfg(), resolveProfile(cfg(), opts.profile), service, {
+      port: opts.port ? Number(opts.port) : undefined,
+      open: opts.open,
+    });
   });
 
 cli

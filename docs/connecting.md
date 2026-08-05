@@ -84,7 +84,29 @@ ssh <user>@<box>            # profile user to code, admin to maintain
 - `scripts/connect.sh` wraps the common operator calls (`ssh`/`status`/`login`/
   `attach`/`mosh`/`devup`/`serve`); `export DEVBOX_HOST=admin@<box>` first.
 
-### 6. Full desktop — RDP (XFCE, for the things a terminal can't do)
+### 6. Web UIs on the box — `devbox ui`
+
+Anything the box runs with a web interface — an agent dashboard, a memory control plane —
+listens on **loopback**. That is deliberate: a loopback service has no door of its own, so
+the SSH key that got you onto the box is the only credential in play, and a service that
+never learned to authenticate is not a hole in the box.
+
+```bash
+devbox ui                 # what is listening right now, and which needs a tunnel
+devbox ui hindsight       # tunnel it and open the browser
+devbox ui 9077            # by port, when the name is ambiguous or unhelpful
+devbox ui desktop         # the RDP port; prints an address instead of opening a browser
+```
+
+Which ports exist is **asked of the box**, not declared in `devbox.yml`: a list in the
+config is one more thing to keep true, and it would be wrong in exactly the case that
+matters — a service that moved, or died. Both ends of the tunnel bind `127.0.0.1`, so it
+never re-publishes a box service to whatever network your laptop is on.
+
+A listener that is *not* on loopback is shown as such. On a box where the firewall is the
+only thing keeping it private, that line is the warning.
+
+### 7. Full desktop — RDP (XFCE, for the things a terminal can't do)
 
 For a developer with `desktop.enabled`, the box runs XFCE behind xrdp. Point an RDP
 client (macOS: Microsoft's **Windows App**) at **`localhost:<client_port>`** (3389
@@ -105,6 +127,9 @@ PAM password whose hash is in `devbox.secrets.yml`.
   it writes the agent). `tailnet` additionally listens on the box's 100.x address. RDP is
   the one door here authenticated by a password rather than a key, which is why it is
   never public unless you spell out `unsafe-public`.
+- **`devbox ui desktop` is the one-off version of the same thing** — it opens a tunnel
+  for as long as it runs and prints the address. Reach for it on a machine you have not
+  set agents up on; the agent is what makes the address survive a reboot.
 - **The keyboard comes from `desktop.keyboard`**, or from the machine that ran
   `devbox plan` when you leave it out. It is applied by teaching xrdp the layout id
   your client announces — setting it inside the session does not stick, because xrdp
@@ -137,12 +162,10 @@ devbox agent up       # install or update them, and remove any the config no lon
 devbox agent down     # remove them
 ```
 
-The mount agent only appears for a profile whose **lazy mounts are known**, and today that
-means a checkout of the legacy `ansible/group_vars/all.yml` layout: `devbox.yml` has no
-`lazy_mounts` field yet and the box does not publish one either, so on the canonical path
-`devbox agent up` writes the desktop agent alone. The `mnt` bridge still works — it just
-has no launchd reconciler behind it, so re-run `devbox mount up` yourself after a sleep or
-a network drop.
+Each agent appears only when its profile asks for it: the desktop one for a developer with
+`desktop.enabled`, the mount one for a developer with `file_bridge.lazy_mounts`. A profile
+with neither gets nothing, and `devbox agent up` says so rather than writing an empty
+agent.
 
 Logs are in `~/.local/state/devbox/<label>.log`. Neither agent is required — they are
 what makes a saved RDP entry and a mounted path keep working without you thinking about

@@ -186,6 +186,10 @@ switch to that profile's account → your server → new session.
   disconnect). On by default (`mosh_enabled`); see [docs/mobile.md](docs/mobile.md).
 - **Dev servers / preview:** `sudo remote-devbox-dev <user> <project>` on the box,
   then Tailscale Serve or VS Code forward.
+- **Web UIs on the box — `devbox ui`:** dashboards and control planes listen on
+  loopback, so the SSH key that got you onto the box is the only credential involved.
+  `devbox ui` asks the box what is listening and tunnels the one you pick; the ports are
+  discovered rather than declared, so the list cannot go stale.
 - **`scripts/connect.sh`** runs locally and wraps the common ssh/attach/mosh/login/serve
   calls — `export DEVBOX_HOST=admin@<box>` first.
 

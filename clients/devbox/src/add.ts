@@ -32,9 +32,25 @@ export function toSshUrl(url: string): string {
   return `git@${host}:${path}.git`;
 }
 
-const git = (args: string[], cwd: string): string | null => {
+/** Runs a git command in `cwd` and returns its trimmed stdout, or null if it failed. */
+export type GitExec = (args: string[], cwd: string) => string | null;
+
+const realGit: GitExec = (args, cwd) => {
   const r = spawnSync("git", args, { cwd, encoding: "utf8" });
   return r.status === 0 && r.stdout ? r.stdout.trim() : null;
+};
+
+let git: GitExec = realGit;
+
+/**
+ * Swap the git runner. Only the tests use this, and they use it because spawning real
+ * processes made them flaky rather than thorough: with the whole suite running files in
+ * parallel, `spawnSync` occasionally fails outright, `git()` returns null, and
+ * detectProject dies with "not inside a git repository" — a failure that says nothing
+ * about the code under test. Passing null restores the real one.
+ */
+export const setGitExec = (fn: GitExec | null): void => {
+  git = fn ?? realGit;
 };
 
 export type Detected = { name: string; repo: string; branch: string; install: boolean };
