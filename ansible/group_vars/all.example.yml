@@ -33,55 +33,10 @@ swap_size: 4G # bump (e.g. 8G/12G) so heavy builds swap instead of getting OOM-k
 # zram_algo: zstd
 # zram_priority: 100  # > disk swap (-1): zram is used first
 
-# ── Per-server resource limits (systemd cgroup) ───────────────────────────────
-# Applied to every always-on Remote Control server unit, so a runaway build is
-# confined to its own cgroup and can never freeze the box or your interactive
-# shell. Empty string = no limit for that knob. Override per-server by adding a
-# `limits:` map to a server entry under `servers:`.
-# rc_limits:
-#   memory_high: "5G"     # soft: kernel reclaims/swaps past this (slows, no kill)
-#   memory_max: "6G"      # hard RAM cap; excess spills to swap, not the host
-#   memory_swap_max: ""   # cap on swap for this unit ("" = system swap)
-#   cpu_weight: 80        # relative CPU share under contention (<100 yields to shells)
-#   cpu_quota: ""         # absolute cap, e.g. "300%" = 3 of 4 cores ("" = uncapped)
-#   io_weight: 80
-#   nice: 5               # build niceness (>0 = lower priority than interactive work)
-#   oom_score_adjust: 300 # if the host ever OOMs, kill builds first, not your shell
-#
-# Build memory caps injected into every RC server's environment (per-server
-# override: `build_env:` on a server entry):
-# rc_build_env:
-#   NODE_OPTIONS: "--max-old-space-size=2048"
-
-# ── Self-heal + crash-aware session resume (ON by default) ────────────────────
-# Each always-on Remote Control server runs as a monitored process that systemd
-# auto-restarts on ANY death — OOM kill, manual kill, or crash — in seconds. (A
-# plain oneshot unit goes to "failed (oom-kill)" and STAYS down; the monitor lets
-# systemd track liveness and restart it.) After a restart, a companion orchestrator
-# scans the project's worktrees for sessions that were interrupted and brings each
-# one back: resumed from disk (full conversation), re-registered on the phone, and
-# — for any Workflow that was running when killed — resumed from its on-disk journal
-# so the completed agents replay from cache and only the aborted tail re-runs.
-# Completed workflows are never re-run. The resumed agent is told (via a system
-# prompt) that this was an automated host event, so it continues seamlessly in the
-# conversation's own language instead of posting "No response requested.".
-#
-# Safe by design: idempotent (won't double-resume a live session), throttled
-# (rc_resume_max_concurrent at a time + a free-RAM gate, so recovery can't re-OOM
-# the box), and quarantined (a session that keeps crashing is skipped after
-# rc_resume_max_attempts within an hour, avoiding an OOM-restart loop). Worktrees
-# and transcripts are read, never modified. Override any knob here:
-# rc_autorestart: true            # false = legacy oneshot (stays down after OOM)
-# rc_restart_sec: 10
-# rc_resume_on_boot: true         # false = self-heal only, no auto-resume
-# rc_resume_lookback_h: 12        # only resume sessions active within this window
-# rc_resume_max_concurrent: 2     # sessions booting at once (OOM guard)
-# rc_resume_min_free_mb: 1200     # wait for this much free RAM before next launch
-# rc_resume_max_attempts: 3       # quarantine after N resumes within an hour
-# Persists per-profile "workflows may use many agents/tokens" consent so resumed
-# workflows continue without a prompt (only suppresses that warning — does NOT
-# bypass edit/bash permissions). Defaults on when rc_resume_on_boot is on:
-# rc_resume_skip_workflow_warning: true
+# ── Remote Control servers ────────────────────────────────────────────────────
+# Moved to devbox.yml — the always-on servers, their limits, their build env and the
+# self-heal/resume behaviour are all declared in the `remote_control:` block there,
+# and per project under `projects[].remote_control`. See devbox.example.yml.
 
 # ── Private networking ────────────────────────────────────────────────────────
 # Tailscale gives the box a private tailnet address (recommended: the dashboard,
