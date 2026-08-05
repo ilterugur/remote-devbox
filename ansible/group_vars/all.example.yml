@@ -95,7 +95,7 @@ tailscale_enabled: true
 # Only needed when tailscale_enabled is true.
 tailscale_authkey: "tskey-auth-REPLACE_ME"
 # Host the `devbox-*` ssh aliases (mosh / plain ssh / VS Code / Zed) connect to, set
-# by gen-editor-config.py. Pin the box's Tailscale IP (or MagicDNS name) here: mosh's
+# by the client setup. Pin the box's Tailscale IP (or MagicDNS name) here: mosh's
 # UDP range is opened on tailscale0 ONLY, so connecting over the public IP fails with
 # "Nothing received from server on UDP port". Provisioning still uses inventory.ini's
 # ansible_host (the public IP). Leave unset to use the public IP for connect too.
@@ -144,7 +144,7 @@ profiles:
     # ── File bridge (optional) — see docs/file-bridge.md ──────────────────────
     # Lazy, read-only, full-depth windows onto client paths. The box mounts these
     # at /home/<user>/mnt/<label> while your client is online (gone when it sleeps).
-    # Declared here; gen-editor-config.py propagates them to the client CLI config.
+    # Declared here; the client CLI config picks them up from this file.
     # lazy_mounts:
     #   - { label: desktop,   path: "~/Desktop" }
     #   - { label: documents, path: "~/Documents" }

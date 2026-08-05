@@ -3,8 +3,8 @@
  * devbox — connect to a claude-devbox profile/project over mosh+tmux (ssh fallback),
  * or `devbox push` a Claude Code session to the box and resume it there.
  *
- * Reads ~/.config/claude-devbox/config.json (written by gen-editor-config.py --cli)
- * and the active-profile state file. Bare `devbox` git-auto-opens the matching box
+ * Reads ~/.config/remote-devbox/config.json (written by the box's installer) and the
+ * active-profile state file. Bare `devbox` git-auto-opens the matching box
  * project for $PWD, else shows a fuzzy picker. All domain logic lives in config.ts;
  * this file is only the cac wiring. Set DEVBOX_DRYRUN=1 to print commands instead.
  */
@@ -33,6 +33,7 @@ import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { runConfigLink, runConfigStatus, runConfigUnlink } from "./app-configs/run";
+import { runEditors } from "./editors";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
@@ -58,8 +59,8 @@ function newHelp(prof: string) {
 }
 
 // Lazy + memoized: `devbox plan` / `migrate-config` operate on devbox.yml and must
-// work on a machine that has never run gen-editor-config.py (loadConfig() die()s
-// when ~/.config/claude-devbox/config.json is absent).
+// work on a machine the installer has never touched (loadConfig() die()s when
+// ~/.config/remote-devbox/config.json is absent).
 let _cfg: Config | null = null;
 const cfg = (): Config => (_cfg ??= loadConfig());
 
@@ -387,6 +388,15 @@ cli
   });
 
 cli
+  .command("editors", "register the box in Zed, and free ⌘W in the macOS RDP client")
+  .option("--zed", "write Zed's settings even when Zed does not look installed")
+  .action((opts: { zed?: boolean }) => {
+    const r = runEditors(cfg(), { zed: opts.zed });
+    console.log(`  ${r.zed}`);
+    console.log(`  ${r.rdp}`);
+  });
+
+cli
   .command("phases", "list the provisioning phases 'devbox apply' understands")
   .action(() => {
     console.log("phases, in the order they are safe to run:\n");
@@ -396,9 +406,10 @@ cli
 
 cli.help();
 cli.version("0.1.0");
-// `bun run src/devbox.ts …` yields argv [bun, script.ts, …args]; a compiled standalone
-// binary yields [exe, …args] — one fewer. cac parses from argv[2], so for the compiled
-// case reinsert a placeholder "script" slot, otherwise the first arg (the command) is lost.
-const argv = process.argv;
-const fromSource = argv[1]?.endsWith(".ts") || argv[1]?.endsWith(".js");
-cli.parse(fromSource ? argv : [argv[0]!, "devbox", ...argv.slice(1)]);
+// Both forms yield the same shape, so cac's own default is correct and no shim belongs
+// here: `bun run src/devbox.ts use` gives [bun, /path/src/devbox.ts, use] and the compiled
+// binary gives [bun, /$bunfs/root/devbox, use]. An earlier version assumed the compiled
+// case dropped a slot and re-inserted one, which shifted every argument by one and made
+// every subcommand fail with "Unused args" — invisible until the binary was actually run,
+// which is why the build script now runs it.
+cli.parse(process.argv);

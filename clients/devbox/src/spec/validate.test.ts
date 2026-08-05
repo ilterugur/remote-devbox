@@ -75,6 +75,16 @@ test("shared_services only accepts system-docker", () => {
   );
 });
 
+test("cli_targets rejects a platform bun cannot compile for", () => {
+  expect(paths({ ...minimal(), clients: { cli_targets: ["darwin-arm64", "windows-x64"] } })).toContain(
+    "error:clients.cli_targets",
+  );
+});
+
+test("cli_targets may be empty — publish no binaries at all", () => {
+  expect(paths({ ...minimal(), clients: { cli_targets: [] } })).toEqual([]);
+});
+
 test("a developer with no login key is warned, not blocked", () => {
   const r = validateStructure({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [] }] });
   expect(r.issues.map((i) => `${i.severity}:${i.path}`)).toEqual(["warning:developers[0].login_ssh_keys"]);

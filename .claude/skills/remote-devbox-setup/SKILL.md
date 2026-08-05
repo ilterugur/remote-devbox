@@ -168,33 +168,29 @@ These can't be fully automated; walk the user through them:
 
 - Check services: `ssh <operator>@<box> "systemctl status 'claude-rc-*' --no-pager"`
   (or `scripts/connect.sh status` with `DEVBOX_HOST` set).
-- **Register the box as an SSH host (so the Claude desktop app + editors see it):**
-  run `python3 scripts/gen-editor-config.py`. It **idempotently adds a `Host
-  devbox-<user>` block per profile to `~/.ssh/config` if not already present** (its own
-  managed block, backed up first) — that's the SSH-host entry the **Claude desktop app**,
-  VS Code / Cursor Remote-SSH, plain `ssh`, and Zed all read. For Zed it also merges an
-  `ssh_connections` entry pre-listing each profile's projects (if Zed's settings has
-  comments it prints the snippet to paste instead — paste it yourself). It also writes
-  a one-word **`devbox`** shell command (`devbox` = default profile, `devbox <profile>
-  [session]` otherwise) that connects over mosh+tmux for a drop-proof terminal — pass
-  `--host <tailscale-100.x-IP>` so mosh resolves over Tailscale (its UDP is tailscale-only;
-  use the **100.x IP, not the MagicDNS name** — mosh often can't resolve MagicDNS),
-  `--default <profile>` to set the bare-`devbox` target, and `--launch claude` to auto-start
-  Claude on a fresh session (the command pins LANG/LC_ALL/LC_CTYPE so a macOS region locale
-  like en_TR.UTF-8 doesn't break mosh-server). Re-running is safe:
-  existing blocks are updated in place, not duplicated.
-  - **`--cli`** (when the client has **bun**): installs the Bun/TS CLI at
-    `clients/devbox/` instead of the shell function — a fuzzy picker (`@clack/prompts`,
-    no fzf), git-auto-open of the matching local repo, and an argv-array launch (no
-    shell-quoting pitfalls). It writes `~/.config/remote-devbox/config.json`, drops a
-    `~/.local/bin/<prefix>` wrapper, and removes the shell function so it isn't shadowed.
-    Omit `--cli` for clients without bun (e.g. the phone) to keep the shell function.
-  - **`--rdp-close-shortcut`** (macOS clients of a box with a desktop): moves the RDP
-    client's "Close" menu item to ⌥⌘W so ⌘W stops closing the whole session window.
-    macOS routes ⌘W to the app's menu before it can be forwarded and no in-app setting
-    overrides that, so reassigning the shortcut is the only fix; the client has to be
-    quit and reopened afterwards. Only frees the key — Command still reaches the session
-    as the Windows key, and Control is what arrives as Ctrl.
+- **Set the client up from the box (SSH host + the CLI itself):** the box generates the
+  installer, so a developer needs neither this repo nor Bun:
+
+  ```bash
+  ssh <you>@<box> 'devbox client-config --installer' > devbox-setup.sh
+  less devbox-setup.sh && sh devbox-setup.sh
+  ```
+
+  It writes the tailnet probe, a per-alias `Host devbox-<user>` block in `~/.ssh/config`
+  (backed up first, re-runnable, one block per account so setting up a second account
+  cannot erase the first), the compiled `devbox` CLI in `~/.local/bin`, and
+  `~/.config/remote-devbox/config.json` — then proves it by connecting. That ssh block is
+  what the **Claude desktop app**, VS Code / Cursor Remote-SSH, plain `ssh` and Zed all
+  read. The alias prefers the tailnet when it is up and falls back to the public address
+  otherwise; `-ts` and `-pub` variants pin one path for debugging.
+- **Then, on the client, `devbox editors`:** merges Zed's `ssh_connections` pre-listing
+  each profile's projects (if Zed's settings file has comments it prints the snippet to
+  paste, rather than rewriting a file it cannot round-trip), and on macOS moves the RDP
+  client's "Close" menu item to ⌥⌘W so ⌘W stops closing the whole session window. macOS
+  routes ⌘W to the app's menu before it can be forwarded and no in-app setting overrides
+  that, so reassigning the shortcut is the only fix; the client has to be quit and
+  reopened afterwards. Only frees the key — Command still reaches the session as the
+  Windows key, and Control is what arrives as Ctrl.
 - Point the user to daily use: connect the **desktop app / VS Code Remote-SSH /
   Zed as a profile** (e.g. `devbox-work`), drive from the **mobile app** per
   profile, and preview dev servers (`docs/realtime-sync.md`, `docs/mobile.md`).

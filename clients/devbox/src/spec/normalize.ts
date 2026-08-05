@@ -8,6 +8,7 @@
  *     `{}` or `[]` — so no role ever needs a Jinja `| default(...)`, and a missing key
  *     in a template is a real bug rather than a silent policy decision.
  */
+import { DEFAULT_CLI_TARGETS } from "./types";
 import type {
   ClientFacts,
   GitIdentity,
@@ -76,6 +77,12 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_shared_services: {
       enabled: resolved.shared_services?.enabled ?? false,
       engine: resolved.shared_services?.engine ?? "system-docker",
+    },
+    devbox_clients: {
+      // The three platforms a developer laptop is usually one of. linux-arm64 is left
+      // out of the default because each target costs a ~60-90MB build and upload, and an
+      // operator who has such a laptop on the team is the one who knows it.
+      cli_targets: [...(resolved.clients?.cli_targets ?? DEFAULT_CLI_TARGETS)],
     },
     devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client)),
   };

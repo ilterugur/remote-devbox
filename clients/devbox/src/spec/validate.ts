@@ -8,7 +8,9 @@
  */
 import { type Issue, err, hasErrors, warn } from "./issues";
 import {
+  CLI_TARGETS,
   CONFIG_VERSION,
+  type CliTarget,
   type DevboxSpec,
   type EngineId,
   SUPPORTED_PLATFORM,
@@ -81,6 +83,7 @@ export function validateStructure(raw: unknown): { spec: DevboxSpec | null; issu
   validateNetwork(raw, issues);
   validateContainer(raw, issues);
   validateSharedServices(raw, issues);
+  validateClients(raw, issues);
   validateDevelopers(raw, issues);
 
   return { spec: hasErrors(issues) ? null : (raw as unknown as DevboxSpec), issues };
@@ -263,6 +266,22 @@ function validateSharedServices(raw: Record<string, unknown>, issues: Issue[]): 
   }
   if (s.engine !== undefined && s.engine !== "system-docker") {
     issues.push(err("shared_services.engine", "only 'system-docker' is supported"));
+  }
+}
+
+function validateClients(raw: Record<string, unknown>, issues: Issue[]): void {
+  const c = raw.clients;
+  if (c === undefined) return;
+  if (!isRecord(c)) {
+    issues.push(err("clients", "must be a mapping"));
+    return;
+  }
+  const t = c.cli_targets;
+  if (t === undefined) return;
+  // An empty list is legitimate and means "publish no binaries" — the box then tells a
+  // developer to build their own rather than pretending one is waiting for them.
+  if (!Array.isArray(t) || t.some((x) => !CLI_TARGETS.includes(x as CliTarget))) {
+    issues.push(err("clients.cli_targets", `must be a list of: ${CLI_TARGETS.join(", ")}`));
   }
 }
 

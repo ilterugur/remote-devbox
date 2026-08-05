@@ -1,0 +1,87 @@
+---
+# Publish the `devbox` CLI as a compiled binary, one per platform, so a developer needs
+# neither this repo nor a Bun install to get the client.
+#
+# The build runs on the operator's machine, not here: that is where the source and Bun
+# already are, and it keeps the box free of a toolchain it would otherwise carry solely
+# to hand out binaries. Bun cross-compiles, so one machine covers every target.
+
+- name: Ensure the published client directory exists
+  ansible.builtin.file:
+    path: /usr/local/share/remote-devbox/clients
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# First, so a platform dropped from cli_targets is gone before the checksums are written
+# and cannot be offered by `client-config --cli` from source nobody has any more.
+- name: Find published binaries that are no longer configured
+  ansible.builtin.find:
+    paths: /usr/local/share/remote-devbox/clients
+    patterns: "devbox-*"
+    excludes: "{{ devbox_clients.cli_targets | map('regex_replace', '^', 'devbox-') | list }}"
+  register: _devbox_cli_stale
+
+- name: Unpublish them
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _devbox_cli_stale.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: _devbox_cli_unpublish
+
+- name: Build the client CLI for each published platform
+  ansible.builtin.command:
+    argv: "{{ ['/bin/sh', playbook_dir ~ '/../scripts/build-client-cli.sh'] + devbox_clients.cli_targets }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: _devbox_cli_build
+  when: devbox_clients.cli_targets | length > 0
+  # The script rebuilds only when the source fingerprint moved, and says which it did.
+  # Reporting "changed" for a run that rebuilt nothing would make every playbook run look
+  # like it touched the clients.
+  changed_when: "'built' in _devbox_cli_build.stdout"
+
+- name: Publish the client CLI binaries
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../clients/devbox/dist/devbox-{{ item }}"
+    dest: "/usr/local/share/remote-devbox/clients/devbox-{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ devbox_clients.cli_targets }}"
+  register: _devbox_cli_publish
+
+# What a client compares against after fetching, so a truncated or mangled transfer is
+# caught before the binary is run rather than after it segfaults.
+#
+# Written every run and compared, rather than only when a binary moved: gating it on the
+# publish task means a SHA256SUMS that goes missing is never rebuilt, because the
+# binaries it describes are all still current. Hashing a few hundred MB costs about a
+# second; a checksum file that silently stays absent costs a developer an afternoon.
+- name: Publish the client CLI checksums
+  ansible.builtin.shell:
+    chdir: /usr/local/share/remote-devbox/clients
+    cmd: |
+      if ls devbox-* >/dev/null 2>&1; then sha256sum devbox-* > SHA256SUMS.new
+      else : > SHA256SUMS.new; fi
+      if cmp -s SHA256SUMS.new SHA256SUMS 2>/dev/null; then
+        rm -f SHA256SUMS.new; echo unchanged
+      else
+        mv SHA256SUMS.new SHA256SUMS; echo updated
+      fi
+  register: _devbox_cli_sums
+  changed_when: "'updated' in _devbox_cli_sums.stdout"
+
+# The box runs with umask 077, so a shell redirect leaves this readable only by root —
+# and the client verifies by reading it as the developer. Stated declaratively so a file
+# that already has the wrong mode is corrected, not just newly written ones.
+- name: Make the checksums readable by the developers who verify against them
+  ansible.builtin.file:
+    path: /usr/local/share/remote-devbox/clients/SHA256SUMS
+    owner: root
+    group: root
+    mode: "0644"

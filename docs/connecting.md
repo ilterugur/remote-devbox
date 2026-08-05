@@ -29,8 +29,8 @@ An always-on `claude remote-control` server runs on the box per `(profile, proje
 
 ### 2. mosh + tmux — terminal, roaming-resilient (best for flaky connections)
 
-Drive the real `claude` TUI from a terminal that survives network drops.
-`gen-editor-config.py` writes a one-word `devbox` command for this (per profile):
+Drive the real `claude` TUI from a terminal that survives network drops. The `devbox`
+command the box's installer puts on your machine does this (per profile):
 
 ```bash
 devbox                      # connect to the default profile, tmux session "main"
@@ -46,9 +46,10 @@ falls back to `ssh` if mosh isn't available. Under the hood it's
 `mosh <prefix>-<profile> -- tmux new -A -s <session>`.
 
 - Installed by default (`mosh_enabled`); the box's mosh UDP range is open **only on
-  tailscale0**, so the `devbox` alias must point at the box's **Tailscale** address —
-  run `gen-editor-config.py --host <tailscale-100.x-IP>` — use the **100.x IP**, not the
-  MagicDNS name (mosh often can't resolve MagicDNS). Clients: this machine on
+  tailscale0**, so mosh needs the alias to resolve to the box's **Tailscale** address.
+  The generated ssh block already prefers the tailnet when it is up (and its `-ts`
+  variant pins it); it uses the **100.x IP**, not the MagicDNS name, because mosh often
+  cannot resolve MagicDNS. Clients: this machine on
   Tailscale + `brew install mosh` (client) or Blink / Termius (phone).
 - Best for: mobile, switching cells/Wi‑Fi, a real terminal.
 
@@ -64,7 +65,7 @@ The desktop app opens the project on the box over its own SSH connection.
 
 ### 4. VS Code / Cursor — Remote-SSH
 
-`gen-editor-config.py` writes a `Host devbox-<user>` block to `~/.ssh/config`.
+The box's installer writes a `Host devbox-<user>` block into `~/.ssh/config`.
 
 - **Connect:** Remote-SSH → Connect to Host → `devbox-<user>` → open
   `~/projects/<project>`. Editor + integrated terminal run on the box; auto
@@ -99,7 +100,7 @@ Linux username and the PAM password whose hash is in `devbox.secrets.yml`.
   applies its own keymap when the client connects, after the session has started.
 - **⌘W closes the whole connection** on macOS, and no in-app setting changes that:
   macOS routes it to the client's own "Close" menu item before the app can forward it.
-  Free it with `gen-editor-config.py --rdp-close-shortcut`, which moves that menu item
+  Free it with `devbox editors`, which moves that menu item
   to ⌥⌘W (quit and reopen the client afterwards — menu shortcuts are read at launch).
   Note the client maps Command to the **Windows** key and Control to Ctrl, so the key
   that reaches the session as Ctrl was always the physical Control key.

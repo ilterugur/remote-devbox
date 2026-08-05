@@ -78,6 +78,16 @@ shared_services:
   enabled: false
   engine: system-docker
 
+# What the box hands a laptop. The CLI is published as a compiled binary per platform,
+# so a developer needs neither this repo nor a Bun install — they run
+# `ssh <you>@<box> 'devbox client-config --installer'` and read what it will do.
+#
+# Each target costs a ~60-90MB build on the machine running Ansible and one upload; the
+# box only re-uploads when the CLI source actually changes. Trim the list to the
+# platforms your developers are on, or set it to [] to publish none.
+clients:
+  cli_targets: [darwin-arm64, darwin-x64, linux-x64]   # linux-arm64 also available
+
 developers:
   # ── A fully-featured developer, showing every override dimension ───────────
   - user: dev-a
