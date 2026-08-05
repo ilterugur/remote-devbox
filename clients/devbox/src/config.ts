@@ -223,6 +223,76 @@ export function resolveTransport(opt?: Transport): Transport {
   return "auto";
 }
 
+/** Effective hostname/port for an ssh alias, straight from ssh's own config parser. */
+export function resolveSshHostPort(alias: string): { host: string; port: number } | null {
+  const r = spawnSync("ssh", ["-G", alias], { encoding: "utf8" });
+  if (r.status !== 0 || !r.stdout) return null;
+  let host = "";
+  let port = 22;
+  for (const line of r.stdout.split("\n")) {
+    const sp = line.indexOf(" ");
+    if (sp < 0) continue;
+    const key = line.slice(0, sp);
+    const value = line.slice(sp + 1).trim();
+    if (key === "hostname" && value) host = value;
+    else if (key === "port" && value) port = Number(value) || 22;
+  }
+  return host ? { host, port } : null;
+}
+
+/** TCP reachability probe. Returns true when we cannot test, so a missing `nc` degrades
+ *  to the old behaviour rather than blocking a connection that would have worked. */
+export function portOpen(host: string, port: number, timeoutSec = 3): boolean {
+  if (Bun.which("nc") == null) return true;
+  return spawnSync("nc", ["-z", "-w", String(timeoutSec), host, String(port)]).status === 0;
+}
+
+/** The TCP port a transport needs, or null when it cannot be probed. */
+export const transportPort = (t: Transport, sshPort: number): number | null =>
+  t === "et" ? 2022 : t === "ssh" ? sshPort : null; // mosh is UDP — no cheap probe
+
+/**
+ * Which transport to actually use. Split out from connect() so the decision is testable
+ * without a network: "auto" used to mean "whichever accelerator is installed HERE",
+ * which is only half the question. Eternal Terminal's port is commonly reachable on one
+ * path and firewalled on another (here it is tailnet-only), so on the other path the old
+ * logic picked it and failed instead of falling back to ssh, which would have worked.
+ *
+ * mosh is left unprobed: its UDP range has no cheap equivalent of a TCP connect, so a
+ * blocked range still shows up as mosh's own "nothing received" timeout.
+ */
+export function pickTransport(opts: {
+  want: Transport;
+  has: (bin: string) => boolean;
+  canReach: (t: Transport) => boolean;
+  offerInstall?: (t: Transport) => boolean;
+}): { pick: Transport; note?: string } {
+  const { want, has, canReach } = opts;
+  const offerInstall = opts.offerInstall ?? (() => false);
+
+  if (want === "ssh") return { pick: "ssh" };
+
+  if (want === "auto") {
+    for (const t of ["et", "mosh"] as const) {
+      if (!has(t)) continue;
+      if (canReach(t)) return { pick: t };
+      return { pick: "ssh", note: NOT_REACHABLE(t) };
+    }
+    if (offerInstall("et") && canReach("et")) return { pick: "et" };
+    return { pick: "ssh" };
+  }
+
+  // An explicit choice still offers to install, but is not forced through when the box
+  // cannot be reached that way — failing with the user's own flag is not more honest
+  // than telling them why it cannot work here.
+  if (!has(want) && !offerInstall(want)) return { pick: "ssh" };
+  if (!canReach(want)) return { pick: "ssh", note: NOT_REACHABLE(want) };
+  return { pick: want };
+}
+
+const NOT_REACHABLE = (t: Transport) =>
+  t + " is installed but its port is not reachable on this path — using ssh";
+
 export function connect(
   cfg: Config,
   prof: string,
@@ -267,12 +337,21 @@ export function connect(
   let pick: Transport;
   if (process.env.DEVBOX_DRYRUN) {
     pick = want === "auto" ? (has("et") ? "et" : has("mosh") ? "mosh" : "ssh") : want;
-  } else if (want === "auto") {
-    pick = has("et") ? "et" : has("mosh") ? "mosh" : (ensureClientTransport("et") ? "et" : "ssh");
-  } else if (want === "ssh") {
-    pick = "ssh";
   } else {
-    pick = ensureClientTransport(want) ? want : "ssh";
+    const endpoint = resolveSshHostPort(host);
+    const chosen = pickTransport({
+      want,
+      has,
+      // An alias ssh itself cannot resolve: let ssh report that, rather than guessing.
+      canReach: (t) => {
+        if (!endpoint) return true;
+        const port = transportPort(t, endpoint.port);
+        return port == null ? true : portOpen(endpoint.host, port);
+      },
+      offerInstall: (t) => (t === "et" || t === "mosh") && ensureClientTransport(t),
+    });
+    pick = chosen.pick;
+    if (chosen.note) process.stderr.write("devbox: " + chosen.note + "\n");
   }
   // mosh forwards argv after `--` intact (no shell). et and ssh take one shell-parsed
   // command string on the box, so build a properly-quoted string for them.

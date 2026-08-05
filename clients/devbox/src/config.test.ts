@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { appConfigsFor, profilesFromYaml, type Config } from "./config";
+import { appConfigsFor, pickTransport, profilesFromYaml, transportPort, type Config } from "./config";
 
 /** Make a throwaway claude-devbox checkout with the given all.yml body; return its root. */
 function repoWithYaml(body: string): string {
@@ -167,5 +167,52 @@ describe("profilesFromYaml — which config file wins", () => {
     const cfg: Config = { prefix: "devbox", default: "work", locale: "en_US.UTF-8", launch: "claude",
       profiles: [{ user: "work", projects: [] }] };
     expect(appConfigsFor(cfg, "work")).toEqual([]);
+  });
+});
+
+describe("pickTransport", () => {
+  const all = () => true;
+  const none = () => false;
+
+  test("auto takes the fastest accelerator that can actually reach the box", () => {
+    expect(pickTransport({ want: "auto", has: all, canReach: all }).pick).toBe("et");
+    expect(pickTransport({ want: "auto", has: (b) => b === "mosh", canReach: all }).pick).toBe("mosh");
+  });
+
+  test("auto falls back to ssh when the accelerator's port is firewalled here", () => {
+    const r = pickTransport({ want: "auto", has: all, canReach: (t) => t !== "et" });
+    expect(r.pick).toBe("ssh");
+    expect(r.note).toContain("et");
+  });
+
+  test("auto with nothing installed and no install offered lands on ssh", () => {
+    expect(pickTransport({ want: "auto", has: none, canReach: all }).pick).toBe("ssh");
+  });
+
+  test("auto offers to install et, but only uses it if it can reach", () => {
+    expect(pickTransport({ want: "auto", has: none, canReach: all, offerInstall: all }).pick).toBe("et");
+    expect(pickTransport({ want: "auto", has: none, canReach: none, offerInstall: all }).pick).toBe("ssh");
+  });
+
+  test("an explicit choice is still not forced through an unreachable port", () => {
+    const r = pickTransport({ want: "et", has: all, canReach: none });
+    expect(r.pick).toBe("ssh");
+    expect(r.note).toContain("et");
+  });
+
+  test("an explicit choice is honoured when it can reach", () => {
+    expect(pickTransport({ want: "et", has: all, canReach: all })).toEqual({ pick: "et" });
+  });
+
+  test("ssh is never probed away", () => {
+    expect(pickTransport({ want: "ssh", has: none, canReach: none })).toEqual({ pick: "ssh" });
+  });
+});
+
+describe("transportPort", () => {
+  test("et is a fixed port, ssh follows the alias, mosh cannot be probed", () => {
+    expect(transportPort("et", 22)).toBe(2022);
+    expect(transportPort("ssh", 2222)).toBe(2222);
+    expect(transportPort("mosh", 22)).toBeNull();
   });
 });
