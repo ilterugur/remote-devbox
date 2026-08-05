@@ -20,6 +20,7 @@ import type {
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { rdpLayoutId } from "./rdp-layouts";
 import { toYaml } from "./yaml";
+import { payloadBasename, resolveEntry } from "../app-configs/registry";
 
 const GENERATED_HEADER = [
   "---",
@@ -119,6 +120,21 @@ function normalizeDeveloper(
       access: [...(dev.desktop?.access ?? defaultDesktopAccess(tailscale))],
       idle_logout_minutes: dev.desktop?.idle_logout_minutes ?? null,
       keyboard: resolveKeyboard(dev, client),
+    },
+    file_bridge: {
+      sync_disk: dev.file_bridge?.sync_disk ?? false,
+      engine: dev.file_bridge?.engine ?? "mutagen",
+    },
+    app_configs: {
+      enabled: dev.app_configs?.enabled ?? false,
+      paths: (dev.app_configs?.paths ?? []).flatMap((raw) => {
+        const r = resolveEntry(raw);
+        // validate.ts already rejected anything unresolvable; a survivor here is a bug.
+        // `payload` is the box-side helper's file/ssh-include basename, computed once
+        // here (the single source of truth — see payloadBasename) rather than left for
+        // the shell to recompute from its own box path, which can name a different file.
+        return "entry" in r ? [{ ...r.entry, excludes: [...r.entry.excludes], payload: payloadBasename(r.entry) }] : [];
+      }),
     },
     projects: dev.projects.map((p) => ({
       name: p.name,

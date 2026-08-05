@@ -32,6 +32,7 @@ import { runPull } from "./pull";
 import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
+import { runConfigLink, runConfigStatus, runConfigUnlink } from "./app-configs/run";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
@@ -181,6 +182,21 @@ cli
       case "pause": return runSyncPause(cfg(), prof, false);
       case "resume": return runSyncPause(cfg(), prof, true);
       default: return die(`unknown sync action "${action}" (up|down|status|pause|resume)`);
+    }
+  });
+
+cli
+  .command("config [action]", "link the declared app configs into the sync disk (action: link|status|unlink)")
+  .option("-p, --profile <profile>", "target profile")
+  .option("--from-client", "non-interactive: the client always wins the first seed")
+  .option("--label <label>", "only this app config (for unlink)")
+  .action(async (action: string | undefined, opts: { profile?: string; fromClient?: boolean; label?: string }) => {
+    const prof = resolveProfile(cfg(), opts.profile);
+    switch (action ?? "status") {
+      case "link": return runConfigLink(cfg(), prof, { fromClient: !!opts.fromClient });
+      case "status": return runConfigStatus(cfg(), prof);
+      case "unlink": return runConfigUnlink(cfg(), prof, opts.label);
+      default: return die(`unknown config action "${action}" (link|status|unlink)`);
     }
   });
 

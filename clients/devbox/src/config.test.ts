@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { profilesFromYaml } from "./config";
+import { appConfigsFor, profilesFromYaml, type Config } from "./config";
 
 /** Make a throwaway claude-devbox checkout with the given all.yml body; return its root. */
 function repoWithYaml(body: string): string {
@@ -108,6 +108,23 @@ describe("profilesFromYaml — which config file wins", () => {
     expect(out?.[0]!.projects).toEqual([{ name: "app", repo: "git@github.com:example-org/app.git" }]);
   });
 
+  test("canonical devbox.yml carries the file bridge onto the profile", () => {
+    const out = profilesFromYaml(
+      repo({
+        "devbox.yml": [
+          "developers:",
+          "  - user: work",
+          "    file_bridge:",
+          "      sync_disk: true",
+          "      engine: syncthing",
+          "",
+        ].join("\n"),
+      }),
+    );
+    expect(out?.[0]!.syncDisk).toBe(true);
+    expect(out?.[0]!.syncEngine).toBe("syncthing");
+  });
+
   test("devbox.yml wins over a legacy file that is still lying around", () => {
     const out = profilesFromYaml(
       repo({ "devbox.yml": DEVBOX_YML, "ansible/group_vars/all.yml": LEGACY_YML }),
@@ -129,5 +146,26 @@ describe("profilesFromYaml — which config file wins", () => {
       repo({ "devbox.yml": "config_version: 3\ndevelopers: []\n", "ansible/group_vars/all.yml": LEGACY_YML }),
     );
     expect(out?.map((p) => p.user)).toEqual(["legacy-user"]);
+  });
+
+  test("canonical devbox.yml carries resolved app configs onto the profile", () => {
+    const dir = mkdtempSync(join(tmpdir(), "devbox-cfg-"));
+    writeFileSync(join(dir, "devbox.yml"), [
+      "developers:",
+      "  - user: work",
+      "    file_bridge: { sync_disk: true }",
+      "    app_configs:",
+      "      enabled: true",
+      "      paths: [filezilla]",
+    ].join("\n"));
+    const profs = profilesFromYaml(dir)!;
+    expect(profs[0].appConfigs?.[0].label).toBe("filezilla");
+    expect(profs[0].appConfigs?.[0].mode).toBe("dir");
+  });
+
+  test("appConfigsFor is empty when the block is absent", () => {
+    const cfg: Config = { prefix: "devbox", default: "work", locale: "en_US.UTF-8", launch: "claude",
+      profiles: [{ user: "work", projects: [] }] };
+    expect(appConfigsFor(cfg, "work")).toEqual([]);
   });
 });

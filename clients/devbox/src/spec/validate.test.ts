@@ -231,3 +231,55 @@ test("host.swappiness must be a kernel-valid integer", () => {
   expect(paths(host(-1))).toContain("error:host.swappiness");
   expect(paths(host("10"))).toContain("error:host.swappiness");
 });
+
+test("file_bridge accepts a known engine", () => {
+  const r = validateStructure({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: { sync_disk: true, engine: "syncthing" } }],
+  });
+  expect(r.issues).toEqual([]);
+  expect(r.spec?.developers[0]!.file_bridge?.engine).toBe("syncthing");
+});
+
+test("file_bridge rejects an unknown engine", () => {
+  expect(
+    paths({
+      ...minimal(),
+      developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: { engine: "rsync" } }],
+    }),
+  ).toContain("error:developers[0].file_bridge.engine");
+});
+
+const withApp = (app: unknown, bridge: unknown = { sync_disk: true }) => ({
+  ...minimal(),
+  developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: bridge, app_configs: app }],
+});
+
+test("app_configs accepts registry keys and object entries", () => {
+  const r = validateStructure(withApp({
+    enabled: true,
+    paths: ["filezilla", { label: "dbeaver", client: "~/a", box: "~/b", mode: "dir" }],
+  }));
+  expect(r.issues).toEqual([]);
+});
+
+test("app_configs rejects an unknown registry key", () => {
+  expect(paths(withApp({ enabled: true, paths: ["cyberduck"] }))).toContain(
+    "error:developers[0].app_configs.paths[0]",
+  );
+});
+
+test("app_configs requires the sync disk", () => {
+  expect(
+    paths(withApp({ enabled: true, paths: ["filezilla"] }, { sync_disk: false })),
+  ).toContain("error:developers[0].app_configs.enabled");
+});
+
+test("app_configs rejects an entry overlapping the sync disk root", () => {
+  expect(
+    paths(withApp({
+      enabled: true,
+      paths: [{ label: "bad", client: "~/devbox/dev-a/x", box: "~/b", mode: "dir" }],
+    })),
+  ).toContain("error:developers[0].app_configs.paths[0].client");
+});
