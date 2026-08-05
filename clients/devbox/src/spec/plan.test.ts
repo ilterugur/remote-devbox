@@ -28,3 +28,25 @@ test("the plan reports the global sections and an issue tally", () => {
 test("a developer with memory off prints 'disabled', not an empty space list", () => {
   expect(rendered()).toContain("memory      disabled");
 });
+
+test("the plan reports a sync disk and its app configs", () => {
+  // A declared block the plan never mentions reads as a block that was never declared —
+  // which is exactly how a live config looked after file_bridge landed.
+  const dev = {
+    user: "dev-c",
+    login_ssh_keys: [],
+    projects: [],
+    file_bridge: { sync_disk: true, engine: "syncthing" as const },
+    app_configs: { enabled: true, paths: ["filezilla", "ssh_config"] },
+  };
+  const { resolved, issues } = loadSpec(EXAMPLE_CONFIG);
+  const spec = resolved!;
+  spec.developers.push(dev as unknown as (typeof spec.developers)[number]);
+  const text = renderPlan(spec, issues);
+  expect(text).toContain("sync disk via syncthing");
+  expect(text).toContain("app configs filezilla, ssh_config");
+});
+
+test("a developer without a sync disk gets no file-bridge line", () => {
+  expect(rendered()).not.toContain("file bridge");
+});

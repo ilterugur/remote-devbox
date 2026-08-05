@@ -334,6 +334,8 @@ function validateAppConfigs(d: Record<string, unknown>, base: string, issues: Is
     return;
   }
   const disk = normalizePath(`~/devbox/${String(d.user)}`);
+  // The box path is absolute and belongs to the box, so it is compared as written.
+  const boxDisk = `/home/${String(d.user)}/sync`;
   const seen = new Set<string>();
   ac.paths.forEach((raw, i) => {
     const at = `${path}.paths[${i}]`;
@@ -348,10 +350,14 @@ function validateAppConfigs(d: Record<string, unknown>, base: string, issues: Is
     }
     if (seen.has(r.entry.label)) issues.push(err(at, `duplicate app config "${r.entry.label}"`));
     seen.add(r.entry.label);
-    // The store lives inside the disk; the app-visible path must stay outside it,
-    // otherwise the link would point at itself.
+    // The store lives inside the disk, so the app-visible path has to stay outside it on
+    // BOTH sides — a link pointing into its own store points at itself. The two sides
+    // have different disks: ~/devbox/<user> on the client, /home/<user>/sync on the box.
     if (pathsOverlap(r.entry.client, disk)) {
       issues.push(err(`${at}.client`, `overlaps the sync disk ${disk}`));
+    }
+    if (pathsOverlap(r.entry.box, boxDisk)) {
+      issues.push(err(`${at}.box`, `overlaps the box sync disk ${boxDisk}`));
     }
   });
 }
