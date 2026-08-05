@@ -45,6 +45,7 @@ const rcResolved = (): ResolvedSpec => ({
           ...resolved.developers[0]!.projects[0]!,
           remote_control: {
             agent: "claude",
+            agent_profile: "claude-main",
             name: "dev-a · p",
             spawn: "worktree",
             capacity: 4,
@@ -88,6 +89,7 @@ test("rc units are a flat list across developers and projects", () => {
     user: "dev-a",
     project: "p",
     agent: "claude",
+    agent_profile: "claude-main",
     name: "dev-a · p",
     spawn: "worktree",
     capacity: 4,

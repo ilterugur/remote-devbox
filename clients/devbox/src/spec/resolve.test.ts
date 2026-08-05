@@ -193,6 +193,7 @@ const rcSpec = (rc: Record<string, unknown>, project: Record<string, unknown> = 
 test("every project gets an RC unit, named after the developer and project by default", () => {
   const rc = p0(rcSpec({})).remote_control!;
   expect(rc.agent).toBe("claude");
+  expect(rc.agent_profile).toBe("claude-main");
   expect(rc.name).toBe("dev-a · p");
   expect(rc.spawn).toBe("worktree");
   expect(rc.capacity).toBe(4);

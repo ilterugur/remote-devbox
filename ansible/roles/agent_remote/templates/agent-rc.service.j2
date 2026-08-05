@@ -49,8 +49,10 @@ Environment="CLAUDE_RC_NAME={{ row.name }}"
 Environment=CLAUDE_RC_SPAWN={{ row.spawn }}
 Environment=CLAUDE_RC_CAPACITY={{ row.capacity }}
 Environment=CLAUDE_RC_AGENT={{ row.agent }}
-{# Hindsight (when enabled): load the profile's HINDSIGHT_USER_ID + HINDSIGHT_API_LLM_* so the memory hooks/daemon work in RC sessions too. The leading '-' makes it optional, so the unit is unaffected when Hindsight is disabled and the file is absent. uvx resolves via `mise activate --shims` in agent-rc-run. #}
-EnvironmentFile=-/home/{{ row.user }}/.hindsight/llm.env
+{# The session execs the agent binary directly rather than going through the profile
+   launcher, so agent-rc-run sources this profile's memory.env itself. Without the
+   profile name it cannot find the file, and memory is silently off in RC sessions. #}
+Environment=CLAUDE_RC_AGENT_PROFILE={{ row.agent_profile }}
 {% for k, v in row.build_env.items() %}
 Environment="{{ k }}={{ v }}"
 {% endfor %}

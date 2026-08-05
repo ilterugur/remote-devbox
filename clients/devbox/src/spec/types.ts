@@ -318,6 +318,8 @@ export interface DevboxSpec {
 export interface ResolvedRcUnit {
   /** The agent binary the unit runs — the resolved agent profile's provider. */
   agent: string;
+  /** The profile whose launcher environment the session has to reproduce. */
+  agent_profile: string;
   name: string;
   spawn: RcSpawn;
   capacity: number;

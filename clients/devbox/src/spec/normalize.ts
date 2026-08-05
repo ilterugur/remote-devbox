@@ -140,6 +140,7 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
           user: dev.user,
           project: p.name,
           agent: rc.agent,
+          agent_profile: rc.agent_profile,
           name: rc.name,
           spawn: rc.spawn,
           capacity: rc.capacity,
