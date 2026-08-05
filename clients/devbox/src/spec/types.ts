@@ -314,6 +314,17 @@ export interface DevboxSpec {
   developers: DeveloperSpec[];
 }
 
+/** One Remote Control unit, with every default already applied. */
+export interface ResolvedRcUnit {
+  /** The agent binary the unit runs — the resolved agent profile's provider. */
+  agent: string;
+  name: string;
+  spawn: RcSpawn;
+  capacity: number;
+  resources: RcResourceSpec;
+  build_env: Record<string, string>;
+}
+
 export interface ResolvedProject {
   name: string;
   repo: string;
@@ -329,6 +340,8 @@ export interface ResolvedProject {
   ports: number[];
   install: boolean;
   update: boolean;
+  /** null = no Remote Control unit for this project. */
+  remote_control: ResolvedRcUnit | null;
 }
 
 export interface ResolvedDeveloper extends Omit<DeveloperSpec, "projects"> {

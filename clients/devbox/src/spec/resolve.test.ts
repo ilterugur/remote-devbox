@@ -180,6 +180,76 @@ test("a developer with no projects resolves to an empty list", () => {
   expect(r.resolved!.developers[0]!.projects).toEqual([]);
 });
 
+/** One developer, one project, one claude profile — plus the given box-wide block. */
+const rcSpec = (rc: Record<string, unknown>, project: Record<string, unknown> = {}): DevboxSpec => ({
+  ...spec({
+    agent_profiles: { "claude-main": { provider: "claude" } },
+    default_agent_profile: "claude-main",
+    projects: [{ name: "p", repo: "r", ...project }],
+  }),
+  remote_control: rc,
+});
+
+test("every project gets an RC unit, named after the developer and project by default", () => {
+  const rc = p0(rcSpec({})).remote_control!;
+  expect(rc.agent).toBe("claude");
+  expect(rc.name).toBe("dev-a · p");
+  expect(rc.spawn).toBe("worktree");
+  expect(rc.capacity).toBe(4);
+});
+
+test("the agent name comes from the resolved profile's provider", () => {
+  const s = {
+    ...spec({
+      agent_profiles: { "codex-main": { provider: "codex" } },
+      default_agent_profile: "codex-main",
+      projects: [{ name: "p", repo: "r" }],
+    }),
+  };
+  expect(p0(s).remote_control!.agent).toBe("codex");
+});
+
+test("a project with no agent profile gets no RC unit", () => {
+  expect(p0(spec({ projects: [{ name: "p", repo: "r" }] })).remote_control).toBeNull();
+});
+
+test("remote_control: false turns the unit off for one project", () => {
+  expect(p0(rcSpec({}, { remote_control: false })).remote_control).toBeNull();
+});
+
+test("the box-wide kill switch turns every unit off", () => {
+  expect(p0(rcSpec({ enabled: false })).remote_control).toBeNull();
+});
+
+test("project resources and build_env merge over the box defaults", () => {
+  const rc = p0(
+    rcSpec(
+      {
+        resources: { cpu_weight: 80, nice: 5 },
+        build_env: { NODE_OPTIONS: "--max-old-space-size=2048", CI: "1" },
+      },
+      {
+        remote_control: {
+          name: "P",
+          capacity: 32,
+          resources: { memory_high: "12G", nice: 10 },
+          build_env: { NODE_OPTIONS: "--max-old-space-size=6144" },
+        },
+      },
+    ),
+  ).remote_control!;
+  expect(rc.name).toBe("P");
+  expect(rc.capacity).toBe(32);
+  expect(rc.resources).toEqual({ cpu_weight: 80, io_weight: 80, nice: 10, oom_score_adjust: 300, memory_high: "12G" });
+  expect(rc.build_env).toEqual({ NODE_OPTIONS: "--max-old-space-size=6144", CI: "1" });
+});
+
+test("no memory ceiling is invented when nobody asked for one", () => {
+  const rc = p0(rcSpec({})).remote_control!;
+  expect(rc.resources.memory_high).toBeUndefined();
+  expect(rc.resources.memory_max).toBeUndefined();
+});
+
 test("access defaults name every private path that exists, and none that don't", () => {
   expect(defaultDesktopAccess(true)).toEqual(["tunnel", "tailnet"]);
   expect(defaultDesktopAccess(false)).toEqual(["tunnel"]);

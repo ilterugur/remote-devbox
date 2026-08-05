@@ -19,8 +19,11 @@ import type {
   DevboxSpec,
   EngineId,
   ProjectSpec,
+  RcResourceSpec,
+  RcSpawn,
   ResolvedDeveloper,
   ResolvedProject,
+  ResolvedRcUnit,
   ResolvedSpec,
 } from "./types";
 
@@ -116,6 +119,46 @@ export function resolveMemorySpace(
   );
 }
 
+/**
+ * Box-wide fallbacks. Deliberately no memory_* key: a ceiling inherited from an earlier,
+ * smaller box is the failure this model exists to prevent. The relative knobs are safe to
+ * default — they only decide who yields first, never how much anyone may have.
+ */
+const RC_DEFAULTS = {
+  spawn: "worktree" as RcSpawn,
+  capacity: 4,
+  resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300 } as RcResourceSpec,
+};
+
+/**
+ * One unit per project, or null when Remote Control does not apply. The agent profile
+ * must already be resolved: the unit runs that profile's provider binary, so a project
+ * with no profile has nothing to run.
+ */
+export function resolveRemoteControl(
+  spec: DevboxSpec,
+  dev: DeveloperSpec,
+  project: ProjectSpec,
+  agentProfile: string | null,
+): ResolvedRcUnit | null {
+  const box = spec.remote_control ?? {};
+  if (box.enabled === false) return null;
+  const override = project.remote_control;
+  if (override === false || override?.enabled === false) return null;
+  if (!agentProfile) return null;
+  const provider = dev.agent_profiles?.[agentProfile]?.provider;
+  if (!provider) return null;
+
+  return {
+    agent: provider,
+    name: override?.name ?? `${dev.user} · ${project.name}`,
+    spawn: override?.spawn ?? box.spawn ?? RC_DEFAULTS.spawn,
+    capacity: override?.capacity ?? box.capacity ?? RC_DEFAULTS.capacity,
+    resources: { ...RC_DEFAULTS.resources, ...(box.resources ?? {}), ...(override?.resources ?? {}) },
+    build_env: { ...(box.build_env ?? {}), ...(override?.build_env ?? {}) },
+  };
+}
+
 export function resolveSpec(spec: DevboxSpec): { resolved: ResolvedSpec | null; issues: Issue[] } {
   const issues: Issue[] = [];
 
@@ -141,6 +184,7 @@ export function resolveSpec(spec: DevboxSpec): { resolved: ResolvedSpec | null; 
         ports: project.ports ?? [],
         install: project.install ?? true,
         update: project.update ?? false,
+        remote_control: resolveRemoteControl(spec, dev, project, agent.value),
       };
     });
 

@@ -25,6 +25,7 @@ const resolved: ResolvedSpec = {
           ports: [],
           install: true,
           update: false,
+          remote_control: null,
         },
       ],
     },
