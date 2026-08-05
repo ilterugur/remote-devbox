@@ -191,7 +191,12 @@ case "$cmd" in
     [ -d "$store" ] || exit 0
     if [ "$mode" = ssh-include ]; then
       grep -q '^# >>> devbox app-configs' "$boxpath" 2>/dev/null && exit 0
-      [ -s "$boxpath" ] && { echo "app-configs: $label has box-side content — run 'devbox config link'" >&2; exit 0; }
+      # Adding an Include block destroys nothing, so once the payload exists this is not
+      # a decision anybody needs to make — and it has to self-heal, because another role
+      # rewriting this file is exactly how the block goes missing between runs. Only a
+      # payload that is absent leaves it to a human, since seeding IS a real choice.
+      [ -s "$(payload)" ] && { "$0" link "$label" "$3" "$mode" "$5" "$6"; exit 0; }
+      [ -s "$boxpath" ] && { echo "app-configs: $label has box-side content and no synced copy — run 'devbox config link'" >&2; exit 0; }
     else
       [ -L "$boxpath" ] && exit 0
       [ -e "$boxpath" ] && { echo "app-configs: $label has box-side content — run 'devbox config link'" >&2; exit 0; }

@@ -61,19 +61,34 @@
 
 # Many cloud networks block outbound TCP/22. ssh.github.com:443 is GitHub's own
 # supported endpoint and works everywhere, so route github.com over it unconditionally.
+# A marked block, not the whole file: ~/.ssh/config has more than one stakeholder. The
+# app-configs feature adds its own Include block here, and the developer adds hosts of
+# their own — owning the file outright silently deleted both on every run.
 - name: Route GitHub SSH over port 443
-  ansible.builtin.copy:
-    dest: "/home/{{ item.user }}/.ssh/config"
+  ansible.builtin.blockinfile:
+    path: "/home/{{ item.user }}/.ssh/config"
+    marker: "# {mark} remote-devbox git #"
+    create: true
     owner: "{{ item.user }}"
     group: "{{ item.user }}"
     mode: "0600"
-    content: |
-      # Managed by Ansible (remote-devbox).
+    block: |
       Host github.com
           HostName ssh.github.com
           Port 443
           User git
           StrictHostKeyChecking accept-new
+  become: true
+  become_user: "{{ item.user }}"
+
+# This role used to own the whole file, so an already-provisioned box still carries an
+# unmarked copy of the stanza and would now list github.com twice. Matched verbatim
+# against what the old task wrote, so a hand-edited line is left alone.
+- name: Drop the unmarked GitHub stanza this role used to own
+  ansible.builtin.replace:
+    path: "/home/{{ item.user }}/.ssh/config"
+    regexp: "^# Managed by Ansible \\(remote-devbox\\)\\.\nHost github\\.com\n    HostName ssh\\.github\\.com\n    Port 443\n    User git\n    StrictHostKeyChecking accept-new\n"
+    replace: ""
   become: true
   become_user: "{{ item.user }}"
   loop: "{{ devbox_developers }}"
