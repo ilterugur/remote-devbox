@@ -40,6 +40,23 @@ devbox_container:
 devbox_shared_services:
   enabled: false
   engine: system-docker
+# A Remote Control unit needs a logged-in agent and a real tmux session, neither of
+# which a container can offer. The scenario asserts the off path; the on path is
+# verified on a real box.
+devbox_remote_control:
+  enabled: false
+  autorestart: {enabled: true, restart_sec: 10, burst: 10, interval: 600}
+  resume:
+    on_boot: true
+    lookback_h: 12
+    max_concurrent: 2
+    settle_sec: 20
+    min_free_mb: 1200
+    max_attempts: 3
+    timeout_sec: 1800
+    skip_workflow_warning: true
+devbox_rc_units: []
+
 devbox_developers:
   - user: dev-a
     adopt_existing: false

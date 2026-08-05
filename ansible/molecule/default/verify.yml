@@ -58,3 +58,14 @@
       loop: "{{ identity_keys.results }}"
       loop_control:
         label: "{{ item.item.0.user }}/{{ item.item.1 }}"
+
+    - name: Find any Remote Control units
+      ansible.builtin.find:
+        paths: /etc/systemd/system
+        patterns: "agent-rc-*.service"
+      register: rc_units
+
+    - name: No Remote Control unit exists when the box has it turned off
+      ansible.builtin.assert:
+        that: rc_units.files | length == 0
+        fail_msg: "found {{ rc_units.files | map(attribute='path') | list }} with remote control disabled"
