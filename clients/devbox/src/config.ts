@@ -13,9 +13,29 @@ import { basename, join, resolve } from "node:path";
 import { ensureClientTransport } from "./install";
 import { resolveEntry, type ResolvedEntry } from "./app-configs/registry";
 
-export const CFG_DIR = join(homedir(), ".config", "claude-devbox");
-export const CONFIG_PATH = join(CFG_DIR, "config.json");
-export const STATE_PATH = join(CFG_DIR, "active-profile");
+/**
+ * Where this client's config lives. `remote-devbox` is canonical — it is what
+ * `gen-editor-config.py --cli` writes and what the project is called. `claude-devbox` is
+ * the pre-rename directory, still READ so an existing setup keeps working.
+ *
+ * One resolution for every file we keep here (config, active profile, live bridges), so
+ * a client can never end up with its config in one directory and its state in the other —
+ * which is how a config written by one tool became invisible to another.
+ */
+const CANONICAL_CFG_DIR = (home: string) => join(home, ".config", "remote-devbox");
+const LEGACY_CFG_DIR = (home: string) => join(home, ".config", "claude-devbox");
+
+export function resolveCfgDir(home: string = homedir()): string {
+  const canonical = CANONICAL_CFG_DIR(home);
+  if (existsSync(join(canonical, "config.json"))) return canonical;
+  const legacy = LEGACY_CFG_DIR(home);
+  if (existsSync(join(legacy, "config.json"))) return legacy;
+  return canonical; // nothing yet: a fresh client writes the canonical directory
+}
+
+export const cfgDir = (): string => resolveCfgDir();
+export const configPath = (): string => join(cfgDir(), "config.json");
+export const statePath = (): string => join(cfgDir(), "active-profile");
 
 export type Project = { name: string; repo?: string };
 export type LazyMount = { label: string; path: string };
@@ -42,9 +62,13 @@ export function die(msg: string): never {
 }
 
 export function loadConfig(): Config {
-  if (!existsSync(CONFIG_PATH)) die(`no config at ${CONFIG_PATH} — run gen-editor-config.py --cli`);
+  const path = configPath();
+  if (!existsSync(path)) {
+    die(`no config at ${path} — run gen-editor-config.py --cli, or fetch one from the box ` +
+        `(\`devbox client-config\` there prints what a client needs)`);
+  }
   try {
-    const c = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config;
+    const c = JSON.parse(readFileSync(path, "utf8")) as Config;
     if (!c.profiles?.length) die("config has no profiles");
     // The `profiles` in config.json are a cache written by gen-editor-config.py. When
     // we know the claude-devbox checkout (repoPath), read profiles/projects LIVE from
@@ -57,7 +81,7 @@ export function loadConfig(): Config {
     }
     return c;
   } catch (e) {
-    die(`could not read ${CONFIG_PATH}: ${(e as Error).message}`);
+    die(`could not read ${path}: ${(e as Error).message}`);
   }
 }
 
@@ -145,15 +169,15 @@ export const users = (cfg: Config) => cfg.profiles.map((p) => p.user);
 
 export function readState(): string | null {
   try {
-    return readFileSync(STATE_PATH, "utf8").trim() || null;
+    return readFileSync(statePath(), "utf8").trim() || null;
   } catch {
     return null;
   }
 }
 
 export function writeState(prof: string) {
-  mkdirSync(CFG_DIR, { recursive: true });
-  writeFileSync(STATE_PATH, prof + "\n");
+  mkdirSync(cfgDir(), { recursive: true });
+  writeFileSync(statePath(), prof + "\n");
 }
 
 export function resolveProfile(cfg: Config, override?: string): string {
