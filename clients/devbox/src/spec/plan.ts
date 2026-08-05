@@ -7,6 +7,7 @@
  */
 import type { Issue } from "./issues";
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
+import { resolveEntry } from "../app-configs/registry";
 import type { ClientFacts, ResolvedDeveloper, ResolvedSpec } from "./types";
 
 const LABEL_WIDTH = 12;
@@ -106,6 +107,27 @@ function developerLines(dev: ResolvedDeveloper, tailscale: boolean, client: Clie
           `via ${(dev.desktop.access ?? defaultDesktopAccess(tailscale)).join(" + ")}`,
           idle ? `idle logout ${idle}m` : "no idle logout",
           describeKeyboard(dev, client),
+        ].join(" · "),
+        indent,
+      ),
+    );
+  }
+
+  // Only shown when the disk is on: an "off" line for every developer would be noise on
+  // the boxes that never use it, but a disk that IS on and goes unmentioned makes the
+  // plan look like the feature was never declared.
+  if (dev.file_bridge?.sync_disk) {
+    const apps = dev.app_configs?.enabled ? (dev.app_configs.paths ?? []) : [];
+    const labels = apps.map((raw) => {
+      const r = resolveEntry(raw);
+      return "entry" in r ? r.entry.label : String(raw);
+    });
+    lines.push(
+      row(
+        "file bridge",
+        [
+          `sync disk via ${dev.file_bridge.engine ?? "mutagen"}`,
+          labels.length ? `app configs ${labels.join(", ")}` : "no app configs",
         ].join(" · "),
         indent,
       ),
