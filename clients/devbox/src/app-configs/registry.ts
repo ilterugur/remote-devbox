@@ -27,7 +27,9 @@ export const REGISTRY: Record<string, Omit<ResolvedEntry, "label">> = {
     box: "~/.config/filezilla",
     mode: "dir",
     // queue.sqlite3 is the machine-local transfer queue; two-way syncing SQLite corrupts it.
-    excludes: ["queue.sqlite3", "*.lock"],
+    // `lockfile` is FileZilla's own single-instance marker — it matches no glob above, and
+    // sharing it makes one side think the other still holds the config.
+    excludes: ["queue.sqlite3", "lockfile", "*.lock"],
   },
   ssh_config: {
     client: "~/.ssh/config",

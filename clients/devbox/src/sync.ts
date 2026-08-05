@@ -6,12 +6,25 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  die, hostFor, lazyMountsFor, syncDiskEnabled, syncEngineFor, type Config, type EngineId,
+  appConfigsFor, die, hostFor, lazyMountsFor, syncDiskEnabled, syncEngineFor, type Config, type EngineId,
 } from "./config";
 import { normalizePath, pathsOverlap, syncDiskRoot } from "./bridge";
+import { STORE_ROOT } from "./app-configs/registry";
 import { DEFAULT_IGNORES, engineFor } from "./sync/engine";
 
-export type SyncPlan = { localRoot: string; remoteRoot: string; host: string; engine: EngineId };
+export type SyncPlan = { localRoot: string; remoteRoot: string; host: string; engine: EngineId; ignores: string[] };
+
+/**
+ * Root-anchored ignore patterns for the app configs that live inside the disk.
+ *
+ * A registry entry's `excludes` only guard the initial seed — after linking, the app
+ * writes straight into the store, so anything machine-local (FileZilla's transfer queue
+ * and lock marker) would propagate on the next edit unless the session ignores it too.
+ */
+export function appConfigIgnores(cfg: Config, profile: string): string[] {
+  return appConfigsFor(cfg, profile).flatMap((e) =>
+    e.excludes.map((pattern) => `/${STORE_ROOT}/${e.label}/${pattern}`));
+}
 
 export function planSync(cfg: Config, profile: string): SyncPlan {
   if (!syncDiskEnabled(cfg, profile)) die(`sync disk is not enabled for "${profile}" (set sync_disk: true)`);
@@ -19,7 +32,13 @@ export function planSync(cfg: Config, profile: string): SyncPlan {
   for (const m of lazyMountsFor(cfg, profile))
     if (pathsOverlap(normalizePath(m.path), localRoot))
       die(`lazy mount "${m.label}" overlaps the sync disk ${localRoot} — a folder is either mounted or synced`);
-  return { localRoot, remoteRoot: `/home/${profile}/sync`, host: hostFor(cfg, profile), engine: syncEngineFor(cfg, profile) };
+  return {
+    localRoot,
+    remoteRoot: `/home/${profile}/sync`,
+    host: hostFor(cfg, profile),
+    engine: syncEngineFor(cfg, profile),
+    ignores: [...DEFAULT_IGNORES, ...appConfigIgnores(cfg, profile)],
+  };
 }
 
 const isDry = () => !!process.env.DEVBOX_DRYRUN;
@@ -44,7 +63,7 @@ export async function runSyncUp(cfg: Config, profile: string): Promise<void> {
   mkdirSync(plan.localRoot, { recursive: true });
   const readme = join(plan.localRoot, "README.md");
   if (!existsSync(readme)) writeFileSync(readme, README);
-  await engineFor(plan.engine).up({ profile, host: plan.host, localRoot: plan.localRoot, remoteRoot: plan.remoteRoot, ignores: DEFAULT_IGNORES });
+  await engineFor(plan.engine).up({ profile, host: plan.host, localRoot: plan.localRoot, remoteRoot: plan.remoteRoot, ignores: plan.ignores });
   out(`  ✓ syncing ${plan.localRoot} <-> ${plan.host}:${plan.remoteRoot} (${plan.engine})`);
 }
 
