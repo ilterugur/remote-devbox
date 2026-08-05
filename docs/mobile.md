@@ -5,16 +5,22 @@ phone — including brand-new sessions.
 
 ## Why this works with the client off
 
-The box is the host; your client and phone are only front-ends. Each profile's
-`servers` entry runs an always-on `claude remote-control` server (in tmux, kept
-alive by systemd, as that profile's user). Remote Control is **outbound HTTPS
+The box is the host; your client and phone are only front-ends. Every project gets an
+always-on `remote-control` server (in tmux, kept alive by systemd, as that developer's
+user), running the agent its `agent_profile` names. Remote Control is **outbound HTTPS
 only** — no inbound ports — so it reaches your phone through the firewall and
 Tailscale untouched.
 
+Nothing has to be declared for this: a project gets a server unless it says
+`remote_control: false`. To set the title your phone shows, the spawn mode or the
+session capacity, give the project a `remote_control:` block — and see the
+box-wide `remote_control:` block in `devbox.example.yml` for the defaults they
+override.
+
 ## One-time setup
 
-1. Provision (`ansible-playbook playbook.yml`).
-2. Log in each profile once (see [multi-account.md](multi-account.md)):
+1. Provision (`devbox apply`).
+2. Log in each agent profile once (see [multi-account.md](multi-account.md)):
    ```bash
    ssh admin@<box>
    sudo remote-devbox-login
@@ -37,13 +43,13 @@ That's it — the servers come online within ~15s of login.
 
 | You want | Works? | How |
 | --- | --- | --- |
-| Start a new session from phone, runs on the box | ✅ | A `claude-rc-*` server must be running (it is, always-on) |
+| Start a new session from phone, runs on the box | ✅ | An `agent-rc-*` server must be running (it is, always-on) |
 | Client fully off | ✅ | Box is the host; nothing depends on the client |
 | Steer/continue a running session | ✅ | Same server, same phone UI |
-| Spawn the box from zero with no server running | ❌ | At least one `claude-rc-*` server must be alive — that's what the always-on service guarantees |
+| Spawn the box from zero with no server running | ❌ | At least one `agent-rc-*` server must be alive — that's what the always-on service guarantees |
 | `claude.ai/code` web "new session" running on the box | ❌ | The web's own new-session runs on **Anthropic cloud**, not your box. Always connect to **your** server. |
 | Dispatch (start tasks from phone) | ❌ here | Dispatch needs the **desktop app** running on a Mac/Windows — useless with the client off |
-| A session survives a box OOM / crash / reboot | ✅ | The server self-heals (systemd auto-restart) and a companion auto-resumes interrupted sessions — and any Workflow they were running — from on-disk state. On by default; see the self-heal/resume block in `group_vars/all.example.yml`. |
+| A session survives a box OOM / crash / reboot | ✅ | The server self-heals (systemd auto-restart) and a companion auto-resumes interrupted sessions — and any Workflow they were running — from on-disk state. On by default; see `remote_control.resume` in `devbox.example.yml`. |
 
 ## Caveats
 
