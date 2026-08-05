@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, resolvePushConflict, runConfigStatus, runConfigUnlink, seedEmpty, seedEmptyGuarded, seedFromClient, unlinkClient } from "./run";
+import { setBoxExec, clientPayload, computeStoreKind, countSyncConflicts, inspectClient, linkClient, matches, resolvePushConflict, runConfigStatus, runConfigUnlink, seedEmpty, seedEmptyGuarded, seedFromClient, unlinkClient } from "./run";
 import type { ResolvedEntry } from "./registry";
 import type { Config } from "../config";
 
@@ -47,6 +47,12 @@ const sshEntry = (client: string): ResolvedEntry => ({
 const fileEntry = (client: string): ResolvedEntry => ({
   label: "custom-file", client, box: "~/.config/app/config.json", mode: "file", excludes: [],
 });
+
+// No test here has a real box, and the profiles are synthetic — with the real runner the
+// alias does not resolve and ssh spends its connect timeout finding that out. The box is
+// simply "nothing there", which is the state these tests are about anyway.
+beforeAll(() => setBoxExec(() => ({ status: 0, stdout: JSON.stringify({ kind: "absent", summary: "" }), stderr: "" })));
+afterAll(() => setBoxExec(null));
 
 describe("clientPayload", () => {
   test("dir mode points at the store folder itself", () => {
