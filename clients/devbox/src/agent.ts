@@ -11,7 +11,7 @@
  * Honors DEVBOX_DRYRUN=1 (print, don't execute).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { die, hostFor, lazyMountsFor, type Config } from "./config";
@@ -24,6 +24,9 @@ export type AgentSpec = {
   argv: string[];
   intervalSeconds?: number;
   description: string;
+  /** Named at description time, not at connect time: something about this agent cannot
+   *  work as configured, and the plist itself is not where that shows up. */
+  warning?: string;
 };
 
 /** The box always listens here; only the client side of the forward is configurable. */
@@ -37,10 +40,23 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
 
   if (p.desktop?.clientPort) {
     const port = p.desktop.clientPort;
+    // A forward is only a door when something is listening behind it. `tunnel` is what
+    // makes xrdp bind 127.0.0.1 on the box; without it the forward binds locally, ssh
+    // stays happily alive (ExitOnForwardFailure covers the bind, never the connect) and
+    // every RDP attempt is refused at the far end. Say so here — at describe time — since
+    // nothing downstream can tell that apart from a healthy tunnel.
+    const access = p.desktop.access;
+    const warning =
+      access && access.length && !access.includes("tunnel")
+        ? `desktop.access for "${profile}" is [${access.join(", ")}] — with no "tunnel" the box has ` +
+          `no 127.0.0.1:${BOX_RDP_PORT} listener, so this tunnel forwards to nothing. Add "tunnel" ` +
+          `to that developer's desktop.access in devbox.yml and re-apply.`
+        : undefined;
     out.push({
       label: `com.devbox.${profile}.desktop`,
       mode: "daemon",
       description: `RDP desktop: 127.0.0.1:${port} -> ${host}:${BOX_RDP_PORT}`,
+      warning,
       argv: [
         "ssh", "-N",
         // Without this a forward that cannot bind leaves a live, useless ssh — launchd
@@ -54,6 +70,9 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
     });
   }
 
+  // Only a profile whose lazy mounts are known gets the reconciler, and today that means
+  // a legacy all.yml checkout: neither devbox.yml nor the box's client.json describes lazy
+  // mounts yet, so on the canonical path there is nothing to reconcile and no agent.
   if (lazyMountsFor(cfg, profile).length) {
     out.push({
       label: `com.devbox.${profile}.mount`,
@@ -76,8 +95,33 @@ export const logDirFor = (home: string = homedir()): string =>
 const xml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export function renderPlist(spec: AgentSpec, logDir: string): string {
+/**
+ * The environment launchd does NOT provide. Its default PATH is /usr/bin:/bin:/usr/sbin:
+ * /sbin, which holds none of the things these agents run: `devbox` itself lives in
+ * ~/.local/bin, and once it is running `devbox mount up` spawns rclone, ssh and ssh-keygen
+ * by bare name from Homebrew. Resolving argv[0] is not enough — the miss then happens one
+ * level down, every 60 seconds, into a log nobody reads. HOME is pinned for the same
+ * reason: everything the CLI reads (config, bridges, keys) hangs off it.
+ */
+export function agentEnv(home: string = homedir()): Record<string, string> {
+  const path = [
+    join(home, ".local", "bin"),
+    "/opt/homebrew/bin",
+    join(home, ".bun", "bin"),
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ].join(":");
+  return { PATH: path, HOME: home };
+}
+
+export function renderPlist(spec: AgentSpec, logDir: string, home: string = homedir()): string {
   const args = spec.argv.map((a) => `    <string>${xml(a)}</string>`).join("\n");
+  const env = Object.entries(agentEnv(home))
+    .map(([k, v]) => `    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>`)
+    .join("\n");
   const cadence =
     spec.mode === "daemon"
       ? "  <key>KeepAlive</key>\n  <true/>\n  <key>RunAtLoad</key>\n  <true/>"
@@ -92,6 +136,10 @@ export function renderPlist(spec: AgentSpec, logDir: string): string {
   <array>
 ${args}
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${env}
+  </dict>
 ${cadence}
   <key>StandardOutPath</key>
   <string>${xml(join(logDir, `${spec.label}.log`))}</string>
@@ -157,15 +205,50 @@ function requireMac(): void {
   process.exit(0);
 }
 
-/** Install (or update) every agent this profile should have running. Idempotent. */
+/**
+ * Every agent of this profile's that is currently ON DISK, whatever the config now says.
+ * The desired set is not enough to reconcile against: flipping `desktop.enabled: false`
+ * makes agentsFor return nothing, and an agent nobody describes any more is exactly the
+ * one that would otherwise keep running forever.
+ *
+ * Deliberately narrow: `com.devbox.<profile>.<name>.plist` and nothing else, so a
+ * hand-written `com.devbox.mount` from before this command existed is never booted out
+ * from under its owner.
+ */
+export function installedAgentLabels(profile: string, home: string = homedir()): string[] {
+  const prefix = `com.devbox.${profile}.`;
+  let names: string[];
+  try {
+    names = readdirSync(join(home, "Library", "LaunchAgents"));
+  } catch {
+    return []; // no LaunchAgents directory yet — nothing installed
+  }
+  return names
+    .filter((n) => n.startsWith(prefix) && n.endsWith(".plist") && !n.slice(prefix.length, -6).includes("."))
+    .map((n) => n.slice(0, -6))
+    .sort();
+}
+
+/** Unload and delete one agent. Aborts (via bootoutIfLoaded) rather than deleting a
+ *  plist out from under a label launchd still has loaded. */
+function removeAgent(label: string, why: string): void {
+  const path = plistPath(label);
+  if (isDry()) return void out(`  ── would remove ${path}${why}`);
+  bootoutIfLoaded(label);
+  rmSync(path, { force: true });
+  out(`  ✓ ${label} removed${why}`);
+}
+
+/** Install (or update) every agent this profile should have running, and remove the ones
+ *  it should not. Idempotent. */
 export function runAgentUp(cfg: Config, profile: string): void {
   requireMac();
   const specs = agentsFor(cfg, profile);
-  if (!specs.length) return void out(`devbox: no client agents configured for "${profile}"`);
   const logDir = logDirFor();
-  if (!isDry()) mkdirSync(logDir, { recursive: true });
+  if (specs.length && !isDry()) mkdirSync(logDir, { recursive: true });
 
   for (const spec of specs) {
+    if (spec.warning) out(`  ! ${spec.label} — ${spec.warning}`);
     const resolved: AgentSpec = { ...spec, argv: resolveArgv(spec.argv) };
     const path = plistPath(spec.label);
     const wanted = renderPlist(resolved, logDir);
@@ -181,45 +264,61 @@ export function runAgentUp(cfg: Config, profile: string): void {
       out(`  ✓ ${spec.label} already current`);
       continue;
     }
+    // bootout BEFORE the write: bootstrap on an already-loaded label is an error, so the
+    // reload is what makes a changed plist take effect — and if the bootout fails we abort
+    // with the file on disk still being the one launchd loaded. Writing first would leave
+    // a live label pointing at content it was never bootstrapped with.
+    bootoutIfLoaded(spec.label);
     mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(path, wanted);
-    // bootout first: bootstrap on an already-loaded label is an error, and reloading is
-    // the only way a changed plist takes effect.
-    bootoutIfLoaded(spec.label);
     const r = launchctl("bootstrap", domain(), path);
     if (r.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(r.stderr || "").trim()}`);
     out(`  ✓ ${spec.label} — ${spec.description}`);
   }
+
+  const wantedLabels = new Set(specs.map((s) => s.label));
+  for (const label of installedAgentLabels(profile)) {
+    if (!wantedLabels.has(label)) removeAgent(label, " (no longer configured)");
+  }
+  if (!specs.length) out(`devbox: no client agents configured for "${profile}"`);
 }
 
-/** Remove this profile's agents. */
+/** Remove this profile's agents — the described ones and any left over from a config
+ *  that has since changed. */
 export function runAgentDown(cfg: Config, profile: string): void {
   requireMac();
-  const specs = agentsFor(cfg, profile);
-  if (!specs.length) return void out(`devbox: no client agents configured for "${profile}"`);
-  for (const spec of specs) {
-    const path = plistPath(spec.label);
-    if (isDry()) { out(`  ── would remove ${path}`); continue; }
-    // Abort before removing anything if bootout fails — don't delete the plist and
-    // claim success while the agent is still (or now orphan-)loaded.
-    bootoutIfLoaded(spec.label);
-    rmSync(path, { force: true });
-    out(`  ✓ ${spec.label} removed`);
-  }
+  const labels = new Set([...agentsFor(cfg, profile).map((s) => s.label), ...installedAgentLabels(profile)]);
+  if (!labels.size) return void out(`devbox: no client agents installed for "${profile}"`);
+  for (const label of labels) removeAgent(label, "");
 }
 
-/** What is described, what launchd has, and — for the desktop — whether it answers. */
+/** What is described, what launchd has, and — for the desktop — what the local end of the
+ *  tunnel is actually doing. */
 export function runAgentStatus(cfg: Config, profile: string): void {
   const specs = agentsFor(cfg, profile);
-  if (!specs.length) return void out(`devbox: no client agents configured for "${profile}"`);
+  const installed = installedAgentLabels(profile);
+  if (!specs.length && !installed.length) return void out(`devbox: no client agents configured for "${profile}"`);
   for (const spec of specs) {
     const loaded = process.platform === "darwin" && isLoaded(spec.label);
     out(`  ${loaded ? "●" : "○"} ${spec.label} — ${spec.description}`);
+    if (spec.warning) out(`      ! ${spec.warning}`);
     const forward = spec.argv[spec.argv.indexOf("-L") + 1];
     if (spec.mode === "daemon" && forward) {
       const port = forward.split(":")[1]!;
-      const answering = spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0;
-      out(`      127.0.0.1:${port} ${answering ? "answers" : "does NOT answer"}`);
+      const listening = spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0;
+      // Say only what this proves. The listener is ssh's OWN: it accepts the TCP
+      // connection first and only then tries to open the channel to the box, so a
+      // successful connect means "the tunnel process is alive", never "the box's xrdp
+      // answers". Calling that "answers" certified broken desktops as healthy.
+      out(
+        listening
+          ? `      127.0.0.1:${port} accepts connections — that is ssh's own listener, not proof the box's xrdp answers`
+          : `      127.0.0.1:${port} refuses connections — the tunnel is not up`,
+      );
     }
+  }
+  const wantedLabels = new Set(specs.map((s) => s.label));
+  for (const label of installed) {
+    if (!wantedLabels.has(label)) out(`  ? ${label} — installed but no longer configured ('devbox agent up' removes it)`);
   }
 }

@@ -13,6 +13,8 @@ import { basename, join, resolve } from "node:path";
 import { ensureClientTransport } from "./install";
 import { resolveEntry, type ResolvedEntry } from "./app-configs/registry";
 import { assignClientPorts } from "./spec/client-ports";
+import { defaultDesktopAccess } from "./spec/resolve";
+import type { DesktopAccess } from "./spec/types";
 
 /**
  * Where this client's config lives. `remote-devbox` is canonical — it is what the
@@ -41,7 +43,13 @@ export const statePath = (): string => join(cfgDir(), "active-profile");
 export type Project = { name: string; repo?: string };
 export type LazyMount = { label: string; path: string };
 export type EngineId = "mutagen" | "syncthing";
-export type ProfileDesktop = { clientPort: number };
+/**
+ * `access` travels with the port because the client cannot infer it and the difference
+ * matters here: a tunnel agent is only useful when the box's xrdp actually binds
+ * 127.0.0.1, which is what "tunnel" means. Absent (an older box's client.json) means
+ * "unknown" — never "not allowed".
+ */
+export type ProfileDesktop = { clientPort: number; access?: DesktopAccess[] };
 export type Profile = {
   user: string;
   projects: Project[];
@@ -104,6 +112,19 @@ export function profilesFromYaml(repoPath: string): Profile[] | null {
   return developersFromDevboxYaml(repoPath) ?? profilesFromLegacyYaml(repoPath);
 }
 
+const KNOWN_DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];
+
+/**
+ * A developer's desktop access as devbox.yml states it, or the same default the box's
+ * generator applies when it is left out. Unvalidated input like everything else read
+ * here, so anything that is not a known path is dropped rather than carried inward.
+ */
+function desktopAccess(dev: any, doc: any): DesktopAccess[] {
+  const raw = dev?.desktop?.access;
+  if (!Array.isArray(raw)) return defaultDesktopAccess(doc?.network?.tailscale?.enabled === true);
+  return raw.filter((a: unknown): a is DesktopAccess => typeof a === "string" && KNOWN_DESKTOP_ACCESS.includes(a));
+}
+
 /** Canonical layout: `<repoPath>/devbox.yml`, `developers:`. */
 function developersFromDevboxYaml(repoPath: string): Profile[] | null {
   try {
@@ -138,7 +159,7 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       });
       if (entries.length) profile.appConfigs = entries;
       const port = clientPorts.get(profile.user);
-      if (port) profile.desktop = { clientPort: port };
+      if (port) profile.desktop = { clientPort: port, access: desktopAccess(d, doc) };
       out.push(profile);
     }
     return out;

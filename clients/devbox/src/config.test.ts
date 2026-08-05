@@ -189,9 +189,41 @@ developers:
     projects: []
 `);
     const profiles = profilesFromYaml(dir)!;
-    expect(profiles.find((p) => p.user === "ilterugur")!.desktop).toEqual({ clientPort: 3389 });
-    expect(profiles.find((p) => p.user === "emre")!.desktop).toEqual({ clientPort: 3395 });
+    expect(profiles.find((p) => p.user === "ilterugur")!.desktop!.clientPort).toBe(3389);
+    expect(profiles.find((p) => p.user === "emre")!.desktop!.clientPort).toBe(3395);
     expect(profiles.find((p) => p.user === "nodesk")!.desktop).toBeUndefined();
+  });
+
+  test("desktop access travels with the port, stated or defaulted like the box defaults it", () => {
+    const dir = tmpRepo(`
+network:
+  tailscale: { enabled: true }
+developers:
+  - user: ilterugur
+    projects: []
+    desktop: { enabled: true }
+  - user: emre
+    projects: []
+    desktop: { enabled: true, access: [tailnet] }
+  - user: mert
+    projects: []
+    desktop: { enabled: true, access: [tunnel, nonsense] }
+`);
+    const profiles = profilesFromYaml(dir)!;
+    expect(profiles.find((p) => p.user === "ilterugur")!.desktop!.access).toEqual(["tunnel", "tailnet"]);
+    expect(profiles.find((p) => p.user === "emre")!.desktop!.access).toEqual(["tailnet"]);
+    // Unvalidated input: an unknown path is dropped rather than carried inward.
+    expect(profiles.find((p) => p.user === "mert")!.desktop!.access).toEqual(["tunnel"]);
+  });
+
+  test("without tailscale the desktop default is the tunnel alone", () => {
+    const dir = tmpRepo(`
+developers:
+  - user: ilterugur
+    projects: []
+    desktop: { enabled: true }
+`);
+    expect(profilesFromYaml(dir)![0]!.desktop!.access).toEqual(["tunnel"]);
   });
 });
 

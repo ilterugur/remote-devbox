@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentsFor, bootoutIfLoaded, plistPath, renderPlist, resolveArgv } from "./agent";
+import {
+  agentEnv,
+  agentsFor,
+  bootoutIfLoaded,
+  installedAgentLabels,
+  plistPath,
+  renderPlist,
+  resolveArgv,
+} from "./agent";
 import type { Config } from "./config";
 
 const cfg = (profile: Record<string, unknown>): Config => ({
@@ -62,6 +70,22 @@ describe("agentsFor", () => {
     ]);
   });
 
+  test("desktop access without 'tunnel' is named as a warning, not left to connect time", () => {
+    const [a] = agentsFor(cfg({ desktop: { clientPort: 3390, access: ["tailnet"] } }), "ilterugur");
+    expect(a!.warning).toContain("tunnel");
+    expect(a!.warning).toContain("3389");
+  });
+
+  test("an access list containing 'tunnel' carries no warning", () => {
+    const [a] = agentsFor(cfg({ desktop: { clientPort: 3390, access: ["tunnel", "tailnet"] } }), "ilterugur");
+    expect(a!.warning).toBeUndefined();
+  });
+
+  test("an unknown access list (an older box's client.json) is not treated as a refusal", () => {
+    const [a] = agentsFor(cfg({ desktop: { clientPort: 3390 } }), "ilterugur");
+    expect(a!.warning).toBeUndefined();
+  });
+
   test("no desktop, no tunnel", () => {
     expect(agentsFor(cfg({}), "ilterugur")).toEqual([]);
   });
@@ -96,6 +120,20 @@ describe("renderPlist", () => {
     );
     expect(xml).toContain("<key>StartInterval</key>\n  <integer>60</integer>");
     expect(xml).not.toContain("KeepAlive");
+  });
+
+  test("carries a PATH launchd does not have, so a spawned rclone/ssh is findable", () => {
+    const xml = renderPlist(
+      { label: "com.devbox.ilterugur.mount", mode: "interval", argv: ["/bin/echo"], description: "m" },
+      "/Users/me/.local/state/devbox",
+      "/Users/me",
+    );
+    expect(xml).toContain("<key>EnvironmentVariables</key>");
+    const path = agentEnv("/Users/me").PATH;
+    expect(xml).toContain(`<key>PATH</key>\n    <string>${path}</string>`);
+    expect(xml).toContain("<key>HOME</key>\n    <string>/Users/me</string>");
+    for (const dir of ["/Users/me/.local/bin", "/opt/homebrew/bin", "/Users/me/.bun/bin", "/usr/bin"])
+      expect(path.split(":")).toContain(dir);
   });
 
   test("escapes XML metacharacters in arguments", () => {
@@ -140,21 +178,61 @@ describe("resolveArgv", () => {
 });
 
 describe("bootoutIfLoaded", () => {
+  // Labels here are deliberately unmistakable fakes. PATH interception is what keeps
+  // these off real launchd, but a label that looks like a real agent is one PATH-
+  // resolution change away from aiming a real `bootout` at a real agent.
+  const FAKE = "com.devbox.test-fixture.not-a-real-agent";
+
   test("does nothing, and does not throw, when the label isn't loaded", () => {
     withFakeLaunchctl({ print: 1 }, () => {
-      expect(() => bootoutIfLoaded("com.devbox.not-loaded")).not.toThrow();
+      expect(() => bootoutIfLoaded(FAKE)).not.toThrow();
     });
   });
 
   test("a failed bootout throws naming bootout, not whatever the caller does next", () => {
     withFakeLaunchctl({ print: 0, bootout: 1 }, () => {
-      expect(() => bootoutIfLoaded("com.devbox.ilterugur.desktop")).toThrow(/bootout failed/);
+      expect(() => bootoutIfLoaded(FAKE)).toThrow(/bootout failed/);
     });
   });
 
   test("a successful bootout of a loaded label does not throw", () => {
     withFakeLaunchctl({ print: 0, bootout: 0 }, () => {
-      expect(() => bootoutIfLoaded("com.devbox.ilterugur.desktop")).not.toThrow();
+      expect(() => bootoutIfLoaded(FAKE)).not.toThrow();
     });
+  });
+});
+
+describe("installedAgentLabels", () => {
+  /** A fake ~/Library/LaunchAgents holding the given plist filenames. */
+  function fakeHome(names: string[]): string {
+    const home = mkdtempSync(join(tmpdir(), "devbox-agent-home-"));
+    const dir = join(home, "Library", "LaunchAgents");
+    mkdirSync(dir, { recursive: true });
+    for (const n of names) writeFileSync(join(dir, n), "");
+    return home;
+  }
+
+  test("finds this profile's agents whatever the config now says about them", () => {
+    const home = fakeHome(["com.devbox.ilterugur.desktop.plist", "com.devbox.ilterugur.mount.plist"]);
+    expect(installedAgentLabels("ilterugur", home)).toEqual([
+      "com.devbox.ilterugur.desktop",
+      "com.devbox.ilterugur.mount",
+    ]);
+  });
+
+  test("leaves another profile's and hand-written com.devbox agents alone", () => {
+    const home = fakeHome([
+      "com.devbox.ilterugur.desktop.plist",
+      "com.devbox.emre.desktop.plist",
+      "com.devbox.mount.plist",
+      "com.devbox.cdp-tunnel.plist",
+      "com.devbox.ilterugur.desktop.extra.plist",
+      "com.apple.something.plist",
+    ]);
+    expect(installedAgentLabels("ilterugur", home)).toEqual(["com.devbox.ilterugur.desktop"]);
+  });
+
+  test("no LaunchAgents directory means nothing installed, not a crash", () => {
+    expect(installedAgentLabels("ilterugur", mkdtempSync(join(tmpdir(), "devbox-agent-nohome-")))).toEqual([]);
   });
 });
