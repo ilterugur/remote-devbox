@@ -84,16 +84,39 @@ ssh <user>@<box>            # profile user to code, admin to maintain
 - `scripts/connect.sh` wraps the common operator calls (`ssh`/`status`/`login`/
   `attach`/`mosh`/`devup`/`serve`); `export DEVBOX_HOST=admin@<box>` first.
 
-### 6. Full desktop — RDP (XFCE, for the things a terminal can't do)
+### 6. Web UIs on the box — `devbox ui`
+
+Anything the box runs with a web interface — an agent dashboard, a memory control plane —
+listens on **loopback**. That is deliberate: a loopback service has no door of its own, so
+the SSH key that got you onto the box is the only credential in play, and a service that
+never learned to authenticate is not a hole in the box.
+
+```bash
+devbox ui                 # what is listening right now, and which needs a tunnel
+devbox ui hindsight       # tunnel it and open the browser
+devbox ui 9077            # by port, when the name is ambiguous or unhelpful
+devbox ui desktop         # the RDP port; prints an address instead of opening a browser
+```
+
+Which ports exist is **asked of the box**, not declared in `devbox.yml`: a list in the
+config is one more thing to keep true, and it would be wrong in exactly the case that
+matters — a service that moved, or died. Both ends of the tunnel bind `127.0.0.1`, so it
+never re-publishes a box service to whatever network your laptop is on.
+
+A listener that is *not* on loopback is shown as such. On a box where the firewall is the
+only thing keeping it private, that line is the warning.
+
+### 7. Full desktop — RDP (XFCE, for the things a terminal can't do)
 
 For a developer with `desktop.enabled`, the box runs XFCE behind xrdp. Point an RDP
 client (macOS: Microsoft's **Windows App**) at the box on **3389** and log in with the
 Linux username and the PAM password whose hash is in `devbox.secrets.yml`.
 
 - **Reachability follows `desktop.access`** — `tailnet` means the box's 100.x address,
-  `tunnel` means `ssh -L 3389:127.0.0.1:3389 <box>` first, then dial `localhost:3389`.
-  RDP is the one door here authenticated by a password rather than a key, which is why
-  it is never public unless you spell out `unsafe-public`.
+  `tunnel` means an `ssh -L 3389:127.0.0.1:3389 <box>` first, then dial `localhost:3389`.
+  `devbox ui desktop` opens that tunnel for you (see below). RDP is the one door here
+  authenticated by a password rather than a key, which is why it is never public unless
+  you spell out `unsafe-public`.
 - **The keyboard comes from `desktop.keyboard`**, or from the machine that ran
   `devbox plan` when you leave it out. It is applied by teaching xrdp the layout id
   your client announces — setting it inside the session does not stick, because xrdp
