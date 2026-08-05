@@ -13,6 +13,7 @@ import {
   type CliTarget,
   type DevboxSpec,
   type EngineId,
+  type RcSpawn,
   SUPPORTED_PLATFORM,
   type SshAccess,
 } from "./types";
@@ -27,6 +28,7 @@ const ENGINES: readonly string[] = ["podman-rootless", "docker-rootless", "none"
 const SSH_ACCESS: readonly string[] = ["public", "tailnet"] satisfies SshAccess[];
 const PROVIDERS: readonly string[] = ["claude", "codex"];
 const DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];
+const RC_SPAWNS: readonly string[] = ["worktree", "same-dir", "session"] satisfies RcSpawn[];
 const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
 /**
  * An agent profile becomes a launcher script on the developer's PATH. Naming a profile
@@ -84,6 +86,7 @@ export function validateStructure(raw: unknown): { spec: DevboxSpec | null; issu
   validateContainer(raw, issues);
   validateSharedServices(raw, issues);
   validateClients(raw, issues);
+  validateRemoteControl(raw, issues);
   validateDevelopers(raw, issues);
 
   return { spec: hasErrors(issues) ? null : (raw as unknown as DevboxSpec), issues };
@@ -481,6 +484,123 @@ function validateResources(r: unknown, base: string, issues: Issue[]): void {
       issues.push(err(`${base}.${k}`, "must be a positive integer"));
     }
   }
+  // Service-only knobs. Both have kernel-defined ranges, and a value outside them is
+  // rejected by systemd at unit load — which surfaces as a unit that simply never
+  // starts, so catch it here instead.
+  if (r.nice !== undefined && !(typeof r.nice === "number" && Number.isInteger(r.nice) && r.nice >= -20 && r.nice <= 19)) {
+    issues.push(err(`${base}.nice`, "must be an integer in -20..19"));
+  }
+  if (
+    r.oom_score_adjust !== undefined &&
+    !(
+      typeof r.oom_score_adjust === "number" &&
+      Number.isInteger(r.oom_score_adjust) &&
+      r.oom_score_adjust >= -1000 &&
+      r.oom_score_adjust <= 1000
+    )
+  ) {
+    issues.push(err(`${base}.oom_score_adjust`, "must be an integer in -1000..1000"));
+  }
+  if (r.cpu_quota !== undefined && !(typeof r.cpu_quota === "string" && /^(\d+%|)$/.test(String(r.cpu_quota)))) {
+    issues.push(err(`${base}.cpu_quota`, "must be a percentage like '300%' (or '' for no cap)"));
+  }
+}
+
+function validateBuildEnv(raw: unknown, base: string, issues: Issue[]): void {
+  if (raw === undefined) return;
+  if (!isRecord(raw)) {
+    issues.push(err(base, "must be a mapping of NAME -> value"));
+    return;
+  }
+  for (const [k, v] of Object.entries(raw)) {
+    // Values land in systemd Environment= lines, which are strings. Accepting a number
+    // here would render fine and then differ from what the same key means elsewhere.
+    if (typeof v !== "string") issues.push(err(`${base}.${k}`, "must be a string"));
+  }
+}
+
+function validatePositiveInts(
+  raw: Record<string, unknown>,
+  base: string,
+  keys: readonly string[],
+  issues: Issue[],
+): void {
+  for (const k of keys) {
+    const v = raw[k];
+    if (v !== undefined && !(typeof v === "number" && Number.isInteger(v) && v > 0)) {
+      issues.push(err(`${base}.${k}`, "must be a positive integer"));
+    }
+  }
+}
+
+/** The box-wide Remote Control block. Per-project overrides are validated with the project. */
+function validateRemoteControl(raw: Record<string, unknown>, issues: Issue[]): void {
+  const rc = raw.remote_control;
+  if (rc === undefined) return;
+  if (!isRecord(rc)) {
+    issues.push(err("remote_control", "must be a mapping"));
+    return;
+  }
+  if (rc.enabled !== undefined && typeof rc.enabled !== "boolean") {
+    issues.push(err("remote_control.enabled", "must be true or false"));
+  }
+  if (rc.spawn !== undefined && !RC_SPAWNS.includes(String(rc.spawn))) {
+    issues.push(err("remote_control.spawn", `must be one of: ${RC_SPAWNS.join(", ")}`));
+  }
+  validatePositiveInts(rc, "remote_control", ["capacity"], issues);
+  validateResources(rc.resources, "remote_control.resources", issues);
+  validateBuildEnv(rc.build_env, "remote_control.build_env", issues);
+
+  const ar = rc.autorestart;
+  if (ar !== undefined) {
+    if (!isRecord(ar)) {
+      issues.push(err("remote_control.autorestart", "must be a mapping"));
+    } else {
+      if (ar.enabled !== undefined && typeof ar.enabled !== "boolean") {
+        issues.push(err("remote_control.autorestart.enabled", "must be true or false"));
+      }
+      validatePositiveInts(ar, "remote_control.autorestart", ["restart_sec", "burst", "interval"], issues);
+    }
+  }
+
+  const re = rc.resume;
+  if (re !== undefined) {
+    if (!isRecord(re)) {
+      issues.push(err("remote_control.resume", "must be a mapping"));
+    } else {
+      for (const k of ["on_boot", "skip_workflow_warning"] as const) {
+        if (re[k] !== undefined && typeof re[k] !== "boolean") {
+          issues.push(err(`remote_control.resume.${k}`, "must be true or false"));
+        }
+      }
+      validatePositiveInts(
+        re,
+        "remote_control.resume",
+        ["lookback_h", "max_concurrent", "settle_sec", "min_free_mb", "max_attempts", "timeout_sec"],
+        issues,
+      );
+    }
+  }
+}
+
+function validateProjectRemoteControl(raw: unknown, base: string, issues: Issue[]): void {
+  if (raw === undefined || raw === false) return;
+  if (!isRecord(raw)) {
+    issues.push(err(base, "must be a mapping, or false to turn Remote Control off for this project"));
+    return;
+  }
+  if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+    issues.push(err(`${base}.enabled`, "must be true or false"));
+  }
+  if (raw.name !== undefined && !isNonEmptyString(raw.name)) {
+    issues.push(err(`${base}.name`, "must be a non-empty title"));
+  }
+  if (raw.spawn !== undefined && !RC_SPAWNS.includes(String(raw.spawn))) {
+    issues.push(err(`${base}.spawn`, `must be one of: ${RC_SPAWNS.join(", ")}`));
+  }
+  validatePositiveInts(raw, base, ["capacity"], issues);
+  validateResources(raw.resources, `${base}.resources`, issues);
+  validateBuildEnv(raw.build_env, `${base}.build_env`, issues);
 }
 
 function validateGitIdentities(d: Record<string, unknown>, base: string, issues: Issue[]): void {
@@ -695,5 +815,6 @@ function validateProjects(projects: unknown, base: string, issues: Issue[]): voi
         issues.push(err(`${path}.ports`, "every port must be an integer in 1..65535"));
       }
     }
+    validateProjectRemoteControl(p.remote_control, `${path}.remote_control`, issues);
   });
 }

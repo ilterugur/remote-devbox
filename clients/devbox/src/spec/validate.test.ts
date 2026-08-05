@@ -15,6 +15,12 @@ const minimal = () => ({
 const paths = (raw: unknown) =>
   validateStructure(raw).issues.map((i) => `${i.severity}:${i.path}`);
 
+/** minimal() with one project, merged with the given project overrides. */
+const withProject = (extra: Record<string, unknown>) => ({
+  ...minimal(),
+  developers: [{ user: "dev-a", login_ssh_keys: [KEY], projects: [{ name: "p", repo: "git@github.com:e/p.git", ...extra }] }],
+});
+
 test("a minimal valid config produces a spec and no issues", () => {
   const r = validateStructure(minimal());
   expect(r.issues).toEqual([]);
@@ -375,4 +381,48 @@ test("a box path outside the sync disk is accepted", () => {
     }],
   });
   expect(r.issues).toEqual([]);
+});
+
+test("remote_control.spawn must be a known spawn mode", () => {
+  const spec = { ...minimal(), remote_control: { spawn: "tmux" } };
+  expect(paths(spec)).toContain("error:remote_control.spawn");
+});
+
+test("remote_control.capacity must be a positive integer", () => {
+  expect(paths({ ...minimal(), remote_control: { capacity: 0 } })).toContain("error:remote_control.capacity");
+  expect(paths({ ...minimal(), remote_control: { capacity: 2.5 } })).toContain("error:remote_control.capacity");
+});
+
+test("remote_control.resources reuses the systemd size rules", () => {
+  const spec = { ...minimal(), remote_control: { resources: { memory_high: "lots" } } };
+  expect(paths(spec)).toContain("error:remote_control.resources.memory_high");
+});
+
+test("remote_control.resources accepts nice and oom_score_adjust ranges", () => {
+  const bad = { ...minimal(), remote_control: { resources: { nice: 25, oom_score_adjust: 2000 } } };
+  expect(paths(bad)).toContain("error:remote_control.resources.nice");
+  expect(paths(bad)).toContain("error:remote_control.resources.oom_score_adjust");
+  const ok = { ...minimal(), remote_control: { resources: { nice: 5, oom_score_adjust: 300 } } };
+  expect(paths(ok)).toEqual([]);
+});
+
+test("remote_control.build_env must be a flat string map", () => {
+  const spec = { ...minimal(), remote_control: { build_env: { NODE_OPTIONS: 4096 } } };
+  expect(paths(spec)).toContain("error:remote_control.build_env.NODE_OPTIONS");
+});
+
+test("remote_control.resume knobs must be positive integers", () => {
+  const spec = { ...minimal(), remote_control: { resume: { max_concurrent: 0 } } };
+  expect(paths(spec)).toContain("error:remote_control.resume.max_concurrent");
+});
+
+test("a project's remote_control accepts false or a mapping, nothing else", () => {
+  expect(paths(withProject({ remote_control: false }))).toEqual([]);
+  expect(paths(withProject({ remote_control: { name: "P", spawn: "same-dir", capacity: 32 } }))).toEqual([]);
+  expect(paths(withProject({ remote_control: "yes" }))).toContain("error:developers[0].projects[0].remote_control");
+});
+
+test("a project's remote_control.name must be a non-empty string", () => {
+  const spec = withProject({ remote_control: { name: "" } });
+  expect(paths(spec)).toContain("error:developers[0].projects[0].remote_control.name");
 });
