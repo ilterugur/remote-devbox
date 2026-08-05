@@ -1,0 +1,50 @@
+#!/bin/sh
+# devbox — the client's single command surface.
+#
+# Everything a developer types is `devbox <something>`, but not everything can afford to
+# be: `tailnet-up` runs from ssh_config's `Match exec` on EVERY ssh invocation, including
+# the ones inside `devbox mount` and `devbox sync`. Measured on an M-series client, the
+# compiled CLI takes 0.5-1.4s to start and this script takes 0.15s — so the hot path
+# stays in sh and everything else is handed to the binary.
+#
+# Installed by `devbox client-config --installer` alongside ~/.local/bin/devbox-bin.
+set -eu
+
+# ── the hot path ──────────────────────────────────────────────────────────────
+# Exit 0 when the tailnet is a usable path to the given peer, non-zero otherwise. Two
+# stages, cheapest first:
+#   1. Is there a tunnel route at all? Free (a routing-table lookup, no packets) and it
+#      answers the common question — "is Tailscale even running". The check is the
+#      interface, not the exit code: with Tailscale down, `route get` still succeeds by
+#      falling through to the default route.
+#   2. Does the peer actually answer? Only reached when stage 1 passed.
+# The timeout flag matters more than it looks: on macOS `nc -w` is the IDLE timeout, so
+# an unreachable address waits out the full 75s TCP timeout. `-G` is the connect timeout.
+tailnet_up() {
+  peer="${1:?usage: devbox tailnet-up <tailnet-ip> [port]}"
+  port="${2:-22}"
+  case "$(uname -s)" in
+    Darwin)
+      route -n get "$peer" 2>/dev/null | grep -q 'interface: utun' || exit 1
+      nc -z -G 1 "$peer" "$port" >/dev/null 2>&1
+      ;;
+    *)
+      ip route get "$peer" 2>/dev/null | grep -q 'dev tailscale' || exit 1
+      nc -z -w 1 "$peer" "$port" >/dev/null 2>&1
+      ;;
+  esac
+}
+
+case "${1:-}" in
+  tailnet-up) shift; tailnet_up "$@"; exit $? ;;
+esac
+
+# ── everything else ───────────────────────────────────────────────────────────
+# Found on PATH rather than by a baked-in path, so a checkout wrapper can shadow it.
+bin=$(command -v devbox-bin 2>/dev/null || true)
+[ -n "$bin" ] || {
+  echo "devbox: devbox-bin not found on PATH — re-run the client installer:" >&2
+  echo "  ssh <you>@<box> 'devbox client-config --installer' > devbox-setup.sh && sh devbox-setup.sh" >&2
+  exit 127
+}
+exec "$bin" "$@"

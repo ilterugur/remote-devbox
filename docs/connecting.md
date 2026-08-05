@@ -109,14 +109,27 @@ only thing keeping it private, that line is the warning.
 ### 7. Full desktop — RDP (XFCE, for the things a terminal can't do)
 
 For a developer with `desktop.enabled`, the box runs XFCE behind xrdp. Point an RDP
-client (macOS: Microsoft's **Windows App**) at the box on **3389** and log in with the
-Linux username and the PAM password whose hash is in `devbox.secrets.yml`.
+client (macOS: Microsoft's **Windows App**) at **`localhost:<client_port>`** (3389
+unless `desktop.client_port` says otherwise) and log in with the Linux username and the
+PAM password whose hash is in `devbox.secrets.yml`.
 
-- **Reachability follows `desktop.access`** — `tailnet` means the box's 100.x address,
-  `tunnel` means an `ssh -L 3389:127.0.0.1:3389 <box>` first, then dial `localhost:3389`.
-  `devbox ui desktop` opens that tunnel for you (see below). RDP is the one door here
-  authenticated by a password rather than a key, which is why it is never public unless
-  you spell out `unsafe-public`.
+- **The address is always `localhost:<client_port>`** (3389 unless `desktop.client_port`
+  says otherwise). `devbox agent up` keeps an ssh tunnel to the box open under launchd,
+  and because that tunnel dials the ssh alias it follows the same tailnet→public fallback
+  every other ssh does — so the address in your RDP client is right whether Tailscale is
+  up, down, or restarting. `devbox agent status` says whether the local end of that tunnel
+  is up; it cannot tell you the box's xrdp answers, because the listener it connects to is
+  ssh's own (ssh accepts the connection first and only then dials the box).
+- **Reachability on the box follows `desktop.access`** — a list, defaulting to
+  `[tunnel, tailnet]` with Tailscale on and `[tunnel]` without it. `tunnel` is what makes
+  xrdp listen on 127.0.0.1, and it is the only entry the agent's tunnel can reach: drop it
+  and the forward lands on a port with nothing behind it (`devbox agent up` says so when
+  it writes the agent). `tailnet` additionally listens on the box's 100.x address. RDP is
+  the one door here authenticated by a password rather than a key, which is why it is
+  never public unless you spell out `unsafe-public`.
+- **`devbox ui desktop` is the one-off version of the same thing** — it opens a tunnel
+  for as long as it runs and prints the address. Reach for it on a machine you have not
+  set agents up on; the agent is what makes the address survive a reboot.
 - **The keyboard comes from `desktop.keyboard`**, or from the machine that ran
   `devbox plan` when you leave it out. It is applied by teaching xrdp the layout id
   your client announces — setting it inside the session does not stick, because xrdp
@@ -132,6 +145,31 @@ Linux username and the PAM password whose hash is in `devbox.secrets.yml`.
   session unreachable — and XFCE allows one session manager per user, so the next login
   would exit a second after it starts. The session script reaps those abandoned sessions
   at login, so the recovery is simply to connect again.
+
+## What runs on your own machine
+
+Two things on the client are long-lived, and both are launchd agents written by
+`devbox agent up` (macOS; on Linux the command prints the systemd --user equivalent):
+
+| Agent | What it does |
+| --- | --- |
+| `com.devbox.<user>.desktop` | holds the RDP tunnel open — `127.0.0.1:<client_port>` → the box's 3389 |
+| `com.devbox.<user>.mount` | re-runs `devbox mount up` every 60s, so the `mnt` bridge survives sleep and wake |
+
+```bash
+devbox agent status   # what is described, what launchd has loaded, what the local port does
+devbox agent up       # install or update them, and remove any the config no longer describes
+devbox agent down     # remove them
+```
+
+Each agent appears only when its profile asks for it: the desktop one for a developer with
+`desktop.enabled`, the mount one for a developer with `file_bridge.lazy_mounts`. A profile
+with neither gets nothing, and `devbox agent up` says so rather than writing an empty
+agent.
+
+Logs are in `~/.local/state/devbox/<label>.log`. Neither agent is required — they are
+what makes a saved RDP entry and a mounted path keep working without you thinking about
+it.
 
 ## At a glance
 

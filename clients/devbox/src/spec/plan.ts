@@ -7,6 +7,7 @@
  */
 import type { Issue } from "./issues";
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
+import { assignClientPorts } from "./client-ports";
 import { resolveEntry } from "../app-configs/registry";
 import { DEFAULT_CLI_TARGETS } from "./types";
 import type { ClientFacts, ResolvedDeveloper, ResolvedSpec } from "./types";
@@ -54,8 +55,19 @@ export function renderPlan(
   const runtimes = Object.entries(resolved.runtimes ?? {}).map(([k, v]) => `${k} ${v}`);
   lines.push(row("runtimes", runtimes.length ? runtimes.join(" · ") : "none"));
 
+  // The client port is decided across developers, not within one, so it is resolved here
+  // and handed down — a plan that showed the desktop but not the address a client dials
+  // would hide the one number the developer has to type into their RDP client.
+  const clientPorts = assignClientPorts(
+    resolved.developers.map((d) => ({
+      user: d.user,
+      desktopEnabled: d.desktop?.enabled ?? false,
+      clientPort: d.desktop?.client_port,
+    })),
+  );
+
   for (const dev of resolved.developers) {
-    lines.push("", ...developerLines(dev, resolved.network.tailscale.enabled, client));
+    lines.push("", ...developerLines(dev, resolved.network.tailscale.enabled, client, clientPorts.get(dev.user)));
   }
 
   const errors = issues.filter((i) => i.severity === "error").length;
@@ -67,7 +79,12 @@ export function renderPlan(
   return lines.join("\n");
 }
 
-function developerLines(dev: ResolvedDeveloper, tailscale: boolean, client: ClientFacts): string[] {
+function developerLines(
+  dev: ResolvedDeveloper,
+  tailscale: boolean,
+  client: ClientFacts,
+  clientPort?: number,
+): string[] {
   const lines = [`developer ${dev.user}${dev.adopt_existing ? "  (adopt existing account)" : ""}`];
   const indent = "  ";
 
@@ -109,6 +126,7 @@ function developerLines(dev: ResolvedDeveloper, tailscale: boolean, client: Clie
         [
           `${dev.desktop.environment}/${dev.desktop.transport}`,
           `via ${(dev.desktop.access ?? defaultDesktopAccess(tailscale)).join(" + ")}`,
+          clientPort ? `client dials 127.0.0.1:${clientPort}` : "no client port",
           idle ? `idle logout ${idle}m` : "no idle logout",
           describeKeyboard(dev, client),
         ].join(" · "),

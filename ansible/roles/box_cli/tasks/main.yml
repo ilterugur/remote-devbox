@@ -35,6 +35,16 @@
     group: root
     mode: "0644"
 
+# The client's `devbox` itself: a dispatcher that keeps the tailnet probe in sh and hands
+# every other subcommand to the compiled binary. Handed out, never run here.
+- name: Stage the client-side command dispatcher
+  ansible.builtin.copy:
+    src: devbox-dispatch
+    dest: /usr/local/share/remote-devbox/devbox-dispatch
+    owner: root
+    group: root
+    mode: "0644"
+
 # Everything `devbox client-config` needs to describe this box to a laptop, written once
 # here so the CLI looks it up instead of re-deriving addresses at runtime — the same rule
 # the engine map follows.
@@ -63,6 +73,10 @@
       # checkout can still manage them instead of reporting the feature as switched off.
       file_bridges: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='file_bridge') | list)) }}"
       app_configs: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='app_configs') | list)) }}"
+      # The client side of the desktop tunnel. Keyed by developer, and only for the ones
+      # who have a desktop — a client with no repo checkout cannot work the port out on
+      # its own, and guessing 3389 would collide the moment a second developer appears.
+      desktops: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='desktop') | list)) }}"
     _devbox_developer_names: "{{ devbox_developers | map(attribute='user') | list }}"
     _devbox_account_names: "{{ [devbox_operator.user] + _devbox_developer_names }}"
     _devbox_account_projects: "{{ [[]] + (devbox_developers | map(attribute='projects') | list) }}"

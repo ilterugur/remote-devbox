@@ -8,6 +8,7 @@
  *     `{}` or `[]` — so no role ever needs a Jinja `| default(...)`, and a missing key
  *     in a template is a real bug rather than a silent policy decision.
  */
+import { assignClientPorts } from "./client-ports";
 import { DEFAULT_CLI_TARGETS } from "./types";
 import type {
   ClientFacts,
@@ -35,6 +36,13 @@ const NO_CLIENT_FACTS: ClientFacts = { keyboard: null };
 
 export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIENT_FACTS): Record<string, unknown> {
   const tailscale = resolved.network.tailscale.enabled;
+  const clientPorts = assignClientPorts(
+    resolved.developers.map((d) => ({
+      user: d.user,
+      desktopEnabled: d.desktop?.enabled ?? false,
+      clientPort: d.desktop?.client_port,
+    })),
+  );
   return {
     devbox_config_version: resolved.config_version,
     devbox_platform: {
@@ -84,7 +92,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       // operator who has such a laptop on the team is the one who knows it.
       cli_targets: [...(resolved.clients?.cli_targets ?? DEFAULT_CLI_TARGETS)],
     },
-    devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client)),
+    devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client, clientPorts)),
   };
 }
 
@@ -92,6 +100,7 @@ function normalizeDeveloper(
   dev: ResolvedDeveloper,
   tailscale: boolean,
   client: ClientFacts,
+  clientPorts: Map<string, number>,
 ): Record<string, unknown> {
   return {
     user: dev.user,
@@ -127,6 +136,7 @@ function normalizeDeveloper(
       // which turns the PAM password from the exposed gate into a second factor.
       access: [...(dev.desktop?.access ?? defaultDesktopAccess(tailscale))],
       idle_logout_minutes: dev.desktop?.idle_logout_minutes ?? null,
+      client_port: clientPorts.get(dev.user) ?? null,
       keyboard: resolveKeyboard(dev, client),
     },
     file_bridge: {

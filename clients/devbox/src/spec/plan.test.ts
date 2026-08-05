@@ -50,3 +50,17 @@ test("the plan reports a sync disk and its app configs", () => {
 test("a developer without a sync disk gets no file-bridge line", () => {
   expect(rendered()).not.toContain("file bridge");
 });
+
+test("the desktop line names the address the client dials, counting up per developer", () => {
+  // The port is the one number a developer has to type into their RDP client, and it is
+  // decided across developers — so a plan that showed the desktop without it would send
+  // the second developer to the first one's tunnel.
+  const { resolved, issues } = loadSpec(EXAMPLE_CONFIG);
+  const spec = resolved!;
+  const desk = { enabled: true, environment: "xfce" as const, transport: "xrdp" as const };
+  spec.developers[0]!.desktop = desk;
+  spec.developers[1]!.desktop = { ...desk };
+  const text = renderPlan(spec, issues);
+  expect(text).toContain("client dials 127.0.0.1:3389");
+  expect(text).toContain("client dials 127.0.0.1:3390");
+});

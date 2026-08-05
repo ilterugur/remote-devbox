@@ -31,6 +31,7 @@ import { runPush } from "./push";
 import { runPull } from "./pull";
 import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
+import { runAgentDown, runAgentStatus, runAgentUp } from "./agent";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { runConfigLink, runConfigStatus, runConfigUnlink } from "./app-configs/run";
 import { runEditors } from "./editors";
@@ -169,6 +170,19 @@ cli
       case "down": return runMountDown(cfg(), prof, opts.label);
       case "status": return runMountStatus();
       default: return die(`unknown mount action "${action}" (up|down|status)`);
+    }
+  });
+
+cli
+  .command("agent [action]", "manage this client's long-lived agents (action: up|down|status)")
+  .option("-p, --profile <profile>", "target profile")
+  .action((action: string | undefined, opts: { profile?: string }) => {
+    const prof = resolveProfile(cfg(), opts.profile);
+    switch (action ?? "status") {
+      case "up": return runAgentUp(cfg(), prof);
+      case "down": return runAgentDown(cfg(), prof);
+      case "status": return runAgentStatus(cfg(), prof);
+      default: return die(`unknown agent action "${action}" (up|down|status)`);
     }
   });
 
