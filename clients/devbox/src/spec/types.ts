@@ -161,6 +161,12 @@ export interface DesktopSpec {
   access?: DesktopAccess[];
   idle_logout_minutes?: number;
   /**
+   * The port on YOUR machine that the always-on desktop tunnel listens on, and therefore
+   * the address a saved RDP entry dials. Defaults to 3389 and upward in devbox.yml order;
+   * state it when you want the address pinned no matter who else gets a desktop.
+   */
+  client_port?: number;
+  /**
    * Defaults to whatever keyboard the client is typing on (see keyboard.ts). xrdp maps
    * only some announced layout ids and falls back to `us` in silence for the rest, so an
    * undetected and unstated layout is the one case where the desktop is quietly wrong.

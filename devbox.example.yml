@@ -179,6 +179,10 @@ developers:
       keyboard:
         layout: tr
       idle_logout_minutes: 60
+      # The port on YOUR machine that the always-on desktop tunnel listens on — the
+      # address your RDP client dials. Defaults to 3389, then 3390 for the next
+      # developer with a desktop. State it to pin the address for good.
+      # client_port: 3389
 
     # Keep app connection records (FileZilla sites, ~/.ssh/config, DB clients) identical
     # on the client and the box. Needs file_bridge.sync_disk: true — the real files live

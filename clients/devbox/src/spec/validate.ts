@@ -292,6 +292,24 @@ function validateDevelopers(raw: Record<string, unknown>, issues: Issue[]): void
     return;
   }
   devs.forEach((d, i) => validateDeveloper(d, `developers[${i}]`, issues));
+
+  // Two developers driven from one client would open two tunnels; the same local port
+  // twice means the second silently fails to bind. Named both ways so the fix is obvious.
+  const claimed = new Map<string, string>();
+  for (const d of devs) {
+    if (!isRecord(d) || !isRecord(d.desktop) || d.desktop.enabled !== true) continue;
+    const port = d.desktop.client_port;
+    if (typeof port !== "number") continue;
+    const key = String(port);
+    const first = claimed.get(key);
+    if (first) {
+      issues.push(
+        err(`developers.${String(d.user)}.desktop.client_port`, `port ${key} is already claimed by developer '${first}'`),
+      );
+    } else {
+      claimed.set(key, String(d.user));
+    }
+  }
 }
 
 function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
@@ -548,6 +566,10 @@ function validateDesktop(d: unknown, base: string, issues: Issue[]): void {
   const idle = d.idle_logout_minutes;
   if (idle !== undefined && !(typeof idle === "number" && Number.isInteger(idle) && idle > 0)) {
     issues.push(err(`${base}.idle_logout_minutes`, "must be a positive integer"));
+  }
+  const port = d.client_port;
+  if (port !== undefined && !(typeof port === "number" && Number.isInteger(port) && port >= 1024 && port <= 65535)) {
+    issues.push(err(`${base}.client_port`, "must be an integer between 1024 and 65535"));
   }
   validateKeyboard(d.keyboard, `${base}.keyboard`, issues);
 }

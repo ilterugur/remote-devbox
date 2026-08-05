@@ -223,6 +223,27 @@ test("the removed tailscale_only is reported, not ignored", () => {
   expect(paths(raw)).toContain("error:developers[0].desktop.tailscale_only");
 });
 
+test("client_port must be a port number", () => {
+  const raw = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, client_port: 80 } }],
+  };
+  expect(paths(raw)).toContain("error:developers[0].desktop.client_port");
+});
+
+test("two developers cannot claim the same client_port", () => {
+  const raw = {
+    ...minimal(),
+    developers: [
+      { user: "dev-a", login_ssh_keys: [KEY], desktop: { enabled: true, client_port: 3390 } },
+      { user: "dev-b", login_ssh_keys: [KEY], desktop: { enabled: true, client_port: 3390 } },
+    ],
+  };
+  const messages = validateStructure(raw).issues.map((i) => `${i.path}: ${i.message}`);
+  expect(messages.join("\n")).toContain("dev-a");
+  expect(messages.join("\n")).toContain("dev-b");
+});
+
 test("hardware-backed and certificate SSH keys are accepted", () => {
   for (const key of [
     "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5 dev-a@yubikey",

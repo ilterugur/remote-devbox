@@ -47,6 +47,7 @@ test("absent optionals become concrete values, never undefined", () => {
     transport: "xrdp",
     access: ["tunnel", "tailnet"],
     idle_logout_minutes: null,
+    client_port: null,
     keyboard: null,
   });
 });
@@ -162,6 +163,14 @@ test("a stated keyboard keeps its variant", () => {
 // Undetected and unstated leaves the layout to the box rather than guessing at one.
 test("no keyboard anywhere stays null", () => {
   expect(desktopOf(normalize(withDesktop({}))).keyboard).toBeNull();
+});
+
+test("a desktop developer gets a client port, defaulting to 3389", () => {
+  expect(desktopOf(normalize(withDesktop({}))).client_port).toBe(3389);
+});
+
+test("an explicit client_port is carried through untouched", () => {
+  expect(desktopOf(normalize(withDesktop({ client_port: 3391 }))).client_port).toBe(3391);
 });
 
 test("a box without Tailscale defaults to the paths that actually exist", () => {
