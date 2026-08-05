@@ -79,16 +79,36 @@ class BoxUnreachable extends Error {}
  *  (status: a diagnostic must degrade gracefully, not crash, whether or not it's a dry
  *  run), it throws BoxUnreachable instead so the caller can report "unreachable" rather
  *  than dying or misreporting "empty". */
+/**
+ * How a box-side command is run. Swappable because the real one is ssh, and a test with
+ * a synthetic profile name resolves to an alias that does not exist — which turns into a
+ * DNS lookup and a multi-second timeout. That made these tests both slow and dependent
+ * on the machine's network, so a red suite stopped meaning "the code is wrong".
+ */
+export type BoxExec = (host: string, cmd: string) => { status: number; stdout: string; stderr: string };
+
+const sshExec: BoxExec = (host, cmd) => {
+  const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { encoding: "utf8" });
+  return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: (r.stderr || r.error?.message || "").toString() };
+};
+
+let boxExec: BoxExec = sshExec;
+
+/** Test seam. Pass null to restore the real ssh runner. */
+export const setBoxExec = (fn: BoxExec | null): void => {
+  boxExec = fn ?? sshExec;
+};
+
 const boxSh = (cfg: Config, profile: string, args: string[], opts: { allowUnreachable?: boolean } = {}): string => {
   const host = hostFor(cfg, profile);
   const cmd = ["remote-app-configs", ...args].map(shQuote).join(" ");
-  const r = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd], { encoding: "utf8" });
-  if (r.error || r.status !== 0) {
-    const msg = `remote-app-configs ${args[0]} failed on ${host}: ${(r.stderr || r.error?.message || "").trim() || "ssh failed"}`;
+  const r = boxExec(host, cmd);
+  if (r.status !== 0) {
+    const msg = `remote-app-configs ${args[0]} failed on ${host}: ${r.stderr.trim() || "ssh failed"}`;
     if (isDry() || opts.allowUnreachable) throw new BoxUnreachable(msg);
     die(msg);
   }
-  return (r.stdout ?? "").trim();
+  return r.stdout.trim();
 };
 
 export function inspectBox(cfg: Config, profile: string, e: ResolvedEntry, opts: { allowUnreachable?: boolean } = {}): SideState {
