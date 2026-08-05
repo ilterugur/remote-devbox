@@ -226,6 +226,9 @@ describe("installedAgentLabels", () => {
       "com.devbox.emre.desktop.plist",
       "com.devbox.mount.plist",
       "com.devbox.cdp-tunnel.plist",
+      // The profile's own name with nothing after it: a hand-written agent that shares
+      // the whole prefix, and the one this filter is most likely to swallow.
+      "com.devbox.ilterugur.plist",
       "com.devbox.ilterugur.desktop.extra.plist",
       "com.apple.something.plist",
     ]);

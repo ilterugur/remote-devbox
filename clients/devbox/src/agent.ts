@@ -224,7 +224,14 @@ export function installedAgentLabels(profile: string, home: string = homedir()):
     return []; // no LaunchAgents directory yet — nothing installed
   }
   return names
-    .filter((n) => n.startsWith(prefix) && n.endsWith(".plist") && !n.slice(prefix.length, -6).includes("."))
+    // The name between the prefix and ".plist" must be exactly one segment: an empty one
+    // means the file is com.devbox.<profile>.plist — a hand-written agent that merely
+    // shares our prefix, and booting it out is the one thing this filter exists to avoid.
+    .filter((n) => {
+      if (!n.startsWith(prefix) || !n.endsWith(".plist")) return false;
+      const name = n.slice(prefix.length, -6);
+      return name.length > 0 && !name.includes(".");
+    })
     .map((n) => n.slice(0, -6))
     .sort();
 }

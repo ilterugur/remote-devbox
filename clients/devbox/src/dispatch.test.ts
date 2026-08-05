@@ -44,5 +44,10 @@ describe("devbox dispatcher", () => {
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("devbox-bin");
     expect(r.stderr).toContain("installer");
+    // Pinned verbatim: the installer greps this exact phrase to tell a dispatcher from a
+    // compiled binary before promoting one to devbox-bin. Reword it there and here
+    // together — a silent drift promotes the dispatcher onto itself, and `exec` then
+    // hands it back to itself forever.
+    expect(r.stderr).toContain("devbox-bin not found on PATH");
   });
 });
