@@ -17,6 +17,12 @@ test("phase order puts security before anything that relies on it", () => {
   expect(index("desktop")).toBe(PHASES.length - 1);
 });
 
+test("the rc phase runs after the working copies it hosts sessions in", () => {
+  expect(tagsFor("rc")).toEqual(["rc"]);
+  const names = PHASES.map((p) => p.name);
+  expect(names.indexOf("rc")).toBeGreaterThan(names.indexOf("projects"));
+});
+
 test("tagsFor resolves a phase, 'all' and undefined", () => {
   expect(tagsFor("containers")).toEqual(["containers"]);
   expect(tagsFor("all")).toBeNull();
