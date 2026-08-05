@@ -132,6 +132,8 @@ function normalizeDeveloper(
     file_bridge: {
       sync_disk: dev.file_bridge?.sync_disk ?? false,
       engine: dev.file_bridge?.engine ?? "mutagen",
+      lazy_mounts: (dev.file_bridge?.lazy_mounts ?? []).map((m) => ({ label: m.label, path: m.path })),
+      lazy_mount_on_connect: dev.file_bridge?.lazy_mount_on_connect ?? false,
     },
     app_configs: {
       enabled: dev.app_configs?.enabled ?? false,

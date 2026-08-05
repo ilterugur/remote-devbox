@@ -170,10 +170,25 @@ export interface DesktopSpec {
 
 export type SyncEngineId = "mutagen" | "syncthing";
 
-/** The client<->box file bridge. Only the sync disk is represented; lazy mounts are not. */
+/**
+ * One client path the box can see on demand. `label` names the mountpoint the box
+ * creates (`~/mnt/<label>`), so it has to be usable as a directory name.
+ */
+export interface LazyMountSpec {
+  label: string;
+  path: string;
+}
+
+/**
+ * The client<->box file bridge: a two-way sync disk, and read-only mounts of client
+ * paths that exist only while `devbox mount` is running.
+ */
 export interface FileBridgeSpec {
   sync_disk?: boolean;
   engine?: SyncEngineId;
+  lazy_mounts?: LazyMountSpec[];
+  /** Bring the mounts up automatically when connecting, rather than on request. */
+  lazy_mount_on_connect?: boolean;
 }
 
 export interface AppConfigsSpec {

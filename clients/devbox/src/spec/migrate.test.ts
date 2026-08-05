@@ -80,14 +80,27 @@ test("profile sudo and servers are warned about, never dropped silently", () => 
   expect(paths).toContain("profiles[0].servers");
 });
 
-test("the sync disk carries over into file_bridge; lazy mounts still warn", () => {
+test("the whole file bridge carries over — disk, engine and lazy mounts", () => {
   const raw = legacy();
   const result = migrateLegacy({
     ...raw,
-    profiles: [{ ...raw.profiles[0], sync_disk: true, lazy_mounts: [{ label: "d", path: "~/Desktop" }] }],
+    profiles: [
+      {
+        ...raw.profiles[0],
+        sync_disk: true,
+        lazy_mounts: [{ label: "d", path: "~/Desktop" }],
+        lazy_mount_on_connect: true,
+      },
+    ],
   });
-  expect(result.issues.map((i) => i.path)).toEqual(expect.arrayContaining(["profiles[0].lazy_mounts"]));
-  expect(result.spec.developers[0]!.file_bridge?.sync_disk).toBe(true);
+  // No warning any more: leaving these behind meant a migrated box silently lost the
+  // mounts it had been serving.
+  expect(result.issues.map((i) => i.path)).not.toContain("profiles[0].lazy_mounts");
+  expect(result.spec.developers[0]!.file_bridge).toEqual({
+    sync_disk: true,
+    lazy_mounts: [{ label: "d", path: "~/Desktop" }],
+    lazy_mount_on_connect: true,
+  });
 });
 
 test("the migrated spec passes structural, reference and resolution validation", () => {
