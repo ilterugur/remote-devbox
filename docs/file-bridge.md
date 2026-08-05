@@ -4,13 +4,18 @@ Make client files available to the box. Two mechanisms:
 
 ## Lazy mount (read-only, while the client is online)
 
-Declare paths in `group_vars` per profile:
+Declare paths under the developer's `file_bridge` in `devbox.yml`:
 
 ```yaml
-lazy_mounts:
-  - { label: desktop, path: "~/Desktop" }
-lazy_mount_on_connect: true
+file_bridge:
+  lazy_mounts:
+    - { label: desktop, path: "~/Desktop" }
+  lazy_mount_on_connect: true
 ```
+
+Independent of the sync disk below — either works without the other. Each label becomes
+the box directory `~/mnt/<label>`, so labels must be usable as filenames and must not
+repeat, and two mounted paths may not nest inside one another.
 
 Re-run `devbox apply` (or fetch a fresh client config from the box) to propagate them,
 then:

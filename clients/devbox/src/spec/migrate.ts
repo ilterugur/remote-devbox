@@ -94,9 +94,13 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
     const bridge: FileBridgeSpec = {};
     if (profile.sync_disk === true) bridge.sync_disk = true;
     if (typeof profile.sync_engine === "string") bridge.engine = profile.sync_engine as SyncEngineId;
-    if (profile.lazy_mounts !== undefined) {
-      issues.push(warn(`${path}.lazy_mounts`, "not represented in the canonical config yet — carry it over by hand"));
+    if (Array.isArray(profile.lazy_mounts) && profile.lazy_mounts.length) {
+      bridge.lazy_mounts = profile.lazy_mounts.map((m: Record<string, unknown>) => ({
+        label: String(m.label),
+        path: String(m.path),
+      }));
     }
+    if (profile.lazy_mount_on_connect === true) bridge.lazy_mount_on_connect = true;
 
     const dev: DeveloperSpec = {
       user,

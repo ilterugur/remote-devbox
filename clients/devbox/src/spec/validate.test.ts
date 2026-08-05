@@ -260,6 +260,44 @@ test("file_bridge rejects an unknown engine", () => {
   ).toContain("error:developers[0].file_bridge.engine");
 });
 
+const withMounts = (lazy_mounts: unknown) =>
+  paths({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: { lazy_mounts } }],
+  });
+
+test("lazy mounts are accepted without a sync disk — they are independent features", () => {
+  expect(withMounts([{ label: "desktop", path: "~/Desktop" }])).toEqual([]);
+});
+
+// The label becomes ~/mnt/<label> on the box.
+test("a mount label that is not a directory name is rejected", () => {
+  expect(withMounts([{ label: "my desktop", path: "~/Desktop" }])).toContain(
+    "error:developers[0].file_bridge.lazy_mounts[0].label",
+  );
+  expect(withMounts([{ label: "a/b", path: "~/Desktop" }])).toContain(
+    "error:developers[0].file_bridge.lazy_mounts[0].label",
+  );
+});
+
+// Both would land on one box directory and the second would take the first one's place.
+test("two mounts may not share a label", () => {
+  expect(withMounts([{ label: "d", path: "~/Desktop" }, { label: "d", path: "~/Documents" }])).toContain(
+    "error:developers[0].file_bridge.lazy_mounts[1].label",
+  );
+});
+
+// Nested paths mean the box sees the same files twice, and unmounting one breaks the other.
+test("a mount nested inside another is rejected", () => {
+  expect(withMounts([{ label: "home", path: "~/" }, { label: "desk", path: "~/Desktop" }])).toContain(
+    "error:developers[0].file_bridge.lazy_mounts[1].path",
+  );
+});
+
+test("a mount with no path is rejected", () => {
+  expect(withMounts([{ label: "d" }])).toContain("error:developers[0].file_bridge.lazy_mounts[0].path");
+});
+
 const withApp = (app: unknown, bridge: unknown = { sync_disk: true }) => ({
   ...minimal(),
   developers: [{ user: "dev-a", login_ssh_keys: [KEY], file_bridge: bridge, app_configs: app }],

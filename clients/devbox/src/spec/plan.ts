@@ -120,22 +120,24 @@ function developerLines(dev: ResolvedDeveloper, tailscale: boolean, client: Clie
   // Only shown when the disk is on: an "off" line for every developer would be noise on
   // the boxes that never use it, but a disk that IS on and goes unmentioned makes the
   // plan look like the feature was never declared.
-  if (dev.file_bridge?.sync_disk) {
+  const mounts = dev.file_bridge?.lazy_mounts ?? [];
+  if (dev.file_bridge?.sync_disk || mounts.length) {
     const apps = dev.app_configs?.enabled ? (dev.app_configs.paths ?? []) : [];
     const labels = apps.map((raw) => {
       const r = resolveEntry(raw);
       return "entry" in r ? r.entry.label : String(raw);
     });
-    lines.push(
-      row(
-        "file bridge",
-        [
+    const parts = dev.file_bridge?.sync_disk
+      ? [
           `sync disk via ${dev.file_bridge.engine ?? "mutagen"}`,
           labels.length ? `app configs ${labels.join(", ")}` : "no app configs",
-        ].join(" · "),
-        indent,
-      ),
-    );
+        ]
+      : ["no sync disk"];
+    if (mounts.length) {
+      const when = dev.file_bridge?.lazy_mount_on_connect ? " (on connect)" : "";
+      parts.push(`mounts ${mounts.map((m) => m.label).join(", ")}${when}`);
+    }
+    lines.push(row("file bridge", parts.join(" · "), indent));
   }
 
   if (!dev.projects.length) {
