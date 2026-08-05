@@ -298,6 +298,11 @@ if apps.get("enabled") and apps.get("paths"):
 # `devbox agent up` open the RDP tunnel at all.
 if desktop.get("enabled") and desktop.get("client_port"):
     profile["desktop"] = {"clientPort": desktop["client_port"]}
+    # Carry the access list too. Without "tunnel" the box binds no 127.0.0.1 listener for
+    # xrdp, so the client's tunnel agent would forward to nothing — and a client with no
+    # repo checkout has no other way to learn that before it dials.
+    if desktop.get("access"):
+        profile["desktop"]["access"] = list(desktop["access"])
 
 json.dump(
     {
@@ -344,8 +349,8 @@ emit_installer() {
 #
 # Writes five files and nothing else:
 #   ~/.local/bin/devbox                     the command itself: a small dispatcher
-#   ~/.local/bin/devbox-bin                 the compiled CLI — no repo, no Bun
 #   ~/.local/bin/devbox-tailnet-up          back-compat shim for an older ssh block
+#   ~/.local/bin/devbox-bin                 the compiled CLI — no repo, no Bun
 #   ~/.ssh/config                           a managed block, appended (existing one replaced)
 #   ~/.config/remote-devbox/config.json     which box, which account, which projects,
 #                                           and how its file bridge is configured
@@ -367,8 +372,53 @@ fetch() { ssh -o BatchMode=yes "\$USER_NAME@\$BOX" "devbox client-config \$1"; }
 echo "remote-devbox client setup for \$USER_NAME on \$BOX"
 echo
 
-# 1. probe
+# 1. the command itself: a dispatcher that answers \`devbox tailnet-up\` in sh.
+#
+# FIRST, before the probe shim and before the ssh block that calls it. From here on the
+# ssh_config \`Match ... exec "devbox tailnet-up"\` has something to run on every ssh call,
+# whatever fails afterwards — the dispatcher needs no binary to answer that one question.
+# Written after the CLI binary instead, every failure in between (no binary published for
+# this platform, a checksum mismatch, a dropped scp) would leave \`devbox tailnet-up\`
+# exiting non-zero forever: the Match block then fails on every ssh, silently taking the
+# public address, and nothing says so.
+#
+# Staged, not redirected straight at the destination: a plain
+# \`fetch --dispatcher > ~/.local/bin/devbox\` truncates that file the moment the shell sets
+# up the redirection, before the ssh call behind fetch has run at all. If that call then
+# fails, set -eu aborts with ~/.local/bin/devbox already zero bytes — not reverted to the
+# backup, just broken, and the client's only command with it.
 mkdir -p "\$HOME/.local/bin"
+fetch --dispatcher > "\$HOME/.local/bin/devbox.incoming"
+[ -s "\$HOME/.local/bin/devbox.incoming" ] || {
+  rm -f "\$HOME/.local/bin/devbox.incoming"
+  say "the dispatcher arrived empty — not installing it"
+  exit 1
+}
+sh -n "\$HOME/.local/bin/devbox.incoming" || {
+  rm -f "\$HOME/.local/bin/devbox.incoming"
+  say "the dispatcher failed a shell syntax check — not installing it"
+  exit 1
+}
+chmod +x "\$HOME/.local/bin/devbox.incoming"
+BACKED_UP=""
+if [ -f "\$HOME/.local/bin/devbox" ]; then
+  cp "\$HOME/.local/bin/devbox" "\$HOME/.local/bin/devbox.bak-\$STAMP"
+  BACKED_UP=" (backup: devbox.bak-\$STAMP)"
+  # A client set up before the dispatcher existed has the BINARY (or a live-source
+  # wrapper) at ~/.local/bin/devbox and no devbox-bin. Keep it as devbox-bin, or the
+  # dispatcher about to replace it has nothing to exec if step 4 does not land. The grep
+  # is what keeps a dispatcher from being promoted onto itself — that would exec in a loop.
+  if [ ! -f "\$HOME/.local/bin/devbox-bin" ] &&
+     ! grep -q 'devbox-bin not found on PATH' "\$HOME/.local/bin/devbox" 2>/dev/null; then
+    cp "\$HOME/.local/bin/devbox" "\$HOME/.local/bin/devbox-bin"
+    chmod +x "\$HOME/.local/bin/devbox-bin"
+    say "kept your previous ~/.local/bin/devbox as devbox-bin"
+  fi
+fi
+mv "\$HOME/.local/bin/devbox.incoming" "\$HOME/.local/bin/devbox"
+say "wrote ~/.local/bin/devbox (dispatcher)\$BACKED_UP"
+
+# 2. probe
 fetch --probe > "\$HOME/.local/bin/devbox-tailnet-up"
 chmod +x "\$HOME/.local/bin/devbox-tailnet-up"
 say "wrote ~/.local/bin/devbox-tailnet-up"
@@ -379,7 +429,7 @@ case ":\$PATH:" in
      say "      block that cannot find it silently falls back to the public address." ;;
 esac
 
-# 2. ssh config — replace our own managed block, leave everything else alone
+# 3. ssh config — replace our own managed block, leave everything else alone
 mkdir -p "\$HOME/.ssh"; touch "\$SSH_CFG"
 cp "\$SSH_CFG" "\$SSH_CFG.bak-\$STAMP"
 awk -v a=\${ALIAS} '\$0=="# >>> remote-devbox "a" >>>"{skip=1} !skip{print} \$0=="# <<< remote-devbox "a" <<<"{skip=0}' \\
@@ -387,7 +437,8 @@ awk -v a=\${ALIAS} '\$0=="# >>> remote-devbox "a" >>>"{skip=1} !skip{print} \$0=
 fetch --ssh-config >> "\$SSH_CFG"
 say "updated ~/.ssh/config (backup: config.bak-\$STAMP)"
 
-# 3. the CLI binary. uname's spelling is not bun's: x86_64 is x64 and aarch64 is arm64.
+# 4. the CLI binary, which the dispatcher execs. uname's spelling is not bun's: x86_64 is
+# x64 and aarch64 is arm64.
 PLATFORM=\$(uname -s | tr '[:upper:]' '[:lower:]')-\$(uname -m | sed -e 's/^x86_64\$/x64/' -e 's/^aarch64\$/arm64/')
 if REMOTE=\$(fetch "--cli \$PLATFORM" 2>&1); then
   scp -q "\$USER_NAME@\$BOX:\$REMOTE" "\$HOME/.local/bin/devbox.incoming"
@@ -410,46 +461,20 @@ if REMOTE=\$(fetch "--cli \$PLATFORM" 2>&1); then
   # is your live-source wrapper — the backup is how you put it back.
   # Spelled as an if, not as test-and-cp: under set -e a false test is a failed command,
   # so a machine that has no devbox yet would exit here instead of installing one.
-  # (Backticks are avoided throughout this heredoc — it is unquoted, so they would run
-  # here on the box at generation time rather than reach the client as text.)
+  # (Every backtick in this heredoc is escaped — it is unquoted, so an unescaped one runs
+  # here on the box at generation time instead of reaching the client as text.)
   if [ -f "\$HOME/.local/bin/devbox-bin" ]; then
     cp "\$HOME/.local/bin/devbox-bin" "\$HOME/.local/bin/devbox-bin.bak-\$STAMP"
   fi
   mv "\$HOME/.local/bin/devbox.incoming" "\$HOME/.local/bin/devbox-bin"
   say "wrote ~/.local/bin/devbox-bin (\$(\$HOME/.local/bin/devbox-bin --version))"
-
-  # 3b. the dispatcher that becomes \`devbox\` itself. Written after the binary on purpose:
-  # it execs devbox-bin, so the thing it needs must already be in place. A client that was
-  # set up before this existed has the BINARY at ~/.local/bin/devbox — the backup below is
-  # what that client can go back to.
-  # Staged like the binary above, not redirected straight to the destination: a plain
-  # \`fetch --dispatcher > ~/.local/bin/devbox\` truncates that file the moment the shell
-  # sets up the redirection, before the ssh call behind fetch has run at all. If that call
-  # then fails, set -eu aborts with ~/.local/bin/devbox already zero bytes — not reverted
-  # to the backup, just broken, and the client's only command with it.
-  fetch --dispatcher > "\$HOME/.local/bin/devbox.incoming"
-  [ -s "\$HOME/.local/bin/devbox.incoming" ] || {
-    rm -f "\$HOME/.local/bin/devbox.incoming"
-    say "the dispatcher arrived empty — not installing it"
-    exit 1
-  }
-  sh -n "\$HOME/.local/bin/devbox.incoming" || {
-    rm -f "\$HOME/.local/bin/devbox.incoming"
-    say "the dispatcher failed a shell syntax check — not installing it"
-    exit 1
-  }
-  chmod +x "\$HOME/.local/bin/devbox.incoming"
-  if [ -f "\$HOME/.local/bin/devbox" ]; then
-    cp "\$HOME/.local/bin/devbox" "\$HOME/.local/bin/devbox.bak-\$STAMP"
-  fi
-  mv "\$HOME/.local/bin/devbox.incoming" "\$HOME/.local/bin/devbox"
-  say "wrote ~/.local/bin/devbox (dispatcher; backup: devbox.bak-\$STAMP)"
 else
   say "no CLI binary for \$PLATFORM: \$REMOTE"
-  say "ssh still works; the CLI can be run from a checkout with 'bun run src/devbox.ts'."
+  say "ssh and 'devbox tailnet-up' still work — the dispatcher from step 1 answers that"
+  say "one on its own. For the rest, run the CLI from a checkout with 'bun run src/devbox.ts'."
 fi
 
-# 4. client config for the devbox CLI
+# 5. client config for the devbox CLI
 #
 # The CLI prefers ~/.config/remote-devbox and reads the pre-rename ~/.config/claude-devbox
 # only when it is the only one present. Write whichever this client already uses, so this
@@ -493,7 +518,7 @@ else
   say "wrote \$(printf %s "\$CFG" | sed "s|\$HOME|~|")"
 fi
 
-# 5. prove it, rather than asserting it
+# 6. prove it, rather than asserting it
 echo
 if ssh -o BatchMode=yes -o ConnectTimeout=10 -T "\$ALIAS" 'true' 2>/dev/null; then
   VIA=\$(ssh -o BatchMode=yes -T "\$ALIAS" 'echo \$SSH_CONNECTION | cut -d" " -f3' 2>/dev/null)
