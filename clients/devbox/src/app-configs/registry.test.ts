@@ -9,7 +9,7 @@ test("a registry key resolves to the full entry", () => {
     client: "~/.config/filezilla",
     box: "~/.config/filezilla",
     mode: "dir",
-    excludes: ["queue.sqlite3", "*.lock"],
+    excludes: ["queue.sqlite3", "lockfile", "*.lock"],
   });
 });
 

@@ -102,7 +102,7 @@ registry currently has two entries:
 
 | key | client path | box path | mode | excludes |
 | --- | --- | --- | --- | --- |
-| `filezilla` | `~/.config/filezilla` | `~/.config/filezilla` | `dir` | `queue.sqlite3`, `*.lock` |
+| `filezilla` | `~/.config/filezilla` | `~/.config/filezilla` | `dir` | `queue.sqlite3`, `lockfile`, `*.lock` |
 | `ssh_config` | `~/.ssh/config` | `~/.ssh/config` | `ssh-include` | — |
 
 `ssh_config` never symlinks `~/.ssh/config` itself: it inserts a marked `Include`
@@ -192,7 +192,14 @@ restored. The synced copies under `.app-configs/` in the sync disk are left
 behind on purpose; delete them by hand once you're sure you don't need them.
 
 Never synced: SSH private keys, `authorized_keys`, `known_hosts`. FileZilla's
-`queue.sqlite3` is excluded too — it is machine-local, and syncing SQLite corrupts it.
+`queue.sqlite3` (the machine-local transfer queue — syncing SQLite corrupts it) and its
+`lockfile` (the single-instance marker) are excluded too.
+
+An entry's `excludes` apply in two places: the first seed skips them, **and** they are
+folded into the sync session's ignore list as `/.app-configs/<label>/<pattern>`. Both are
+needed — once linked, the app writes straight into the store, so a seed-only exclude would
+let the same file reappear and propagate on the next run. Changing the exclude set means
+recreating the session: `devbox sync down && devbox sync up`.
 
 **Passwords:** FileZilla stores site passwords base64-encoded in `sitemanager.xml` —
 effectively plain text. On the box that file sits under `/home/<user>/sync` with
