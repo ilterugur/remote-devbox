@@ -25,6 +25,7 @@ const resolved: ResolvedSpec = {
           ports: [],
           install: true,
           update: false,
+          remote_control: null,
         },
       ],
     },
@@ -32,6 +33,73 @@ const resolved: ResolvedSpec = {
 };
 
 const dev0 = () => (normalize(resolved).devbox_developers as Record<string, unknown>[])[0]!;
+
+/** `resolved`, with its single project carrying a resolved RC unit. */
+const rcResolved = (): ResolvedSpec => ({
+  ...resolved,
+  developers: [
+    {
+      ...resolved.developers[0]!,
+      projects: [
+        {
+          ...resolved.developers[0]!.projects[0]!,
+          remote_control: {
+            agent: "claude",
+            name: "dev-a · p",
+            spawn: "worktree",
+            capacity: 4,
+            resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300 },
+            build_env: {},
+          },
+        },
+      ],
+    },
+  ],
+});
+
+test("remote control defaults are concrete even when nothing is declared", () => {
+  const rc = normalize(resolved).devbox_remote_control as Record<string, unknown>;
+  expect(rc.enabled).toBe(true);
+  expect(rc.autorestart).toEqual({ enabled: true, restart_sec: 10, burst: 10, interval: 600 });
+  expect(rc.resume).toEqual({
+    on_boot: true,
+    lookback_h: 12,
+    max_concurrent: 2,
+    settle_sec: 20,
+    min_free_mb: 1200,
+    max_attempts: 3,
+    timeout_sec: 1800,
+    skip_workflow_warning: true,
+  });
+});
+
+test("skip_workflow_warning follows on_boot unless it is set explicitly", () => {
+  const resume = (s: ResolvedSpec) =>
+    (normalize(s).devbox_remote_control as { resume: Record<string, unknown> }).resume;
+  expect(resume({ ...resolved, remote_control: { resume: { on_boot: false } } }).skip_workflow_warning).toBe(false);
+  const pinned: ResolvedSpec = { ...resolved, remote_control: { resume: { on_boot: false, skip_workflow_warning: true } } };
+  expect(resume(pinned).skip_workflow_warning).toBe(true);
+});
+
+test("rc units are a flat list across developers and projects", () => {
+  const units = normalize(rcResolved()).devbox_rc_units as Record<string, unknown>[];
+  expect(units).toHaveLength(1);
+  expect(units[0]).toEqual({
+    user: "dev-a",
+    project: "p",
+    agent: "claude",
+    name: "dev-a · p",
+    spawn: "worktree",
+    capacity: 4,
+    project_dir: "/home/dev-a/projects/p",
+    resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300 },
+    build_env: {},
+  });
+});
+
+test("a project with no unit contributes nothing to the list", () => {
+  expect(normalize(resolved).devbox_rc_units).toEqual([]);
+});
 
 test("absent optionals become concrete values, never undefined", () => {
   const dev = dev0();

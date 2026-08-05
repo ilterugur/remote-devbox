@@ -92,8 +92,64 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       // operator who has such a laptop on the team is the one who knows it.
       cli_targets: [...(resolved.clients?.cli_targets ?? DEFAULT_CLI_TARGETS)],
     },
+    devbox_remote_control: normalizeRemoteControl(resolved),
+    devbox_rc_units: normalizeRcUnits(resolved),
     devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client, clientPorts)),
   };
+}
+
+/**
+ * The box-wide Remote Control block, fully defaulted. `skip_workflow_warning` follows
+ * `on_boot` because a resumed session that stops for a usage prompt has not been
+ * resumed — pinning it separately is the exception, not the rule.
+ */
+function normalizeRemoteControl(resolved: ResolvedSpec): Record<string, unknown> {
+  const rc = resolved.remote_control ?? {};
+  const ar = rc.autorestart ?? {};
+  const re = rc.resume ?? {};
+  const onBoot = re.on_boot ?? true;
+  return {
+    enabled: rc.enabled ?? true,
+    autorestart: {
+      enabled: ar.enabled ?? true,
+      restart_sec: ar.restart_sec ?? 10,
+      burst: ar.burst ?? 10,
+      interval: ar.interval ?? 600,
+    },
+    resume: {
+      on_boot: onBoot,
+      lookback_h: re.lookback_h ?? 12,
+      max_concurrent: re.max_concurrent ?? 2,
+      settle_sec: re.settle_sec ?? 20,
+      min_free_mb: re.min_free_mb ?? 1200,
+      max_attempts: re.max_attempts ?? 3,
+      timeout_sec: re.timeout_sec ?? 1800,
+      skip_workflow_warning: re.skip_workflow_warning ?? onBoot,
+    },
+  };
+}
+
+/** (developer × project) flattened to one row per unit — the role loops this directly. */
+function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
+  return resolved.developers.flatMap((dev) =>
+    dev.projects.flatMap((p) => {
+      const rc = p.remote_control;
+      if (!rc) return [];
+      return [
+        {
+          user: dev.user,
+          project: p.name,
+          agent: rc.agent,
+          name: rc.name,
+          spawn: rc.spawn,
+          capacity: rc.capacity,
+          project_dir: `/home/${dev.user}/projects/${p.name}`,
+          resources: { ...rc.resources },
+          build_env: { ...rc.build_env },
+        },
+      ];
+    }),
+  );
 }
 
 function normalizeDeveloper(

@@ -21,8 +21,11 @@ import type {
   FileBridgeSpec,
   GitIdentity,
   MemoryInstance,
+  ProjectRemoteControlSpec,
   ProjectSpec,
-  ResourceSpec,
+  RcResourceSpec,
+  RcSpawn,
+  RemoteControlSpec,
   SyncEngineId,
 } from "./types";
 import { toYaml } from "./yaml";
@@ -64,6 +67,9 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
     developers: [],
   };
 
+  const remoteControl = remoteControlFrom(legacy);
+  if (remoteControl) spec.remote_control = remoteControl;
+
   const profiles = Array.isArray(legacy.profiles) ? legacy.profiles : [];
   if (profiles.length === 0) issues.push(warn("profiles", "no profiles found — nothing to migrate"));
 
@@ -80,14 +86,6 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
         warn(
           `${path}.sudo`,
           "developer sudo has no place in the developer model — grant it through the operator account, or re-add it deliberately after migrating",
-        ),
-      );
-    }
-    if (Array.isArray(profile.servers) && profile.servers.length) {
-      issues.push(
-        warn(
-          `${path}.servers`,
-          "always-on agent services are now declared per agent profile — redeclare them after migrating",
         ),
       );
     }
@@ -110,8 +108,6 @@ export function migrateLegacy(legacy: Record<string, unknown>): { spec: DevboxSp
     };
     if (Object.keys(bridge).length) dev.file_bridge = bridge;
 
-    const resources = resourcesFrom(legacy.rc_limits);
-    if (resources) dev.resources = resources;
 
     const identity = gitIdentityFrom(profile);
     if (identity) {
@@ -189,19 +185,6 @@ function agentProfilesFrom(
   return out;
 }
 
-function resourcesFrom(raw: unknown): ResourceSpec | null {
-  if (!isRecord(raw)) return null;
-  const out: ResourceSpec = {};
-  for (const key of ["memory_high", "memory_max", "memory_swap_max"] as const) {
-    const v = str(raw[key]);
-    if (v) out[key] = v;
-  }
-  for (const key of ["cpu_weight", "io_weight"] as const) {
-    if (typeof raw[key] === "number") out[key] = raw[key] as number;
-  }
-  return Object.keys(out).length ? out : null;
-}
-
 function memoryInstanceFrom(legacy: Record<string, unknown>): MemoryInstance {
   const instance: MemoryInstance = {
     engine: "hindsight",
@@ -214,6 +197,68 @@ function memoryInstanceFrom(legacy: Record<string, unknown>): MemoryInstance {
   return instance;
 }
 
+/**
+ * Legacy rc_* variables → the canonical remote_control block. Empty-string knobs meant
+ * "no limit for this one" in the legacy file, so they are dropped rather than carried
+ * over as "" — the canonical model says nothing at all when there is no limit.
+ */
+function remoteControlFrom(legacy: Record<string, unknown>): RemoteControlSpec | null {
+  const block: RemoteControlSpec = {};
+
+  const limits = pruneEmpty(legacy.rc_limits);
+  if (limits) block.resources = limits as RcResourceSpec;
+  const buildEnv = pruneEmpty(legacy.rc_build_env);
+  if (buildEnv) block.build_env = buildEnv as Record<string, string>;
+
+  const autorestart = dropUndefined({
+    enabled: bool(legacy.rc_autorestart),
+    restart_sec: num(legacy.rc_restart_sec),
+    burst: num(legacy.rc_start_limit_burst),
+    interval: num(legacy.rc_start_limit_interval),
+  });
+  if (autorestart) block.autorestart = autorestart;
+
+  const resume = dropUndefined({
+    on_boot: bool(legacy.rc_resume_on_boot),
+    lookback_h: num(legacy.rc_resume_lookback_h),
+    max_concurrent: num(legacy.rc_resume_max_concurrent),
+    settle_sec: num(legacy.rc_resume_settle_sec),
+    min_free_mb: num(legacy.rc_resume_min_free_mb),
+    max_attempts: num(legacy.rc_resume_max_attempts),
+    timeout_sec: num(legacy.rc_resume_timeout_sec),
+    skip_workflow_warning: bool(legacy.rc_resume_skip_workflow_warning),
+  });
+  if (resume) block.resume = resume;
+
+  return Object.keys(block).length ? block : null;
+}
+
+const bool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+
+/** The subset of an object with a value, or null when that subset is empty. */
+function dropUndefined<T extends Record<string, unknown>>(o: T): T | null {
+  const out = Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+  return Object.keys(out).length ? out : null;
+}
+
+const pruneEmpty = (raw: unknown): Record<string, unknown> | null =>
+  isRecord(raw) ? dropUndefined(Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== ""))) : null;
+
+/** The server entry for a project, or `false` when the legacy box ran no unit for it. */
+function projectRemoteControl(servers: unknown, projectName: string): ProjectRemoteControlSpec | false {
+  const list = Array.isArray(servers) ? servers.filter(isRecord) : [];
+  const found = list.find((s) => s.project === projectName);
+  if (!found) return false;
+  return (
+    dropUndefined({
+      name: str(found.name),
+      spawn: found.spawn as RcSpawn | undefined,
+      capacity: num(found.capacity),
+    }) ?? {}
+  );
+}
+
 function projectsFrom(profile: Record<string, unknown>): ProjectSpec[] {
   const raw = Array.isArray(profile.projects) ? profile.projects : [];
   const out: ProjectSpec[] = [];
@@ -222,7 +267,7 @@ function projectsFrom(profile: Record<string, unknown>): ProjectSpec[] {
     const name = str(entry.name);
     const repo = str(entry.repo);
     if (!name || !repo) continue;
-    const project: ProjectSpec = { name, repo };
+    const project: ProjectSpec = { name, repo, remote_control: projectRemoteControl(profile.servers, name) };
     const branch = str(entry.branch);
     if (branch) project.branch = branch;
     if (typeof entry.install === "boolean") project.install = entry.install;

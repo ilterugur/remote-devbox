@@ -48,59 +48,48 @@
     group: root
     mode: "0755"
 
-# ── Flatten (profile, project) × the profile's agents into a single rc_matrix so
-#    unit generation, enable/start, and migration all iterate the same list.
-#    Ansible can't nest subelements × a per-item list inline, so the include appends
-#    one rc_matrix row per agent. Rows carry the whole profile/server dicts (type
-#    preserved via the single-expression `item: [profile, server]` pass-through).
-- name: Build the (profile, project, agent) matrix
-  ansible.builtin.include_tasks: _matrix.yml
-  loop: "{{ profiles | subelements('servers', skip_missing=True) }}"
-  loop_control:
-    label: "{{ item.0.user }}-{{ item.1.project }}"
+# The unit templates place each service in its developer's slice, which they address
+# by uid — the box's own fact, not something devbox.yml could state.
+- name: Look up developer uids
+  ansible.builtin.getent:
+    database: passwd
 
-- name: Generate a systemd unit per (profile, project, agent)
+- name: Generate a systemd unit per Remote Control server
   ansible.builtin.template:
     src: agent-rc.service.j2
     dest: "/etc/systemd/system/agent-rc-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ rc_matrix | default([]) }}"
+  loop: "{{ devbox_rc_units }}"
   loop_control:
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
-  vars:
-    agent: "{{ row.agent }}"
-    item: ["{{ row.profile }}", "{{ row.server }}"]
   notify: Reload systemd
 
-- name: Generate a boot/recovery resume companion unit per (profile, project, agent)
+- name: Generate a boot/recovery resume companion unit per Remote Control server
   ansible.builtin.template:
     src: agent-rc-resume.service.j2
     dest: "/etc/systemd/system/agent-rc-resume-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ rc_matrix | default([]) }}"
+  loop: "{{ devbox_rc_units }}"
   loop_control:
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
-  vars:
-    agent: "{{ row.agent }}"
-    item: ["{{ row.profile }}", "{{ row.server }}"]
-  when: rc_resume_on_boot | default(true)
+  when: devbox_remote_control.resume.on_boot
   notify: Reload systemd
 
 - name: Remove resume companion units when boot-resume is disabled
   ansible.builtin.file:
     path: "/etc/systemd/system/agent-rc-resume-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     state: absent
-  loop: "{{ rc_matrix | default([]) }}"
+  loop: "{{ devbox_rc_units }}"
   loop_control:
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
-  when: not (rc_resume_on_boot | default(true))
+  when: not devbox_remote_control.resume.on_boot
   notify: Reload systemd
 
 # ── Legacy migration: retire the old single-agent claude-rc-* units/scripts/dir.
@@ -145,51 +134,61 @@
 - name: Load new units + drop removed ones before enabling
   ansible.builtin.meta: flush_handlers
 
+# A `systemctl set-property` drop-in outranks the unit file, so an ad-hoc limit set
+# by hand during an incident would silently survive every later run. The unit file is
+# the only source of truth for these knobs.
+- name: Drop ad-hoc set-property overrides on Remote Control units
+  ansible.builtin.file:
+    path: "/etc/systemd/system.control/agent-rc-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service.d"
+    state: absent
+  loop: "{{ devbox_rc_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
+  notify: Reload systemd
+
 - name: Enable and start each Remote Control service
   ansible.builtin.systemd_service:
     name: "agent-rc-{{ row.agent }}-{{ row.user }}-{{ row.project }}.service"
     enabled: true
     state: started
     daemon_reload: true
-  loop: "{{ rc_matrix | default([]) }}"
+  loop: "{{ devbox_rc_units }}"
   loop_control:
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
-  # Services self-heal: each polls until its profile is logged in
+  # Services self-heal: each polls until its developer is logged in
   # (run `sudo remote-devbox-login`), then comes online automatically.
 
-# ── Persist per-profile workflow-usage consent so auto-resumed workflows continue
+# ── Persist per-developer workflow-usage consent so auto-resumed workflows continue
 #    without a confirmation prompt (only suppresses the token-usage warning; does
-#    NOT bypass edit/bash permissions). Claude-specific: skipped for profiles that
-#    do not run claude, and before first login (no ~/.claude.json).
-- name: Check for each profile's ~/.claude.json
+#    NOT bypass edit/bash permissions). Claude-specific, so it follows the units that
+#    actually run claude, and does nothing before first login (no ~/.claude.json).
+- name: Check for each developer's ~/.claude.json
   ansible.builtin.stat:
-    path: "/home/{{ item.user }}/.claude.json"
-  loop: "{{ profiles }}"
+    path: "/home/{{ item }}/.claude.json"
+  loop: "{{ devbox_rc_units | selectattr('agent', 'equalto', 'claude') | map(attribute='user') | unique | list }}"
   loop_control:
-    label: "{{ item.user }}"
+    label: "{{ item }}"
   register: claude_json_stat
-  when:
-    - rc_resume_skip_workflow_warning | default(rc_resume_on_boot | default(true)) | bool
-    - "'claude' in (item.agents | default(['claude']))"
+  when: devbox_remote_control.resume.skip_workflow_warning
 
-- name: Set skipWorkflowUsageWarning in each profile's ~/.claude.json
+- name: Set skipWorkflowUsageWarning in each developer's ~/.claude.json
   ansible.builtin.command:
     cmd: >-
       python3 -c "import json,sys;p=sys.argv[1];d=json.load(open(p));
       changed=d.get('skipWorkflowUsageWarning')!=True;d['skipWorkflowUsageWarning']=True;
       open(p,'w').write(json.dumps(d,indent=2)) if changed else None;
       print('CHANGED' if changed else 'OK')"
-      "/home/{{ item.item.user }}/.claude.json"
+      "/home/{{ item.item }}/.claude.json"
   become: true
-  become_user: "{{ item.item.user }}"
+  become_user: "{{ item.item }}"
   loop: "{{ claude_json_stat.results | default([]) }}"
   loop_control:
-    label: "{{ item.item.user }}"
+    label: "{{ item.item }}"
   when:
-    - rc_resume_skip_workflow_warning | default(rc_resume_on_boot | default(true)) | bool
+    - devbox_remote_control.resume.skip_workflow_warning
     - item.stat is defined and item.stat.exists | default(false)
-    - "'claude' in (item.item.agents | default(['claude']))"
   register: skip_warning_set
   # In a loop, changed_when is evaluated per item against that item's own result,
   # so reference the bare `stdout` (skip_warning_set.stdout is the aggregate and is

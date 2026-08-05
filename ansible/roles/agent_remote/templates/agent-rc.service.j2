@@ -1,20 +1,21 @@
-{# Managed by Ansible (remote-devbox). One unit per (profile, project). #}
-{# Merge global rc_limits / rc_build_env defaults with per-server overrides. #}
-{% set L = (rc_limits | default({})) | combine(item.1.limits | default({})) %}
-{% set BENV = (rc_build_env | default({})) | combine(item.1.build_env | default({})) %}
-{% set ID = agent ~ '-' ~ item.0.user ~ '-' ~ item.1.project %}
+{# Managed by Ansible (remote-devbox). One unit per (developer, project).
+   Every value comes from devbox_rc_units / devbox_remote_control — no default() here:
+   a missing key is a generator bug, not a policy decision to make in a template. #}
+{% set ID = row.agent ~ '-' ~ row.user ~ '-' ~ row.project %}
+{% set L = row.resources %}
+{% set RC = devbox_remote_control %}
 [Unit]
-Description={{ agent }} remote-control ({{ ID }})
+Description={{ row.agent }} remote-control ({{ ID }})
 After=network-online.target
 Wants=network-online.target
-{% if rc_autorestart | default(true) %}
-{# Cap restart churn: at most rc_start_limit_burst restarts per interval, else give up. #}
-StartLimitIntervalSec={{ rc_start_limit_interval | default(600) }}
-StartLimitBurst={{ rc_start_limit_burst | default(10) }}
+{% if RC.autorestart.enabled %}
+{# Cap restart churn: at most burst restarts per interval, else give up. #}
+StartLimitIntervalSec={{ RC.autorestart.interval }}
+StartLimitBurst={{ RC.autorestart.burst }}
 {% endif %}
 
 [Service]
-{% if rc_autorestart | default(true) %}
+{% if RC.autorestart.enabled %}
 {# Self-heal: a oneshot+RemainAfterExit unit goes to "failed (oom-kill)" and STAYS
    down when the cgroup is OOM-killed. Instead we run a blocking monitor as the main
    process: ExecStartPre spawns the detached tmux server, ExecStart blocks while that
@@ -24,33 +25,37 @@ Type=simple
 ExecStartPre=/usr/local/bin/agent-rc-wrapper {{ ID }}
 ExecStart=/usr/local/bin/agent-rc-monitor {{ ID }}
 Restart=on-failure
-RestartSec={{ rc_restart_sec | default(10) }}
+RestartSec={{ RC.autorestart.restart_sec }}
 {% else %}
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/agent-rc-wrapper {{ ID }}
 {% endif %}
-User={{ item.0.user }}
-Environment=HOME=/home/{{ item.0.user }}
-Environment=PATH=/home/{{ item.0.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+User={{ row.user }}
+{# The developer's whole footprint — shells, editor server, builds and these RC
+   sessions — shares one slice, so the ceiling in devbox.yml means what it says.
+   Without this the unit lands in system.slice, where no developer limit reaches it. #}
+Slice=user-{{ ansible_facts.getent_passwd[row.user][1] }}.slice
+Environment=HOME=/home/{{ row.user }}
+Environment=PATH=/home/{{ row.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 {# Do NOT set CLAUDE_CONFIG_DIR: it would make claude look for config at
    ~/.claude/.claude.json, but login + interactive sessions use Claude's default
    (~/.claude.json in HOME). The run script defaults its credential-check path to
    ~/.claude on its own. #}
-Environment=CLAUDE_RC_PROJECT_DIR=/home/{{ item.0.user }}/projects/{{ item.1.project }}
+Environment=CLAUDE_RC_PROJECT_DIR={{ row.project_dir }}
 {# Quote values: names like "Example Monorepo" contain spaces — unquoted, systemd
    parses everything after the space as a second, invalid env assignment. #}
-Environment="CLAUDE_RC_NAME={{ item.1.name | default(item.0.user ~ ' · ' ~ item.1.project) }}"
-Environment=CLAUDE_RC_SPAWN={{ item.1.spawn | default('worktree') }}
-Environment=CLAUDE_RC_CAPACITY={{ item.1.capacity | default(4) }}
-Environment=CLAUDE_RC_AGENT={{ agent }}
+Environment="CLAUDE_RC_NAME={{ row.name }}"
+Environment=CLAUDE_RC_SPAWN={{ row.spawn }}
+Environment=CLAUDE_RC_CAPACITY={{ row.capacity }}
+Environment=CLAUDE_RC_AGENT={{ row.agent }}
 {# Hindsight (when enabled): load the profile's HINDSIGHT_USER_ID + HINDSIGHT_API_LLM_* so the memory hooks/daemon work in RC sessions too. The leading '-' makes it optional, so the unit is unaffected when Hindsight is disabled and the file is absent. uvx resolves via `mise activate --shims` in agent-rc-run. #}
-EnvironmentFile=-/home/{{ item.0.user }}/.hindsight/llm.env
-{% for k, v in BENV.items() %}
+EnvironmentFile=-/home/{{ row.user }}/.hindsight/llm.env
+{% for k, v in row.build_env.items() %}
 Environment="{{ k }}={{ v }}"
 {% endfor %}
 ExecStop=/usr/bin/tmux -L agent-rc-{{ ID }} kill-server
-{% if rc_resume_on_boot | default(true) %}
+{% if RC.resume.on_boot %}
 {# Trigger the boot/recovery orchestrator on EVERY start — including Restart=
    auto-restarts after an OOM, which do NOT re-pull Wants= dependencies (so a plain
    Wants= would only fire on a clean `systemctl start`, not on self-heal). Prefixes:
@@ -60,22 +65,26 @@ ExecStop=/usr/bin/tmux -L agent-rc-{{ ID }} kill-server
    active, and the companion is idempotent (it skips sessions already running). #}
 ExecStartPost=-+/usr/bin/systemctl start --no-block agent-rc-resume-{{ ID }}.service
 {% endif %}
-{# ── Resource control (systemd cgroup) — keep one build from taking the box ── #}
-{% if L.memory_high | default('') %}MemoryHigh={{ L.memory_high }}
+{# ── Resource control (systemd cgroup) ──────────────────────────────────────────
+   The slice above is the shared ceiling. These are the per-unit knobs: the weights
+   and the nice value always apply, while a memory ceiling appears only when this
+   project asked for one. A ceiling inherited from a box that has since grown is the
+   failure that omission exists to prevent. #}
+{% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
 {% endif %}
-{%- if L.memory_max | default('') %}MemoryMax={{ L.memory_max }}
+{%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
 {% endif %}
-{%- if L.memory_swap_max | default('') %}MemorySwapMax={{ L.memory_swap_max }}
+{%- if 'memory_swap_max' in L %}MemorySwapMax={{ L.memory_swap_max }}
 {% endif %}
-{%- if L.cpu_weight | default('') %}CPUWeight={{ L.cpu_weight }}
+{%- if 'cpu_weight' in L %}CPUWeight={{ L.cpu_weight }}
 {% endif %}
-{%- if L.cpu_quota | default('') %}CPUQuota={{ L.cpu_quota }}
+{%- if 'cpu_quota' in L %}CPUQuota={{ L.cpu_quota }}
 {% endif %}
-{%- if L.io_weight | default('') %}IOWeight={{ L.io_weight }}
+{%- if 'io_weight' in L %}IOWeight={{ L.io_weight }}
 {% endif %}
-{%- if L.nice is defined and L.nice != '' %}Nice={{ L.nice }}
+{%- if 'nice' in L %}Nice={{ L.nice }}
 {% endif %}
-{%- if L.oom_score_adjust is defined and L.oom_score_adjust != '' %}OOMScoreAdjust={{ L.oom_score_adjust }}
+{%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
 {% endif %}
 [Install]
 WantedBy=multi-user.target

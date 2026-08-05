@@ -212,6 +212,60 @@ export interface ResourceSpec {
   tasks_max?: number;
 }
 
+export type RcSpawn = "worktree" | "same-dir" | "session";
+
+/**
+ * Resource knobs for one Remote Control unit. Extends the slice knobs with the three
+ * systemd properties that only mean something on a service: build niceness, the OOM
+ * preference, and an absolute CPU cap.
+ */
+export interface RcResourceSpec extends ResourceSpec {
+  nice?: number;
+  oom_score_adjust?: number;
+  cpu_quota?: string;
+}
+
+export interface RcAutorestartSpec {
+  enabled?: boolean;
+  restart_sec?: number;
+  burst?: number;
+  interval?: number;
+}
+
+export interface RcResumeSpec {
+  on_boot?: boolean;
+  lookback_h?: number;
+  max_concurrent?: number;
+  settle_sec?: number;
+  min_free_mb?: number;
+  max_attempts?: number;
+  timeout_sec?: number;
+  /** Defaults to `on_boot`: a resumed session that stops for a usage prompt is not resumed. */
+  skip_workflow_warning?: boolean;
+}
+
+/** Box-wide Remote Control defaults. Every project inherits these unless it says otherwise. */
+export interface RemoteControlSpec {
+  enabled?: boolean;
+  spawn?: RcSpawn;
+  capacity?: number;
+  resources?: RcResourceSpec;
+  build_env?: Record<string, string>;
+  autorestart?: RcAutorestartSpec;
+  resume?: RcResumeSpec;
+}
+
+/** One project's override. `resources` and `build_env` merge over the box defaults. */
+export interface ProjectRemoteControlSpec {
+  enabled?: boolean;
+  /** Title shown in the phone app. Defaults to "<user> · <project>". */
+  name?: string;
+  spawn?: RcSpawn;
+  capacity?: number;
+  resources?: RcResourceSpec;
+  build_env?: Record<string, string>;
+}
+
 export interface ProjectSpec {
   name: string;
   repo: string;
@@ -223,6 +277,8 @@ export interface ProjectSpec {
   ports?: number[];
   install?: boolean;
   update?: boolean;
+  /** `false` turns Remote Control off for this project. */
+  remote_control?: ProjectRemoteControlSpec | false;
 }
 
 export interface DeveloperSpec {
@@ -252,9 +308,21 @@ export interface DevboxSpec {
   operator: OperatorSpec;
   network: NetworkSpec;
   container: ContainerSpec;
+  remote_control?: RemoteControlSpec;
   shared_services?: SharedServicesSpec;
   clients?: ClientsSpec;
   developers: DeveloperSpec[];
+}
+
+/** One Remote Control unit, with every default already applied. */
+export interface ResolvedRcUnit {
+  /** The agent binary the unit runs — the resolved agent profile's provider. */
+  agent: string;
+  name: string;
+  spawn: RcSpawn;
+  capacity: number;
+  resources: RcResourceSpec;
+  build_env: Record<string, string>;
 }
 
 export interface ResolvedProject {
@@ -272,6 +340,8 @@ export interface ResolvedProject {
   ports: number[];
   install: boolean;
   update: boolean;
+  /** null = no Remote Control unit for this project. */
+  remote_control: ResolvedRcUnit | null;
 }
 
 export interface ResolvedDeveloper extends Omit<DeveloperSpec, "projects"> {

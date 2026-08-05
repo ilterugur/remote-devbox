@@ -63,6 +63,12 @@
     - { role: agent_profiles, tags: [agents] }
     - { role: projects, tags: [projects] }
 
+    # Always-on Remote Control servers. After projects: a session cannot enter a
+    # working copy that has not been cloned yet.
+    - role: agent_remote
+      tags: [agents, rc]
+      when: devbox_remote_control.enabled | bool
+
     # Rootless engines, per developer. Installed after projects so the engine map can
     # name every project it resolves.
     - { role: containers, tags: [containers] }
