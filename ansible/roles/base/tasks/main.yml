@@ -25,6 +25,54 @@
       - acl
     state: present
 
+# ── GitHub CLI ───────────────────────────────────────────────────────────────
+# `gh` is part of the day-to-day loop here (PRs, reviews, `gh run watch`), and the
+# agent reaches for it unprompted — so host.github_cli defaults to TRUE and this is
+# effectively a base package. Set it false on a box that talks to no GitHub at all.
+#
+# From GitHub's own apt repo rather than Ubuntu's: universe ships 2.46 (early 2024),
+# old enough that newer subcommands and flags an agent assumes are simply missing.
+#
+# Turning the flag off later only stops managing it; like mosh and et, nothing here
+# uninstalls a package a developer may already be depending on.
+- name: Install the GitHub CLI from GitHub's own apt repo
+  when: devbox_host.github_cli | bool
+  block:
+    - name: Ensure the apt keyrings dir exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    # GitHub publishes this key as a binary keyring, not an armoured .asc — so it is
+    # fetched to a path and referenced, rather than inlined like the et keyring.
+    - name: Add the GitHub CLI apt signing key
+      ansible.builtin.get_url:
+        url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+        dest: /etc/apt/keyrings/githubcli-archive-keyring.gpg
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Add the GitHub CLI apt repository
+      ansible.builtin.deb822_repository:
+        name: github-cli
+        types: deb
+        uris: https://cli.github.com/packages
+        # The repo is distribution-agnostic: one "stable" suite for every Debian/Ubuntu
+        # release, so there is no codename to pin or to lag behind a new Ubuntu.
+        suites: stable
+        components: main
+        architectures: "{{ devbox_platform.architecture }}"
+        signed_by: /etc/apt/keyrings/githubcli-archive-keyring.gpg
+        state: present
+
+    - name: Install the GitHub CLI
+      ansible.builtin.apt:
+        name: gh
+        state: present
+        update_cache: true
+
 # The operator account lives in its own role — see roles/operator.
 
 # ── Swapfile (idempotent, resize-aware) ──────────────────────────────────────

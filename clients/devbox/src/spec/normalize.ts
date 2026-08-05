@@ -56,6 +56,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       eternal_terminal: resolved.host?.eternal_terminal ?? false,
       harden_ssh: resolved.host?.harden_ssh ?? true,
       hide_pids: resolved.host?.hide_pids ?? true,
+      github_cli: resolved.host?.github_cli ?? true,
       umask: resolved.host?.umask ?? "077",
       swappiness: resolved.host?.swappiness ?? null,
     },

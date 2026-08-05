@@ -33,6 +33,7 @@ host:
   mosh: true              # roaming-resilient terminal (UDP, scoped to the tailnet)
   eternal_terminal: false # TCP alternative to mosh, without its predictive echo
   harden_ssh: true        # false adopts an existing box without touching sshd
+  github_cli: true        # `gh` from GitHub's own apt repo (Ubuntu's is ~2 years behind)
   hide_pids: true         # /proc hidepid: developers cannot see each other’s command lines
   umask: "077"
   # Left at the kernel default (60) when unset. Lower it on a box that mostly compiles:
