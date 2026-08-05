@@ -12,7 +12,8 @@ lazy_mounts:
 lazy_mount_on_connect: true
 ```
 
-Re-run `gen-editor-config.py --cli` to propagate them, then:
+Re-run `devbox apply` (or fetch a fresh client config from the box) to propagate them,
+then:
 
 ```
 devbox mount up        # serve + mount the configured paths
@@ -40,7 +41,7 @@ sync_disk: true
 sync_engine: mutagen     # default
 ```
 
-Re-run `gen-editor-config.py --cli`, install Mutagen on the client
+Re-run `devbox apply`, install Mutagen on the client
 (`brew install mutagen-io/mutagen/mutagen`), then:
 
 ```

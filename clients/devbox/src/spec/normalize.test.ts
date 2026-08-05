@@ -55,6 +55,18 @@ test("a git identity is emitted with an explicit github_user", () => {
   expect(dev0().git_identities).toEqual({ work: { name: "N", email: "e@example.com", github_user: null } });
 });
 
+test("cli_targets defaults to the three usual laptop platforms", () => {
+  expect(normalize(resolved).devbox_clients).toEqual({
+    cli_targets: ["darwin-arm64", "darwin-x64", "linux-x64"],
+  });
+});
+
+test("an empty cli_targets survives normalization as empty, not as the default", () => {
+  expect(normalize({ ...resolved, clients: { cli_targets: [] } }).devbox_clients).toEqual({
+    cli_targets: [],
+  });
+});
+
 test("shared_services defaults to disabled", () => {
   expect(normalize(resolved).devbox_shared_services).toEqual({ enabled: false, engine: "system-docker" });
 });

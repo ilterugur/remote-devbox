@@ -10,16 +10,25 @@ and look at it directly. There's nothing to "sync" because there's only one copy
 what you open is the box's current state. (If you genuinely need a local copy, see
 [C] below.)
 
-## Register the box in your editors (one command)
+## Register the box in your editors
+
+Set the machine up from the box once — this writes the `~/.ssh/config` block
+(`Host devbox-<user>`) that VS Code / Cursor Remote-SSH, plain `ssh`, **and Zed** all
+use, along with the `devbox` CLI itself:
 
 ```bash
-python3 scripts/gen-editor-config.py    # run on your client
+ssh <you>@<box> 'devbox client-config --installer' > devbox-setup.sh
+less devbox-setup.sh && sh devbox-setup.sh
 ```
 
-Per profile it writes a `~/.ssh/config` block (`Host devbox-<user>`) — which VS
-Code / Cursor Remote-SSH, plain `ssh`, **and Zed** all use — plus Zed
-`ssh_connections` in `~/.config/zed/settings.json` that pre-list each profile's
-`~/projects/<name>`. Then:
+Then add Zed's own remote-project list, which is client-side and so is not the box's to
+write:
+
+```bash
+devbox editors    # Zed ssh_connections pre-listing each profile's ~/projects/<name>
+```
+
+Then:
 
 - **VS Code / Cursor:** Remote-SSH → *Connect to Host* → `devbox-work`.
 - **Zed:** command palette → *projects: open remote* → pick the profile + project.

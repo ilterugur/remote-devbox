@@ -62,6 +62,22 @@ export interface SharedServicesSpec {
   engine: "system-docker";
 }
 
+/** bun's compile targets, minus the "bun-" prefix. */
+export type CliTarget = "darwin-arm64" | "darwin-x64" | "linux-x64" | "linux-arm64";
+
+export const CLI_TARGETS: CliTarget[] = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"];
+
+export const DEFAULT_CLI_TARGETS: CliTarget[] = ["darwin-arm64", "darwin-x64", "linux-x64"];
+
+/**
+ * What the box hands a laptop. The CLI is published as a compiled binary per platform so
+ * a developer needs neither this repo nor a Bun install — see roles/box_cli.
+ */
+export interface ClientsSpec {
+  /** Defaults to the three platforms a developer laptop is usually one of. */
+  cli_targets?: CliTarget[];
+}
+
 export interface GitIdentity {
   name: string;
   email: string;
@@ -216,6 +232,7 @@ export interface DevboxSpec {
   network: NetworkSpec;
   container: ContainerSpec;
   shared_services?: SharedServicesSpec;
+  clients?: ClientsSpec;
   developers: DeveloperSpec[];
 }
 

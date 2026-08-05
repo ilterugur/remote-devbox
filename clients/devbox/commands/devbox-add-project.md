@@ -27,7 +27,7 @@ Do this:
 4. On yes, apply the edit (still does not touch the box):
    `$BIN add --write $ARGUMENTS`
    - If it errors that `repoPath` is unset, tell the user to re-run
-     `gen-editor-config.py --cli` from their claude-devbox checkout so the CLI knows
+     `devbox apply` from their checkout so the CLI knows
      where `all.yml` lives, then retry. If it errors that the project name already
      exists, stop and report — nothing to do.
 5. **Check GitHub access before running the playbook.** Derive `owner/repo` from the

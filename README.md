@@ -178,7 +178,7 @@ switch to that profile's account → your server → new session.
   Auto port-forwarding for previews. See [docs/realtime-sync.md](docs/realtime-sync.md).
 - **Phone — Claude mobile app:** Code tab → switch to the profile's account → its
   server → new session, runs on the box. See [docs/mobile.md](docs/mobile.md).
-- **Flaky connection (mobile, switching networks) — `devbox`:** `gen-editor-config.py`
+- **Flaky connection (mobile, switching networks) — `devbox`:** the box's installer
   writes a one-word command — `devbox` (default profile) or `devbox <profile> [session]` —
   that connects over mosh into a persistent tmux (ssh fallback), then run `claude`
   inside. Survives network drops / IP changes and resumes on reconnect — the resilient

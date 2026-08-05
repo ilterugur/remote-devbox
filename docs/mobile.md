@@ -68,8 +68,8 @@ alive on the box so a reconnect lands exactly where you left off.
 Installed by default (`mosh_enabled`); the box opens mosh's UDP range **only on the
 tailscale0 interface**, so connect over Tailscale:
 
-The easiest entry point is the `devbox` command that `gen-editor-config.py` writes
-into your shell rc (one command, profile as an argument):
+The easiest entry point is the `devbox` command the box's installer puts on your
+machine (one command, profile as an argument):
 
 ```bash
 # phone: Blink or Termius (both speak mosh) + the Tailscale app, OR client terminal
@@ -79,10 +79,10 @@ devbox <profile>       # a specific profile; `devbox <profile> <session>` for a 
 claude            # drop signal / close the lid → reconnect resumes the same session
 ```
 
-`devbox` is just `mosh <prefix>-<profile> -- tmux new -A -s <session>`; run
-`gen-editor-config.py --host <tailscale-100.x-IP>` (the **100.x IP**, not the MagicDNS
-name — mosh often can't resolve MagicDNS) so the alias resolves over Tailscale (mosh
-UDP is tailscale-only). From the client you can also run
+`devbox` is just `mosh <prefix>-<profile> -- tmux new -A -s <session>`. The generated ssh
+block resolves the alias over Tailscale whenever the tailnet is up, using the **100.x
+IP** rather than the MagicDNS name (mosh often cannot resolve MagicDNS) — which is what
+mosh needs, since its UDP range is open only on tailscale0. From the client you can also run
 `scripts/connect.sh mosh <user>` (needs `brew install mosh` locally).
 
 > **Why not Claude Desktop's integrated SSH for this?** Its remote‑project SSH mode

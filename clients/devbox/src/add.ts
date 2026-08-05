@@ -251,7 +251,7 @@ export function runAdd(cfg: Config, opts: AddOpts) {
   if (preview) {
     const where =
       target?.path ??
-      "devbox.yml  (repoPath not set — `--write` will fail until you re-run gen-editor-config.py --cli)";
+      "devbox.yml  (repoPath not set — `--write` needs it; add it to ~/.config/remote-devbox/config.json)";
     const serverBlock = wantServer
       ? `\nand an always-on Remote Control server under its servers:\n\n${srvSnippet}\n`
       : target?.canonical
@@ -268,7 +268,7 @@ export function runAdd(cfg: Config, opts: AddOpts) {
 
   // --write: edit the config in place. Still does NOT run the playbook.
   if (!cfg.repoPath || !target) {
-    die("config has no repoPath — re-run `gen-editor-config.py --cli` to record the repo location");
+    die("config has no repoPath — add it to ~/.config/remote-devbox/config.json, pointing at your checkout");
   }
   const ymlPath = target.path;
   if (!existsSync(ymlPath)) die(`no devbox.yml or group_vars/all.yml under ${cfg.repoPath}`);

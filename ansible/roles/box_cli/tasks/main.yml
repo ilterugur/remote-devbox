@@ -22,6 +22,9 @@
     group: root
     mode: "0755"
 
+- name: Publish the client CLI binaries
+  ansible.builtin.import_tasks: client_binaries.yml
+
 # Handed out by `devbox client-config`, never run on the box: it is the client that has
 # to decide, per connection, whether the tailnet is a usable route to here.
 - name: Stage the client-side tailnet probe

@@ -14,9 +14,9 @@ import { ensureClientTransport } from "./install";
 import { resolveEntry, type ResolvedEntry } from "./app-configs/registry";
 
 /**
- * Where this client's config lives. `remote-devbox` is canonical — it is what
- * `gen-editor-config.py --cli` writes and what the project is called. `claude-devbox` is
- * the pre-rename directory, still READ so an existing setup keeps working.
+ * Where this client's config lives. `remote-devbox` is canonical — it is what the
+ * box's installer writes and what the project is called. `claude-devbox` is the
+ * pre-rename directory, still READ so an existing setup keeps working.
  *
  * One resolution for every file we keep here (config, active profile, live bridges), so
  * a client can never end up with its config in one directory and its state in the other —
@@ -49,10 +49,11 @@ export type Profile = {
   lazyMountOnConnect?: boolean;
   appConfigs?: ResolvedEntry[];
 };
-// `host` is written by gen-editor-config.py for reference only — the CLI resolves
-// the box via the ssh alias `${prefix}-${profile}` (HostName lives in ~/.ssh/config).
-// `repoPath` is the claude-devbox checkout this config was generated from (written by
-// gen-editor-config.py --cli) — `devbox add --write` edits its group_vars/all.yml.
+// `host` is for reference only — the CLI resolves the box via the ssh alias
+// `${prefix}-${profile}` (HostName lives in ~/.ssh/config).
+// `repoPath` is a checkout of this repo, and only an operator has one: it is what makes
+// `devbox add --write` and the live profile read below possible. The box cannot know it,
+// so the installer leaves it out and an operator sets it by hand.
 export type Config = { prefix: string; default: string; locale: string; launch: string; host?: string; repoPath?: string; profiles: Profile[] };
 
 export function die(msg: string): never {
@@ -64,17 +65,16 @@ export function die(msg: string): never {
 export function loadConfig(): Config {
   const path = configPath();
   if (!existsSync(path)) {
-    die(`no config at ${path} — run gen-editor-config.py --cli, or fetch one from the box ` +
-        `(\`devbox client-config\` there prints what a client needs)`);
+    die(`no config at ${path} — set this machine up from the box: ` +
+        `ssh <you>@<box> 'devbox client-config --installer' > devbox-setup.sh`);
   }
   try {
     const c = JSON.parse(readFileSync(path, "utf8")) as Config;
     if (!c.profiles?.length) die("config has no profiles");
-    // The `profiles` in config.json are a cache written by gen-editor-config.py. When
-    // we know the claude-devbox checkout (repoPath), read profiles/projects LIVE from
-    // its group_vars/all.yml instead — so `devbox add --write` (which edits all.yml)
-    // shows up immediately with no regen. Falls back to the cache if all.yml is gone
-    // (checkout moved/deleted) or unparseable.
+    // The `profiles` in config.json are a cache of what the box said. When this machine
+    // also has a checkout (repoPath), read developers/projects LIVE from its devbox.yml
+    // instead — so `devbox add --write` shows up immediately with no round trip. Falls
+    // back to the cache if the checkout is gone or unparseable.
     if (c.repoPath) {
       const live = profilesFromYaml(c.repoPath);
       if (live?.length) c.profiles = live;
@@ -133,9 +133,8 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
 }
 
 /**
- * Legacy layout: `<repoPath>/ansible/group_vars/all.yml`, `profiles:`. Mirrors the
- * mapping in gen-editor-config.py's write_cli_config so the live read and the fallback
- * cache behave identically.
+ * Legacy layout: `<repoPath>/ansible/group_vars/all.yml`, `profiles:`. Kept so a
+ * checkout that has not been migrated to devbox.yml still resolves.
  */
 function profilesFromLegacyYaml(repoPath: string): Profile[] | null {
   try {

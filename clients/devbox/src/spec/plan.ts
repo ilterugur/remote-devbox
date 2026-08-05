@@ -8,6 +8,7 @@
 import type { Issue } from "./issues";
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { resolveEntry } from "../app-configs/registry";
+import { DEFAULT_CLI_TARGETS } from "./types";
 import type { ClientFacts, ResolvedDeveloper, ResolvedSpec } from "./types";
 
 const LABEL_WIDTH = 12;
@@ -44,6 +45,9 @@ export function renderPlan(
       resolved.shared_services?.enabled ? `enabled (${resolved.shared_services.engine})` : "disabled",
     ),
   );
+
+  const targets = resolved.clients?.cli_targets ?? DEFAULT_CLI_TARGETS;
+  lines.push(row("client cli", targets.length ? `published for ${targets.join(", ")}` : "not published"));
 
   // Names only — a plan is something you paste into a chat or a ticket.
   lines.push(row("secrets", secretNames.length ? secretNames.join(", ") : "none loaded"));
