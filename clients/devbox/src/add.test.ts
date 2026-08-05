@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,19 +8,30 @@ import {
   detectProject,
   projectEntry,
   serverEntry,
+  setGitExec,
   targetConfig,
   titleize,
   toSshUrl,
 } from "./add";
 
-/** Make a throwaway git repo with an origin remote; optionally drop a package.json. */
+/**
+ * A directory that answers git's questions the way a checkout would, without being one.
+ * The directory is real because that half is the point — `install` is decided by whether
+ * a package.json sits at the repo root — but git itself is stubbed: spawning it here made
+ * the tests fail under parallel load for reasons that had nothing to do with add.ts.
+ */
 function makeRepo(withPackageJson: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "devbox-add-"));
-  spawnSync("git", ["init", "-q"], { cwd: dir });
-  spawnSync("git", ["remote", "add", "origin", "git@github.com:org/fixture.git"], { cwd: dir });
   if (withPackageJson) writeFileSync(join(dir, "package.json"), '{"name":"fixture"}\n');
   return dir;
 }
+
+const fakeGit = (dir: string) => (args: string[]): string | null => {
+  if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return dir;
+  if (args[0] === "remote") return "git@github.com:org/fixture.git";
+  if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "main";
+  return null;
+};
 
 describe("toSshUrl", () => {
   test("https → git@host:owner/repo.git", () => {
@@ -75,19 +85,34 @@ describe("projectEntry", () => {
 describe("detectProject install auto-detection", () => {
   const dirs: string[] = [];
   afterAll(() => {
+    setGitExec(null);
     for (const d of dirs) rmSync(d, { recursive: true, force: true });
   });
 
-  test("install: true when the repo has a root package.json", () => {
-    const dir = makeRepo(true);
+  const detectIn = (withPackageJson: boolean) => {
+    const dir = makeRepo(withPackageJson);
     dirs.push(dir);
-    expect(detectProject({ cwd: dir }).install).toBe(true);
+    setGitExec(fakeGit(dir));
+    return detectProject({ cwd: dir });
+  };
+
+  test("install: true when the repo has a root package.json", () => {
+    expect(detectIn(true).install).toBe(true);
   });
 
   test("install: false when the repo has no root package.json", () => {
-    const dir = makeRepo(false);
-    dirs.push(dir);
-    expect(detectProject({ cwd: dir }).install).toBe(false);
+    expect(detectIn(false).install).toBe(false);
+  });
+
+  // The rest of the detection, so the stub is exercised as a whole rather than only for
+  // the one field these tests were named after.
+  test("name, repo and branch come from the repo it was pointed at", () => {
+    const d = detectIn(true);
+    expect({ name: d.name.startsWith("devbox-add-"), repo: d.repo, branch: d.branch }).toEqual({
+      name: true,
+      repo: "git@github.com:org/fixture.git",
+      branch: "main",
+    });
   });
 });
 
