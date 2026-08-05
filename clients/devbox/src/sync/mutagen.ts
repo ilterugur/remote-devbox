@@ -72,10 +72,29 @@ export function buildCreateArgs(o: SyncUpOpts): string[] {
 export function buildStatusArgs(): string[] {
   // Fields verified against mutagen 0.18.1: each list element exposes .Name / .Status /
   // .Conflicts directly. The char between }} and {{ is a literal TAB (Go emits it verbatim).
+  //
+  // .Conflicts is promoted from the embedded SessionState, which is a nil pointer while a
+  // session is paused. Reaching through it aborts the whole run — Go prints the row and
+  // then fails with "indirection through nil pointer to embedded struct field
+  // SessionState", exiting non-zero — so one paused session would blank out every other
+  // session's status. Guarding on the embedded struct keeps the row and reports the only
+  // honest conflict count for a paused session: none are known.
   return [
     "sync", "list", "--label-selector=devbox=true",
-    "--template", '{{range .}}{{.Name}}\t{{.Status}}\t{{len .Conflicts}}{{"\\n"}}{{end}}',
+    "--template",
+    '{{range .}}{{.Name}}\t{{.Status}}\t{{if .SessionState}}{{len .Conflicts}}{{else}}0{{end}}{{"\\n"}}{{end}}',
   ];
+}
+
+/** Parse the tab-separated rows the status template emits. Pure — exported for tests. */
+export function parseStatusOutput(stdout: string): SyncStatus[] {
+  return stdout
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => {
+      const [name = "", state = "", conflicts = "0"] = l.split("\t");
+      return { name, state, conflicts: parseInt(conflicts, 10) || 0 };
+    });
 }
 
 const mutagen = (args: string[]) => spawnSync("mutagen", args, { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
@@ -110,13 +129,10 @@ export class MutagenEngine implements SyncEngine {
 
   async status(): Promise<SyncStatus[]> {
     const r = mutagen(buildStatusArgs());
-    if (r.status !== 0 || !r.stdout) return [];
-    return r.stdout
-      .split("\n")
-      .filter((l) => l.trim())
-      .map((l) => {
-        const [name = "", state = "", conflicts = "0"] = l.split("\t");
-        return { name, state, conflicts: parseInt(conflicts, 10) || 0 };
-      });
+    // Mutagen streams rows as it ranges, so a template failure on one session still leaves
+    // the earlier rows on stdout. Parse whatever arrived rather than reporting "no sessions"
+    // — an empty list reads as "sync is not running", which is a worse lie than a short one.
+    if (!r.stdout) return [];
+    return parseStatusOutput(r.stdout);
   }
 }
