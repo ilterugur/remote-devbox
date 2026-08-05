@@ -1,0 +1,3 @@
+---
+# Prefix for the ssh aliases handed to clients: <prefix>-<developer>, e.g. devbox-dev-a.
+devbox_client_prefix: devbox

@@ -3,6 +3,17 @@
 # reads the same generated data the roles consumed, so it can never disagree with them
 # about which engine, bank or slice applies.
 
+- name: Ensure the box data directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/remote-devbox
+    - /usr/local/share/remote-devbox
+
 - name: Install the box CLI
   ansible.builtin.template:
     src: devbox-cli.sh.j2
@@ -10,3 +21,35 @@
     owner: root
     group: root
     mode: "0755"
+
+# Handed out by `devbox client-config`, never run on the box: it is the client that has
+# to decide, per connection, whether the tailnet is a usable route to here.
+- name: Stage the client-side tailnet probe
+  ansible.builtin.copy:
+    src: devbox-tailnet-up
+    dest: /usr/local/share/remote-devbox/devbox-tailnet-up
+    owner: root
+    group: root
+    mode: "0644"
+
+# Everything `devbox client-config` needs to describe this box to a laptop, written once
+# here so the CLI looks it up instead of re-deriving addresses at runtime — the same rule
+# the engine map follows.
+- name: Publish the client connection facts
+  ansible.builtin.copy:
+    dest: /etc/remote-devbox/client.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ _devbox_client_facts | to_nice_json }}\n"
+  vars:
+    _devbox_client_facts:
+      prefix: "{{ devbox_client_prefix }}"
+      # What the operator connects to, so a box behind NAT advertises the address that
+      # actually works rather than a private one it happens to hold.
+      public_host: "{{ ansible_host | default(ansible_facts.default_ipv4.address) }}"
+      tailnet_host: "{{ ansible_facts.tailscale0.ipv4.address | default('') }}"
+      locale: "{{ devbox_host.locales[0] }}"
+      developers: >-
+        {{ dict(devbox_developers | map(attribute='user') | zip(
+             devbox_developers | map(attribute='projects'))) }}

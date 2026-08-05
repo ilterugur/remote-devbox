@@ -11,6 +11,7 @@
 #   devbox container doctor       is the rootless engine actually healthy?
 #   devbox compose up|down|...    engine-agnostic compose
 #   devbox doctor                 is this box still the box the config describes?
+#   devbox client-config          what your laptop needs to reach this box
 set -euo pipefail
 
 ENGINES=/etc/remote-devbox/engines.json
@@ -211,13 +212,119 @@ cmd_compose() {
   exec "$bin" compose "$@"
 }
 
+
+# ── client-config ─────────────────────────────────────────────────────────────
+# What a laptop needs to reach this box, emitted by the box itself. A developer never
+# needs the repo, and never has to be told an address: they already have ssh, and this
+# describes the box from the box.
+CLIENT=/etc/remote-devbox/client.json
+
+client_field() {
+  python3 - "$CLIENT" "$1" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))
+PY
+}
+
+# Tailnet-first with a silent fallback. ssh keeps the FIRST value it obtains for a
+# keyword, so the Match block wins when the probe says the tailnet is usable and the
+# plain Host block supplies the public address otherwise. Everything that speaks ssh
+# inherits it: -L tunnels, scp, rsync, sshfs, VS Code Remote-SSH, and this CLI.
+emit_ssh_config() {
+  local user="$1" prefix pub ts
+  prefix="$(client_field prefix)"; pub="$(client_field public_host)"; ts="$(client_field tailnet_host)"
+  # The box cannot know where a client keeps its private key, so this is the conventional
+  # path. IdentitiesOnly WITHOUT an IdentityFile offers no key at all — that fails as
+  # "Permission denied (publickey)" and reads like a server problem.
+  local id="    IdentityFile ~/.ssh/id_ed25519\n    IdentitiesOnly yes\n"
+
+  echo "# >>> remote-devbox (managed) >>>"
+  echo "# Change IdentityFile below if your key lives elsewhere."
+  if [ -n "$ts" ]; then
+    echo "# The tailnet is a route here, not a credential — sshd is key-only on both paths."
+    printf 'Match host %s-%s exec "devbox-tailnet-up %s"\n    HostName %s\n' "$prefix" "$user" "$ts" "$ts"
+  fi
+  printf "Host %s-%s\n    HostName %s\n    User %s\n    Port 22\n${id}" "$prefix" "$user" "$pub" "$user"
+  if [ -n "$ts" ]; then
+    echo
+    echo "# Pinned variants, to force one path when comparing or debugging."
+    printf "Host %s-%s-ts\n    HostName %s\n    User %s\n    Port 22\n${id}" "$prefix" "$user" "$ts" "$user"
+    printf "Host %s-%s-pub\n    HostName %s\n    User %s\n    Port 22\n${id}" "$prefix" "$user" "$pub" "$user"
+  fi
+  echo "# <<< remote-devbox <<<"
+}
+
+emit_client_json() {
+  python3 - "$CLIENT" "$1" <<'PY'
+import json, sys
+box = json.load(open(sys.argv[1]))
+user = sys.argv[2]
+projects = box["developers"].get(user)
+if projects is None:
+    sys.exit(f"devbox: {user} is not a managed developer")
+json.dump(
+    {
+        "prefix": box["prefix"],
+        # Reference only: the CLI dials the ssh alias, so the alias decides the path.
+        "host": box["tailnet_host"] or box["public_host"],
+        "default": user,
+        "locale": box["locale"],
+        "launch": "",
+        "profiles": [
+            {"user": user, "projects": [{"name": p["name"], "repo": p.get("repo", "")} for p in projects]}
+        ],
+    },
+    sys.stdout,
+    indent=2,
+)
+print()
+PY
+}
+
+cmd_client_config() {
+  local user="$ME" what=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ssh-config|--json|--probe) what="$1" ;;
+      -*) die "unknown flag '$1' (--ssh-config|--json|--probe)" ;;
+      *) user="$1" ;;
+    esac
+    shift
+  done
+  [ -r "$CLIENT" ] || die "no client facts at $CLIENT — re-run the playbook"
+
+  case "$what" in
+    --ssh-config) emit_ssh_config "$user" ;;
+    --json) emit_client_json "$user" ;;
+    --probe) cat /usr/local/share/remote-devbox/devbox-tailnet-up ;;
+    "")
+      cat <<EOF
+Run these on your own machine to set it up for $user. Each writes one file, so you can
+read what you are about to install before you install it.
+
+  mkdir -p ~/.local/bin ~/.config/claude-devbox
+  ssh $(client_field public_host) -l $user 'devbox client-config --probe' > ~/.local/bin/devbox-tailnet-up
+  chmod +x ~/.local/bin/devbox-tailnet-up
+  ssh $(client_field public_host) -l $user 'devbox client-config --ssh-config' >> ~/.ssh/config
+  ssh $(client_field public_host) -l $user 'devbox client-config --json' > ~/.config/claude-devbox/config.json
+
+Then: ssh $(client_field prefix)-$user
+
+~/.local/bin must be on PATH — ssh runs the probe by name, and a Match block that cannot
+find it silently falls back to the public address.
+EOF
+      ;;
+  esac
+}
+
 case "${1:-}" in
   engine) shift; cmd_engine "$@" ;;
   container) shift; cmd_container "$@" ;;
   compose) shift; cmd_compose "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
+  client-config) shift; cmd_client_config "$@" ;;
   ""|-h|--help|help)
-    sed -n '5,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '5,16p' "$0" | sed 's/^# \{0,1\}//'
     ;;
-  *) die "unknown command '$1' (engine|container|compose|doctor)" ;;
+  *) die "unknown command '$1' (engine|container|compose|doctor|client-config)" ;;
 esac

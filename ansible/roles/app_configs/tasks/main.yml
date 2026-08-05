@@ -47,6 +47,7 @@
       - "{{ item.1.mode }}"
       - "/home/{{ item.0.user }}/sync/.app-configs/{{ item.1.label }}"
       - "{{ item.1.payload }}"
+  become: true
   become_user: "{{ item.0.user }}"
   register: _app_link
   # ensure is idempotent by construction (link-if-safe, no-op otherwise); its stderr,
