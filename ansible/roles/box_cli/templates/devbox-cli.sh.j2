@@ -422,11 +422,27 @@ if REMOTE=\$(fetch "--cli \$PLATFORM" 2>&1); then
   # it execs devbox-bin, so the thing it needs must already be in place. A client that was
   # set up before this existed has the BINARY at ~/.local/bin/devbox — the backup below is
   # what that client can go back to.
+  # Staged like the binary above, not redirected straight to the destination: a plain
+  # \`fetch --dispatcher > ~/.local/bin/devbox\` truncates that file the moment the shell
+  # sets up the redirection, before the ssh call behind fetch has run at all. If that call
+  # then fails, set -eu aborts with ~/.local/bin/devbox already zero bytes — not reverted
+  # to the backup, just broken, and the client's only command with it.
+  fetch --dispatcher > "\$HOME/.local/bin/devbox.incoming"
+  [ -s "\$HOME/.local/bin/devbox.incoming" ] || {
+    rm -f "\$HOME/.local/bin/devbox.incoming"
+    say "the dispatcher arrived empty — not installing it"
+    exit 1
+  }
+  sh -n "\$HOME/.local/bin/devbox.incoming" || {
+    rm -f "\$HOME/.local/bin/devbox.incoming"
+    say "the dispatcher failed a shell syntax check — not installing it"
+    exit 1
+  }
+  chmod +x "\$HOME/.local/bin/devbox.incoming"
   if [ -f "\$HOME/.local/bin/devbox" ]; then
     cp "\$HOME/.local/bin/devbox" "\$HOME/.local/bin/devbox.bak-\$STAMP"
   fi
-  fetch --dispatcher > "\$HOME/.local/bin/devbox"
-  chmod +x "\$HOME/.local/bin/devbox"
+  mv "\$HOME/.local/bin/devbox.incoming" "\$HOME/.local/bin/devbox"
   say "wrote ~/.local/bin/devbox (dispatcher; backup: devbox.bak-\$STAMP)"
 else
   say "no CLI binary for \$PLATFORM: \$REMOTE"
@@ -519,7 +535,7 @@ cmd_client_config() {
 Set up your own machine to reach this box as $user:
 
   ssh $user@$(client_field public_host) 'devbox client-config --installer' > devbox-setup.sh
-  less devbox-setup.sh          # it writes three files and backs up each one
+  less devbox-setup.sh          # it writes five files and backs up each one
   sh devbox-setup.sh
 
 It is printed rather than piped into a shell on purpose: you should be able to read what
@@ -530,7 +546,7 @@ Individual pieces, if you would rather place them yourself:
   --dispatcher   the client's devbox command -> ~/.local/bin/devbox
   --ssh-config   the managed ssh block    -> ~/.ssh/config
   --json         the devbox CLI config    -> ~/.config/remote-devbox/config.json
-  --cli <plat>   path to the CLI binary   -> scp it to ~/.local/bin/devbox
+  --cli <plat>   path to the CLI binary   -> scp it to ~/.local/bin/devbox-bin
                  platforms published here: ${published:-none}
 EOF
       ;;
