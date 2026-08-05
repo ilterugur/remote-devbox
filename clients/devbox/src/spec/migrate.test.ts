@@ -38,12 +38,20 @@ test("a legacy profile becomes an adopted developer with one git identity", () =
   expect(dev.default_git_identity).toBe("default");
   expect(dev.agent_profiles).toEqual({ "claude-default": { provider: "claude" } });
   expect(dev.default_agent_profile).toBe("claude-default");
-  expect(dev.resources).toEqual({ memory_high: "5G", memory_max: "6G", cpu_weight: 80 });
+  // rc_limits capped the Remote Control services, never the developer's own slice —
+  // see the remote_control test below for where it lands now.
+  expect(dev.resources).toBeUndefined();
 });
 
 test("projects carry over with their branch and ports", () => {
   expect(migrateLegacy(legacy()).spec.developers[0]!.projects).toEqual([
-    { name: "app", repo: "git@github.com:example/app.git", branch: "main", ports: [3000] },
+    {
+      name: "app",
+      repo: "git@github.com:example/app.git",
+      branch: "main",
+      ports: [3000],
+      remote_control: { name: "Work App", spawn: "worktree" },
+    },
   ]);
 });
 
@@ -74,10 +82,61 @@ test("system docker becomes operator-owned shared services, not a developer engi
   expect(spec.container.default_engine).toBe("podman-rootless");
 });
 
-test("profile sudo and servers are warned about, never dropped silently", () => {
+test("profile sudo is warned about, never dropped silently", () => {
   const paths = migrateLegacy(legacy()).issues.map((i) => i.path);
   expect(paths).toContain("profiles[0].sudo");
-  expect(paths).toContain("profiles[0].servers");
+  // No warning any more: the servers themselves carry over, so there is nothing to
+  // redeclare by hand.
+  expect(paths).not.toContain("profiles[0].servers");
+});
+
+test("legacy servers become each project's remote_control block", () => {
+  const raw = legacy();
+  const spec = migrateLegacy({
+    ...raw,
+    profiles: [
+      {
+        ...raw.profiles[0],
+        projects: [
+          { name: "app", repo: "git@github.com:example/app.git" },
+          { name: "spike", repo: "git@github.com:example/spike.git" },
+        ],
+        servers: [{ project: "app", name: "Work App", spawn: "same-dir", capacity: 32 }],
+      },
+    ],
+  }).spec;
+  const projects = spec.developers[0]!.projects!;
+  expect(projects[0]!.remote_control).toEqual({ name: "Work App", spawn: "same-dir", capacity: 32 });
+  // No server entry means the legacy box ran no unit for it — say so explicitly.
+  expect(projects[1]!.remote_control).toBe(false);
+});
+
+test("rc_limits becomes the box-wide remote_control.resources, not a developer slice", () => {
+  const spec = migrateLegacy({
+    ...legacy(),
+    rc_limits: { memory_high: "9G", memory_max: "10G", cpu_weight: 80, nice: 5, cpu_quota: "" },
+  }).spec;
+  // cpu_quota: "" meant "no cap" in the legacy file; the canonical model omits the key.
+  expect(spec.remote_control!.resources).toEqual({ memory_high: "9G", memory_max: "10G", cpu_weight: 80, nice: 5 });
+  expect(spec.developers[0]!.resources).toBeUndefined();
+});
+
+test("rc_build_env and the restart/resume knobs carry over", () => {
+  const spec = migrateLegacy({
+    ...legacy(),
+    rc_build_env: { NODE_OPTIONS: "--max-old-space-size=2560" },
+    rc_resume_max_concurrent: 3,
+    rc_restart_sec: 15,
+  }).spec;
+  expect(spec.remote_control!.build_env).toEqual({ NODE_OPTIONS: "--max-old-space-size=2560" });
+  expect(spec.remote_control!.resume).toEqual({ max_concurrent: 3 });
+  expect(spec.remote_control!.autorestart).toEqual({ restart_sec: 15 });
+});
+
+test("a legacy file with no rc_* variables gets no remote_control block", () => {
+  const raw = legacy();
+  delete (raw as Record<string, unknown>).rc_limits;
+  expect(migrateLegacy(raw).spec.remote_control).toBeUndefined();
 });
 
 test("the whole file bridge carries over — disk, engine and lazy mounts", () => {
