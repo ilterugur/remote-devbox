@@ -95,12 +95,16 @@ PAM password whose hash is in `devbox.secrets.yml`.
   says otherwise). `devbox agent up` keeps an ssh tunnel to the box open under launchd,
   and because that tunnel dials the ssh alias it follows the same tailnet→public fallback
   every other ssh does — so the address in your RDP client is right whether Tailscale is
-  up, down, or restarting. `devbox agent status` says whether the port answers.
-- **Reachability on the box follows `desktop.access`** — `tunnel` (the default) means
-  xrdp listens on 127.0.0.1 only, which is what the agent's tunnel reaches; `tailnet`
-  additionally listens on the box's 100.x address. RDP is the one door here authenticated
-  by a password rather than a key, which is why it is never public unless you spell out
-  `unsafe-public`.
+  up, down, or restarting. `devbox agent status` says whether the local end of that tunnel
+  is up; it cannot tell you the box's xrdp answers, because the listener it connects to is
+  ssh's own (ssh accepts the connection first and only then dials the box).
+- **Reachability on the box follows `desktop.access`** — a list, defaulting to
+  `[tunnel, tailnet]` with Tailscale on and `[tunnel]` without it. `tunnel` is what makes
+  xrdp listen on 127.0.0.1, and it is the only entry the agent's tunnel can reach: drop it
+  and the forward lands on a port with nothing behind it (`devbox agent up` says so when
+  it writes the agent). `tailnet` additionally listens on the box's 100.x address. RDP is
+  the one door here authenticated by a password rather than a key, which is why it is
+  never public unless you spell out `unsafe-public`.
 - **The keyboard comes from `desktop.keyboard`**, or from the machine that ran
   `devbox plan` when you leave it out. It is applied by teaching xrdp the layout id
   your client announces — setting it inside the session does not stick, because xrdp
@@ -128,10 +132,17 @@ Two things on the client are long-lived, and both are launchd agents written by
 | `com.devbox.<user>.mount` | re-runs `devbox mount up` every 60s, so the `mnt` bridge survives sleep and wake |
 
 ```bash
-devbox agent status   # what is described, what launchd has loaded, whether the port answers
-devbox agent up       # install or update them (idempotent)
+devbox agent status   # what is described, what launchd has loaded, what the local port does
+devbox agent up       # install or update them, and remove any the config no longer describes
 devbox agent down     # remove them
 ```
+
+The mount agent only appears for a profile whose **lazy mounts are known**, and today that
+means a checkout of the legacy `ansible/group_vars/all.yml` layout: `devbox.yml` has no
+`lazy_mounts` field yet and the box does not publish one either, so on the canonical path
+`devbox agent up` writes the desktop agent alone. The `mnt` bridge still works — it just
+has no launchd reconciler behind it, so re-run `devbox mount up` yourself after a sleep or
+a network drop.
 
 Logs are in `~/.local/state/devbox/<label>.log`. Neither agent is required — they are
 what makes a saved RDP entry and a mounted path keep working without you thinking about
