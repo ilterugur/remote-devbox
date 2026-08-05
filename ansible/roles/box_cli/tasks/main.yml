@@ -58,5 +58,11 @@
       # Built through named vars because a filter binds tighter than `+` in Jinja, so the
       # inline form silently zipped the wrong two lists.
       accounts: "{{ dict(_devbox_account_names | zip(_devbox_account_projects)) }}"
-    _devbox_account_names: "{{ [devbox_operator.user] + (devbox_developers | map(attribute='user') | list) }}"
+      # The file bridge and app configs a client needs to drive its own sync disk. Keyed
+      # by developer only — the operator account never syncs — so a client without a repo
+      # checkout can still manage them instead of reporting the feature as switched off.
+      file_bridges: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='file_bridge') | list)) }}"
+      app_configs: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='app_configs') | list)) }}"
+    _devbox_developer_names: "{{ devbox_developers | map(attribute='user') | list }}"
+    _devbox_account_names: "{{ [devbox_operator.user] + _devbox_developer_names }}"
     _devbox_account_projects: "{{ [[]] + (devbox_developers | map(attribute='projects') | list) }}"

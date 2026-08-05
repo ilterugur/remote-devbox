@@ -272,6 +272,28 @@ user = sys.argv[2]
 projects = box["accounts"].get(user)
 if projects is None:
     sys.exit(f"devbox: {user} is not a managed developer")
+
+# Carry the file bridge and app configs through under the names the CLI's Profile type
+# uses. Without them a client with no repo checkout has no way to know the sync disk is
+# even enabled, and every `devbox sync` / `devbox config` command reports the feature as
+# off rather than as unconfigured. The operator account has neither, hence the defaults.
+bridge = (box.get("file_bridges") or {}).get(user) or {}
+apps = (box.get("app_configs") or {}).get(user) or {}
+
+profile = {
+    "user": user,
+    "projects": [{"name": p["name"], "repo": p.get("repo", "")} for p in projects],
+}
+if bridge.get("sync_disk"):
+    profile["syncDisk"] = True
+    # Only meaningful alongside the disk; emitting it on its own suggests a sync that
+    # was never configured.
+    if bridge.get("engine"):
+        profile["syncEngine"] = bridge["engine"]
+# paths are already fully resolved by the generator — nothing to look up client-side.
+if apps.get("enabled") and apps.get("paths"):
+    profile["appConfigs"] = apps["paths"]
+
 json.dump(
     {
         "prefix": box["prefix"],
@@ -280,9 +302,7 @@ json.dump(
         "default": user,
         "locale": box["locale"],
         "launch": "",
-        "profiles": [
-            {"user": user, "projects": [{"name": p["name"], "repo": p.get("repo", "")} for p in projects]}
-        ],
+        "profiles": [profile],
     },
     sys.stdout,
     indent=2,
@@ -321,7 +341,8 @@ emit_installer() {
 #   ~/.local/bin/devbox-tailnet-up          probe: is the tailnet a usable route right now
 #   ~/.local/bin/devbox                     the CLI itself, compiled — no repo, no Bun
 #   ~/.ssh/config                           a managed block, appended (existing one replaced)
-#   ~/.config/remote-devbox/config.json     which box, which account, which projects
+#   ~/.config/remote-devbox/config.json     which box, which account, which projects,
+#                                           and how its file bridge is configured
 #
 # Every file it touches is backed up first. Re-running is safe.
 set -eu
@@ -395,24 +416,48 @@ else
   say "ssh still works; the CLI can be run from a checkout with 'bun run src/devbox.ts'."
 fi
 
-# 4. client config for the devbox CLI. ~/.config/remote-devbox is the canonical
-# directory; ~/.config/claude-devbox is the pre-rename one, still read but never written.
+# 4. client config for the devbox CLI
+#
+# The CLI prefers ~/.config/remote-devbox and reads the pre-rename ~/.config/claude-devbox
+# only when it is the only one present. Write whichever this client already uses, so this
+# never creates a second config that silently wins over the one in use.
 CFG_DIR="\$HOME/.config/remote-devbox"
-OLD_DIR="\$HOME/.config/claude-devbox"
-mkdir -p "\$CFG_DIR"
-if [ -f "\$CFG_DIR/config.json" ]; then
-  cp "\$CFG_DIR/config.json" "\$CFG_DIR/config.json.bak-\$STAMP"
+if [ -f "\$HOME/.config/claude-devbox/config.json" ] && [ ! -f "\$CFG_DIR/config.json" ]; then
+  CFG_DIR="\$HOME/.config/claude-devbox"
 fi
-fetch --json > "\$CFG_DIR/config.json"
-say "wrote ~/.config/remote-devbox/config.json"
+CFG="\$CFG_DIR/config.json"
+mkdir -p "\$CFG_DIR"
 
-# The CLI picks its directory by where config.json is, and keeps the remembered profile
-# beside it. Moving the config without the state would silently reset that.
-if [ -f "\$OLD_DIR/config.json" ]; then
-  if [ -f "\$OLD_DIR/active-profile" ] && [ ! -f "\$CFG_DIR/active-profile" ]; then
-    cp "\$OLD_DIR/active-profile" "\$CFG_DIR/active-profile"
+if [ -f "\$CFG" ]; then
+  cp "\$CFG" "\$CFG.bak-\$STAMP"
+  # Merge rather than truncate: keys the box cannot know are the client's own, and
+  # dropping repoPath is what stops the CLI reading devbox.yml — which is where the sync
+  # disk and app configs are declared. A backup does not help a user who never noticed.
+  if command -v python3 >/dev/null 2>&1; then
+    fetch --json > "\$CFG.new"
+    python3 - "\$CFG.bak-\$STAMP" "\$CFG.new" "\$CFG" <<'MERGE'
+import json, sys
+old, new, out = (json.load(open(p)) if i < 2 else p for i, p in enumerate(sys.argv[1:4]))
+# The box owns what it actually knows. It emits a placeholder for the launch command it
+# cannot know, so an empty value must never overwrite a setting the client already has,
+# and keys the box does not emit at all (repoPath) are left untouched.
+for key, value in new.items():
+    if value in ("", None) and old.get(key) not in ("", None):
+        continue
+    old[key] = value
+json.dump(old, open(out, "w"), indent=2)
+open(out, "a").write("\\n")
+MERGE
+    rm -f "\$CFG.new"
+    say "updated \$(printf %s "\$CFG" | sed "s|\$HOME|~|") (backup: config.json.bak-\$STAMP)"
+  else
+    fetch --json > "\$CFG"
+    say "wrote \$(printf %s "\$CFG" | sed "s|\$HOME|~|") — python3 not found, so any"
+    say "     client-only keys were replaced; the previous file is config.json.bak-\$STAMP"
   fi
-  say "NOTE: ~/.config/claude-devbox is the old directory and is now unused."
+else
+  fetch --json > "\$CFG"
+  say "wrote \$(printf %s "\$CFG" | sed "s|\$HOME|~|")"
 fi
 
 # 5. prove it, rather than asserting it

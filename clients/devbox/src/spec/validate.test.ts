@@ -293,3 +293,27 @@ test("app_configs rejects an entry overlapping the sync disk root", () => {
     })),
   ).toContain("error:developers[0].app_configs.paths[0].client");
 });
+
+test("app_configs rejects an entry whose box path overlaps the box sync disk", () => {
+  // The store lives inside /home/<user>/sync, so a box path pointing in there would link
+  // into its own store. The client-side guard never caught this: the two sides have
+  // different disks.
+  expect(paths({
+    ...minimal(),
+    developers: [{
+      user: "dev-a", login_ssh_keys: [KEY], file_bridge: { sync_disk: true },
+      app_configs: { enabled: true, paths: [{ label: "bad", client: "~/a", box: "/home/dev-a/sync/x", mode: "dir" }] },
+    }],
+  })).toContain("error:developers[0].app_configs.paths[0].box");
+});
+
+test("a box path outside the sync disk is accepted", () => {
+  const r = validateStructure({
+    ...minimal(),
+    developers: [{
+      user: "dev-a", login_ssh_keys: [KEY], file_bridge: { sync_disk: true },
+      app_configs: { enabled: true, paths: [{ label: "ok", client: "~/a", box: "/home/dev-a/.config/app", mode: "dir" }] },
+    }],
+  });
+  expect(r.issues).toEqual([]);
+});
