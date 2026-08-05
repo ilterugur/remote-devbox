@@ -61,6 +61,13 @@
     # design: a project picks an identity AND an agent, and neither implies the other.
     - { role: git_identities, tags: [developers, git] }
     - { role: agent_profiles, tags: [agents] }
+
+    # The curated config tree each developer's agent reads. After agent_profiles so
+    # the homes and profile directories it writes into already exist.
+    - role: agent_config
+      tags: [agents, agent_config]
+      when: devbox_developers | selectattr('agent_config') | list | length > 0
+
     - { role: projects, tags: [projects] }
 
     # Always-on Remote Control servers. After projects: a session cannot enter a
@@ -68,6 +75,15 @@
     - role: agent_remote
       tags: [agents, rc]
       when: devbox_remote_control.enabled | bool
+
+    # Headless Chrome and the browser MCP servers, for the developers that asked.
+    # After agent_config: that role rewrites the same ~/.claude tree, and the MCP
+    # entries must survive it rather than race it.
+    - role: browser
+      tags: [browser]
+      when:
+        - devbox_browser.enabled | bool
+        - devbox_developers | selectattr('browser') | list | length > 0
 
     # Rootless engines, per developer. Installed after projects so the engine map can
     # name every project it resolves.
@@ -86,8 +102,18 @@
       tags: [app_configs, bridge]
       when: devbox_developers | selectattr('app_configs.enabled') | list | length > 0
 
+    # Two-way sync for the developers on the syncthing engine. With the tailnet up:
+    # its listener binds the tailscale address only.
+    - role: syncthing
+      tags: [syncthing, bridge]
+      when: devbox_developers | selectattr('file_bridge.engine', 'equalto', 'syncthing') | list | length > 0
+
     # Last, so the box CLI describes the box as every earlier role left it.
     - { role: box_cli, tags: [cli, always] }
+
+    # Opt-in only: `devbox apply prune` (or --tags prune). Removes what devbox.yml no
+    # longer declares, and asks before it does. `never` keeps it out of a full run.
+    - { role: prune, tags: [prune, never] }
 
   post_tasks:
     - name: Next steps

@@ -8,13 +8,23 @@
 # Per developer on purpose. One shared tree for everyone meant one person's personal
 # skills landed in a colleague's account, under their agent's name.
 
-- name: Collect the developers with a curated config
+# A source may be absolute, ~-relative, or relative to the repo root. Resolve all
+# three to one absolute client path up front, so every later task stats and copies
+# the same thing no matter where ansible-playbook was invoked from.
+- name: Resolve each curated source to an absolute client path
   ansible.builtin.set_fact:
-    agent_config_devs: "{{ devbox_developers | selectattr('agent_config') | list }}"
+    agent_config_devs: >-
+      {{ agent_config_devs | default([])
+         + [item | combine({'source_abs':
+              (item.agent_config.source | expanduser) if item.agent_config.source is match('^[/~]')
+              else (playbook_dir ~ '/../' ~ item.agent_config.source)})] }}
+  loop: "{{ devbox_developers | selectattr('agent_config') | list }}"
+  loop_control:
+    label: "{{ item.user }}"
 
 - name: Check each curated source on the client
   ansible.builtin.stat:
-    path: "{{ item.agent_config.source }}"
+    path: "{{ item.source_abs }}"
   delegate_to: localhost
   become: false
   loop: "{{ agent_config_devs }}"
@@ -25,7 +35,7 @@
 - name: Warn about a curated source that is not there
   ansible.builtin.debug:
     msg: >-
-      {{ item.item.user }}: {{ item.item.agent_config.source }} does not exist on the
+      {{ item.item.user }}: {{ item.item.source_abs }} does not exist on the
       client — nothing to sync. Create it, or drop agent_config for this developer.
   loop: "{{ agent_config_src.results }}"
   loop_control:
@@ -42,7 +52,7 @@
   loop:
     - /opt/remote-shared
     - /usr/local/share/remote-devbox
-  when: agent_config_devs | length > 0
+  when: agent_config_devs | default([]) | length > 0
 
 - name: Deploy the shared exclude list
   ansible.builtin.copy:
@@ -51,7 +61,7 @@
     owner: root
     group: root
     mode: "0644"
-  when: agent_config_devs | length > 0
+  when: agent_config_devs | default([]) | length > 0
 
 - name: Deploy the config-apply helper
   ansible.builtin.copy:
@@ -60,12 +70,12 @@
     owner: root
     group: root
     mode: "0755"
-  when: agent_config_devs | length > 0
+  when: agent_config_devs | default([]) | length > 0
 
 # One directory per developer, so the fan-out step can never read the wrong tree.
 - name: Push each developer's curated config (client -> box)
   ansible.posix.synchronize:
-    src: "{{ item.item.agent_config.source }}/"
+    src: "{{ item.item.source_abs }}/"
     dest: "/opt/remote-shared/{{ item.item.user }}/"
     archive: true
     delete: false
