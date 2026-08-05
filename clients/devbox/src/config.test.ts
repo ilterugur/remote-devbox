@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { appConfigsFor, pickTransport, profilesFromYaml, transportPort, type Config } from "./config";
+import { appConfigsFor, pickTransport, profilesFromYaml, resolveCfgDir, transportPort, type Config } from "./config";
 
 /** Make a throwaway claude-devbox checkout with the given all.yml body; return its root. */
 function repoWithYaml(body: string): string {
@@ -214,5 +214,39 @@ describe("transportPort", () => {
     expect(transportPort("et", 22)).toBe(2022);
     expect(transportPort("ssh", 2222)).toBe(2222);
     expect(transportPort("mosh", 22)).toBeNull();
+  });
+});
+
+describe("resolveCfgDir", () => {
+  const home = () => mkdtempSync(join(tmpdir(), "devbox-home-"));
+  const seed = (h: string, dir: string) => {
+    mkdirSync(join(h, ".config", dir), { recursive: true });
+    writeFileSync(join(h, ".config", dir, "config.json"), "{}");
+  };
+
+  test("prefers the canonical directory when both exist", () => {
+    const h = home();
+    seed(h, "claude-devbox");
+    seed(h, "remote-devbox");
+    expect(resolveCfgDir(h)).toBe(join(h, ".config", "remote-devbox"));
+  });
+
+  test("still reads the pre-rename directory when it is the only one", () => {
+    // An existing client must keep working — this is the case that silently broke when a
+    // second writer put a config in the other directory.
+    const h = home();
+    seed(h, "claude-devbox");
+    expect(resolveCfgDir(h)).toBe(join(h, ".config", "claude-devbox"));
+  });
+
+  test("a fresh client resolves to the canonical directory", () => {
+    expect(resolveCfgDir(home())).toMatch(/\/\.config\/remote-devbox$/);
+  });
+
+  test("an empty directory without config.json does not win", () => {
+    const h = home();
+    mkdirSync(join(h, ".config", "remote-devbox"), { recursive: true });
+    seed(h, "claude-devbox");
+    expect(resolveCfgDir(h)).toBe(join(h, ".config", "claude-devbox"));
   });
 });

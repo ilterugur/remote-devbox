@@ -8,9 +8,9 @@ import { createServer } from "node:net";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { CFG_DIR } from "./config";
+import { cfgDir } from "./config";
 
-export const BRIDGES_PATH = join(CFG_DIR, "bridges.json");
+export const bridgesPath = (): string => join(cfgDir(), "bridges.json");
 
 /** Expand a leading ~, resolve to an absolute, normalized path, strip trailing slash. */
 export function normalizePath(p: string): string {
@@ -39,7 +39,7 @@ export type LiveMount = {
   createdAt: string;
 };
 
-export function readBridges(path: string = BRIDGES_PATH): LiveMount[] {
+export function readBridges(path: string = bridgesPath()): LiveMount[] {
   if (!existsSync(path)) return [];
   try {
     const v = JSON.parse(readFileSync(path, "utf8"));
@@ -49,7 +49,7 @@ export function readBridges(path: string = BRIDGES_PATH): LiveMount[] {
   }
 }
 
-export function writeBridges(list: LiveMount[], path: string = BRIDGES_PATH): void {
+export function writeBridges(list: LiveMount[], path: string = bridgesPath()): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(list, null, 2) + "\n");
 }
@@ -64,7 +64,7 @@ export function pidAlive(pid: number): boolean {
 }
 
 /** Drop entries whose rclone OR ssh process has died, persist, and return survivors. */
-export function reconcileBridges(path: string = BRIDGES_PATH): LiveMount[] {
+export function reconcileBridges(path: string = bridgesPath()): LiveMount[] {
   const kept = readBridges(path).filter((m) => pidAlive(m.rclonePid) && pidAlive(m.sshPid));
   writeBridges(kept, path);
   return kept;
