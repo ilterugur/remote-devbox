@@ -13,6 +13,13 @@ function repoWithYaml(body: string): string {
   return root;
 }
 
+/** Make a throwaway checkout with the given devbox.yml body; return its root. */
+function tmpRepo(devboxYml: string): string {
+  const root = mkdtempSync(join(tmpdir(), "devbox-cfg-"));
+  writeFileSync(join(root, "devbox.yml"), devboxYml);
+  return root;
+}
+
 describe("profilesFromYaml", () => {
   test("maps profiles, projects, and the snake_case profile options to camelCase", () => {
     const repo = repoWithYaml(
@@ -167,6 +174,24 @@ describe("profilesFromYaml — which config file wins", () => {
     const cfg: Config = { prefix: "devbox", default: "work", locale: "en_US.UTF-8", launch: "claude",
       profiles: [{ user: "work", projects: [] }] };
     expect(appConfigsFor(cfg, "work")).toEqual([]);
+  });
+
+  test("a desktop developer's client port comes through, defaulting to 3389", () => {
+    const dir = tmpRepo(`
+developers:
+  - user: ilterugur
+    projects: []
+    desktop: { enabled: true }
+  - user: emre
+    projects: []
+    desktop: { enabled: true, client_port: 3395 }
+  - user: nodesk
+    projects: []
+`);
+    const profiles = profilesFromYaml(dir)!;
+    expect(profiles.find((p) => p.user === "ilterugur")!.desktop).toEqual({ clientPort: 3389 });
+    expect(profiles.find((p) => p.user === "emre")!.desktop).toEqual({ clientPort: 3395 });
+    expect(profiles.find((p) => p.user === "nodesk")!.desktop).toBeUndefined();
   });
 });
 

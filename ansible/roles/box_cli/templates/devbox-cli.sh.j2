@@ -279,6 +279,7 @@ if projects is None:
 # off rather than as unconfigured. The operator account has neither, hence the defaults.
 bridge = (box.get("file_bridges") or {}).get(user) or {}
 apps = (box.get("app_configs") or {}).get(user) or {}
+desktop = (box.get("desktops") or {}).get(user) or {}
 
 profile = {
     "user": user,
@@ -293,6 +294,10 @@ if bridge.get("sync_disk"):
 # paths are already fully resolved by the generator — nothing to look up client-side.
 if apps.get("enabled") and apps.get("paths"):
     profile["appConfigs"] = apps["paths"]
+# Only for a developer who actually has a desktop; an entry here is what makes
+# `devbox agent up` open the RDP tunnel at all.
+if desktop.get("enabled") and desktop.get("client_port"):
+    profile["desktop"] = {"clientPort": desktop["client_port"]}
 
 json.dump(
     {

@@ -63,6 +63,10 @@
       # checkout can still manage them instead of reporting the feature as switched off.
       file_bridges: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='file_bridge') | list)) }}"
       app_configs: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='app_configs') | list)) }}"
+      # The client side of the desktop tunnel. Keyed by developer, and only for the ones
+      # who have a desktop — a client with no repo checkout cannot work the port out on
+      # its own, and guessing 3389 would collide the moment a second developer appears.
+      desktops: "{{ dict(_devbox_developer_names | zip(devbox_developers | map(attribute='desktop') | list)) }}"
     _devbox_developer_names: "{{ devbox_developers | map(attribute='user') | list }}"
     _devbox_account_names: "{{ [devbox_operator.user] + _devbox_developer_names }}"
     _devbox_account_projects: "{{ [[]] + (devbox_developers | map(attribute='projects') | list) }}"

@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { ensureClientTransport } from "./install";
 import { resolveEntry, type ResolvedEntry } from "./app-configs/registry";
+import { assignClientPorts } from "./spec/client-ports";
 
 /**
  * Where this client's config lives. `remote-devbox` is canonical — it is what the
@@ -40,6 +41,7 @@ export const statePath = (): string => join(cfgDir(), "active-profile");
 export type Project = { name: string; repo?: string };
 export type LazyMount = { label: string; path: string };
 export type EngineId = "mutagen" | "syncthing";
+export type ProfileDesktop = { clientPort: number };
 export type Profile = {
   user: string;
   projects: Project[];
@@ -48,6 +50,7 @@ export type Profile = {
   syncDisk?: boolean;
   lazyMountOnConnect?: boolean;
   appConfigs?: ResolvedEntry[];
+  desktop?: ProfileDesktop;
 };
 // `host` is for reference only — the CLI resolves the box via the ssh alias
 // `${prefix}-${profile}` (HostName lives in ~/.ssh/config).
@@ -107,6 +110,16 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
     const doc = Bun.YAML.parse(readFileSync(join(repoPath, "devbox.yml"), "utf8")) as any;
     const devs = doc?.developers;
     if (!Array.isArray(devs) || devs.length === 0) return null;
+    // devbox.yml is unvalidated input here (no schema check upstream), so coerce every
+    // field assignClientPorts touches — an untyped client_port would otherwise reach
+    // its truthiness/comparison logic as a string, in-range number, or garbage.
+    const clientPorts = assignClientPorts(
+      devs.map((d: any) => ({
+        user: String(d.user),
+        desktopEnabled: d?.desktop?.enabled === true,
+        clientPort: typeof d?.desktop?.client_port === "number" ? d.desktop.client_port : undefined,
+      })),
+    );
     const out: Profile[] = [];
     for (const d of devs) {
       if (!d?.user) return null; // malformed — prefer the cache over a partial list
@@ -124,6 +137,8 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
         return "entry" in r ? [r.entry] : [];
       });
       if (entries.length) profile.appConfigs = entries;
+      const port = clientPorts.get(profile.user);
+      if (port) profile.desktop = { clientPort: port };
       out.push(profile);
     }
     return out;
