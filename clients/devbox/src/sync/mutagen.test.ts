@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildCreateArgs, buildStatusArgs, sessionName, goAgentFile } from "./mutagen";
+import { buildCreateArgs, buildStatusArgs, parseStatusOutput, sessionName, goAgentFile } from "./mutagen";
 
 describe("goAgentFile", () => {
   test("maps uname -m to the mutagen agent bundle filename", () => {
@@ -36,9 +36,41 @@ describe("mutagen argv", () => {
   });
   test("status filters by the devbox label and uses a machine template", () => {
     const a = buildStatusArgs();
-    expect(a).toEqual([
-      "sync", "list", "--label-selector=devbox=true",
-      "--template", '{{range .}}{{.Name}}\t{{.Status}}\t{{len .Conflicts}}{{"\\n"}}{{end}}',
+    expect(a.slice(0, 3)).toEqual(["sync", "list", "--label-selector=devbox=true"]);
+    expect(a[3]).toBe("--template");
+  });
+  test("status guards .Conflicts behind the embedded SessionState", () => {
+    // A paused session has a nil SessionState, and .Conflicts is promoted from it, so an
+    // unguarded {{len .Conflicts}} aborts the whole `mutagen sync list` run:
+    //   executing "" at <.Conflicts>: reflect: indirection through nil pointer to
+    //   embedded struct field SessionState
+    // The row is printed first and the process still exits non-zero, so status() would
+    // discard every session, not just the paused one.
+    const template = buildStatusArgs()[4]!;
+    expect(template).toContain("{{if .SessionState}}");
+    expect(template).toContain("{{else}}0{{end}}");
+    expect(template).not.toMatch(/{{\s*len \.Conflicts\s*}}(?!.*{{else}})/);
+  });
+});
+
+describe("parseStatusOutput", () => {
+  test("a paused session still appears, with its real state", () => {
+    // Regression: the whole list used to be dropped when any session was paused.
+    expect(parseStatusOutput("devbox-work\tDisconnected\t0\n")).toEqual([
+      { name: "devbox-work", state: "Disconnected", conflicts: 0 },
+    ]);
+  });
+  test("a paused session does not hide the healthy ones alongside it", () => {
+    const out = "devbox-work\tWatching\t2\ndevbox-home\tDisconnected\t0\n";
+    expect(parseStatusOutput(out).map((s) => s.name)).toEqual(["devbox-work", "devbox-home"]);
+    expect(parseStatusOutput(out)[0]!.conflicts).toBe(2);
+  });
+  test("blank lines and a trailing newline are ignored", () => {
+    expect(parseStatusOutput("\n\ndevbox-work\tWatching\t0\n\n")).toHaveLength(1);
+  });
+  test("a malformed row degrades instead of throwing", () => {
+    expect(parseStatusOutput("devbox-work\n")).toEqual([
+      { name: "devbox-work", state: "", conflicts: 0 },
     ]);
   });
 });
