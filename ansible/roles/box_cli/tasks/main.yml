@@ -35,6 +35,16 @@
     group: root
     mode: "0644"
 
+# The client's `devbox` itself: a dispatcher that keeps the tailnet probe in sh and hands
+# every other subcommand to the compiled binary. Handed out, never run here.
+- name: Stage the client-side command dispatcher
+  ansible.builtin.copy:
+    src: devbox-dispatch
+    dest: /usr/local/share/remote-devbox/devbox-dispatch
+    owner: root
+    group: root
+    mode: "0644"
+
 # Everything `devbox client-config` needs to describe this box to a laptop, written once
 # here so the CLI looks it up instead of re-deriving addresses at runtime — the same rule
 # the engine map follows.
