@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentsFor, plistPath, renderPlist } from "./agent";
+import { agentsFor, plistPath, renderPlist, resolveArgv } from "./agent";
 import type { Config } from "./config";
 
 const cfg = (profile: Record<string, unknown>): Config => ({
@@ -75,5 +75,18 @@ describe("plistPath", () => {
   test("lands in the user's LaunchAgents directory", () => {
     expect(plistPath("com.devbox.ilterugur.desktop", "/Users/me"))
       .toBe("/Users/me/Library/LaunchAgents/com.devbox.ilterugur.desktop.plist");
+  });
+});
+
+describe("resolveArgv", () => {
+  test("turns the leading command into an absolute path launchd can exec", () => {
+    const got = resolveArgv(["ssh", "-N", "-L", "127.0.0.1:3390:127.0.0.1:3389", "devbox-ilterugur"]);
+    expect(got[0]!.startsWith("/")).toBe(true);
+    expect(got[0]!.endsWith("/ssh")).toBe(true);
+    expect(got.slice(1)).toEqual(["-N", "-L", "127.0.0.1:3390:127.0.0.1:3389", "devbox-ilterugur"]);
+  });
+
+  test("leaves an already-absolute command alone", () => {
+    expect(resolveArgv(["/usr/bin/ssh", "-N"])).toEqual(["/usr/bin/ssh", "-N"]);
   });
 });

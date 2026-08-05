@@ -10,9 +10,11 @@
  * Rendering is pure and tested; runAgentUp/Down/Status do the fs and launchctl work.
  * Honors DEVBOX_DRYRUN=1 (print, don't execute).
  */
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { hostFor, lazyMountsFor, type Config } from "./config";
+import { die, hostFor, lazyMountsFor, type Config } from "./config";
 
 export type AgentMode = "daemon" | "interval";
 
@@ -98,4 +100,103 @@ ${cadence}
 </dict>
 </plist>
 `;
+}
+
+const isDry = () => !!process.env.DEVBOX_DRYRUN;
+const out = (s: string) => process.stdout.write(s + "\n");
+
+/**
+ * launchd does not read a login shell's PATH, so a bare command name in a plist simply
+ * never runs — and the failure is silent apart from a line in the log. Resolve here,
+ * once, at the boundary between the described agent and the written one.
+ */
+export function resolveArgv(argv: string[]): string[] {
+  const [cmd, ...rest] = argv;
+  if (!cmd || cmd.startsWith("/")) return argv;
+  const r = spawnSync("sh", ["-c", `command -v ${cmd}`], { encoding: "utf8" });
+  const path = (r.stdout || "").trim();
+  if (!path) die(`cannot find '${cmd}' on PATH — launchd needs an absolute path`);
+  return [path, ...rest];
+}
+
+const launchctl = (...args: string[]) => spawnSync("launchctl", args, { encoding: "utf8" });
+
+const domain = (): string => `gui/${process.getuid?.() ?? 0}`;
+
+function isLoaded(label: string): boolean {
+  return launchctl("print", `${domain()}/${label}`).status === 0;
+}
+
+function requireMac(): void {
+  if (process.platform === "darwin") return;
+  out("devbox: client agents are launchd (macOS) only.");
+  out("On Linux, place the equivalent systemd --user unit yourself:");
+  out("  ~/.config/systemd/user/devbox-<name>.service   (ExecStart = the argv below)");
+  out("  systemctl --user daemon-reload && systemctl --user enable --now devbox-<name>");
+  process.exit(0);
+}
+
+/** Install (or update) every agent this profile should have running. Idempotent. */
+export function runAgentUp(cfg: Config, profile: string): void {
+  requireMac();
+  const specs = agentsFor(cfg, profile);
+  if (!specs.length) return void out(`devbox: no client agents configured for "${profile}"`);
+  const logDir = logDirFor();
+  if (!isDry()) mkdirSync(logDir, { recursive: true });
+
+  for (const spec of specs) {
+    const resolved: AgentSpec = { ...spec, argv: resolveArgv(spec.argv) };
+    const path = plistPath(spec.label);
+    const wanted = renderPlist(resolved, logDir);
+
+    if (isDry()) {
+      out(`  ── would write ${path}`);
+      out(`     ${resolved.argv.join(" ")}`);
+      continue;
+    }
+
+    const current = existsSync(path) ? readFileSync(path, "utf8") : null;
+    if (current === wanted && isLoaded(spec.label)) {
+      out(`  ✓ ${spec.label} already current`);
+      continue;
+    }
+    mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+    writeFileSync(path, wanted);
+    // bootout first: bootstrap on an already-loaded label is an error, and reloading is
+    // the only way a changed plist takes effect.
+    if (isLoaded(spec.label)) launchctl("bootout", `${domain()}/${spec.label}`);
+    const r = launchctl("bootstrap", domain(), path);
+    if (r.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(r.stderr || "").trim()}`);
+    out(`  ✓ ${spec.label} — ${spec.description}`);
+  }
+}
+
+/** Remove this profile's agents. */
+export function runAgentDown(cfg: Config, profile: string): void {
+  requireMac();
+  const specs = agentsFor(cfg, profile);
+  if (!specs.length) return void out(`devbox: no client agents configured for "${profile}"`);
+  for (const spec of specs) {
+    const path = plistPath(spec.label);
+    if (isDry()) { out(`  ── would remove ${path}`); continue; }
+    if (isLoaded(spec.label)) launchctl("bootout", `${domain()}/${spec.label}`);
+    rmSync(path, { force: true });
+    out(`  ✓ ${spec.label} removed`);
+  }
+}
+
+/** What is described, what launchd has, and — for the desktop — whether it answers. */
+export function runAgentStatus(cfg: Config, profile: string): void {
+  const specs = agentsFor(cfg, profile);
+  if (!specs.length) return void out(`devbox: no client agents configured for "${profile}"`);
+  for (const spec of specs) {
+    const loaded = process.platform === "darwin" && isLoaded(spec.label);
+    out(`  ${loaded ? "●" : "○"} ${spec.label} — ${spec.description}`);
+    const forward = spec.argv[spec.argv.indexOf("-L") + 1];
+    if (spec.mode === "daemon" && forward) {
+      const port = forward.split(":")[1]!;
+      const answering = spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0;
+      out(`      127.0.0.1:${port} ${answering ? "answers" : "does NOT answer"}`);
+    }
+  }
 }
