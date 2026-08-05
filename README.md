@@ -66,6 +66,8 @@ memory
 - A hardened Ubuntu/Debian box: key-only SSH, UFW, Fail2Ban, Tailscale, swap.
 - **mise** managing a shared toolchain — Node, Python, bun, uv — available even to
   Claude's non-interactive Bash tool (no hand-maintained PATH).
+- **The GitHub CLI** (`gh`) from GitHub's own apt repo — PR and CI work is there for you
+  and the agent out of the box (`gh auth login` once). Off with `host.github_cli: false`.
 - **One Linux account per person**: private home, exact SSH key set, no sudo, no docker
   group, and `/proc` hidden so nobody sees anyone else's command lines.
 - **Per-developer resource slices** (systemd): a runaway build slows down the person who

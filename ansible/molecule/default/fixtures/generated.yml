@@ -21,6 +21,7 @@ devbox_host:
   harden_ssh: false
   # /proc is not remountable inside an unprivileged container.
   hide_pids: false
+  github_cli: true
   umask: "077"
 devbox_operator:
   user: devbox-admin

@@ -128,7 +128,7 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   if (h.swap_size !== undefined && !(typeof h.swap_size === "string" && /^\d+[KMGT]?$/.test(h.swap_size))) {
     issues.push(err("host.swap_size", "must be a size like '8G'"));
   }
-  for (const k of ["mosh", "eternal_terminal", "harden_ssh", "hide_pids"] as const) {
+  for (const k of ["mosh", "eternal_terminal", "harden_ssh", "hide_pids", "github_cli"] as const) {
     if (h[k] !== undefined && typeof h[k] !== "boolean") issues.push(err(`host.${k}`, "must be true or false"));
   }
   if (h.umask !== undefined && !(typeof h.umask === "string" && /^[0-7]{3,4}$/.test(h.umask))) {

@@ -39,6 +39,8 @@ export interface HostSpec {
   eternal_terminal?: boolean;
   harden_ssh?: boolean;
   hide_pids?: boolean;
+  /** GitHub CLI (`gh`) from GitHub's own apt repo. On unless turned off. */
+  github_cli?: boolean;
   umask?: string;
   /** Left at the kernel default when unset. */
   swappiness?: number;
