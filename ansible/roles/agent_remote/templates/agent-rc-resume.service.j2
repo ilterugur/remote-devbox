@@ -1,31 +1,32 @@
-{# Managed by Ansible (remote-devbox). Boot/recovery companion, one per (profile,
-   project). Pulled in via Wants= from agent-rc-<id>.service, so it runs each time
-   the Remote Control service (re)starts and resumes interrupted sessions. #}
-{% set ID = agent ~ '-' ~ item.0.user ~ '-' ~ item.1.project %}
+{# Managed by Ansible (remote-devbox). Boot/recovery companion, one per unit.
+   Triggered from the RC unit's ExecStartPost on every start, so it also runs on a
+   self-heal restart after an OOM, and resumes the sessions that were interrupted. #}
+{% set ID = row.agent ~ '-' ~ row.user ~ '-' ~ row.project %}
+{% set R = devbox_remote_control.resume %}
 [Unit]
-Description={{ agent }} boot-resume ({{ ID }})
+Description={{ row.agent }} boot-resume ({{ ID }})
 After=agent-rc-{{ ID }}.service
-{# Triggered from the RC unit's ExecStartPost (--no-block) on every start; After=
-   orders this to run once the RC start job completes. No Requisite= — the trigger
-   is best-effort and the orchestrator polls for the RC tmux session before acting,
-   so it degrades gracefully if RC isn't ready yet. #}
+{# No Requisite= — the trigger is best-effort and the orchestrator polls for the RC
+   tmux session before acting, so it degrades gracefully if RC isn't ready yet. #}
 
 [Service]
 Type=oneshot
-User={{ item.0.user }}
-Environment=HOME=/home/{{ item.0.user }}
-Environment=PATH=/home/{{ item.0.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=CLAUDE_RC_PROJECT_DIR=/home/{{ item.0.user }}/projects/{{ item.1.project }}
-Environment=CLAUDE_RC_AGENT={{ agent }}
-Environment="CLAUDE_RC_NAME={{ item.1.name | default(item.0.user ~ ' · ' ~ item.1.project) }}"
-Environment=RC_RESUME_LOOKBACK_H={{ rc_resume_lookback_h | default(12) }}
-Environment=RC_RESUME_MAX_CONCURRENT={{ rc_resume_max_concurrent | default(2) }}
-Environment=RC_RESUME_SETTLE_SEC={{ rc_resume_settle_sec | default(20) }}
-Environment=RC_RESUME_MAX_ATTEMPTS={{ rc_resume_max_attempts | default(3) }}
-Environment=RC_RESUME_MIN_FREE_MB={{ rc_resume_min_free_mb | default(1200) }}
+User={{ row.user }}
+{# Same slice as the RC unit it serves: a resume storm is the developer's own load. #}
+Slice=user-{{ ansible_facts.getent_passwd[row.user][1] }}.slice
+Environment=HOME=/home/{{ row.user }}
+Environment=PATH=/home/{{ row.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=CLAUDE_RC_PROJECT_DIR={{ row.project_dir }}
+Environment=CLAUDE_RC_AGENT={{ row.agent }}
+Environment="CLAUDE_RC_NAME={{ row.name }}"
+Environment=RC_RESUME_LOOKBACK_H={{ R.lookback_h }}
+Environment=RC_RESUME_MAX_CONCURRENT={{ R.max_concurrent }}
+Environment=RC_RESUME_SETTLE_SEC={{ R.settle_sec }}
+Environment=RC_RESUME_MAX_ATTEMPTS={{ R.max_attempts }}
+Environment=RC_RESUME_MIN_FREE_MB={{ R.min_free_mb }}
 ExecStart=/usr/local/bin/agent-rc-resume {{ ID }}
 {# Long-running: it staggers launches with settle waits. Cap it generously. #}
-TimeoutStartSec={{ rc_resume_timeout_sec | default(1800) }}
+TimeoutStartSec={{ R.timeout_sec }}
 
 [Install]
 WantedBy=multi-user.target
