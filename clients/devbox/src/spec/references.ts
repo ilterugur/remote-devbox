@@ -131,6 +131,15 @@ export function validateReferences(spec: DevboxSpec): Issue[] {
   });
 
   issues.push(...portIssues(claims));
+
+  // The fallback Chrome runs as a real account, under that account's home and display.
+  const chromeUser = spec.browser?.failover?.chrome_user;
+  if (chromeUser && !seenUsers.has(chromeUser)) {
+    issues.push(
+      err("browser.failover.chrome_user", `no developer named '${chromeUser}' — the fallback Chrome needs an account to run as`),
+    );
+  }
+
   return issues;
 }
 

@@ -87,6 +87,7 @@ export function validateStructure(raw: unknown): { spec: DevboxSpec | null; issu
   validateSharedServices(raw, issues);
   validateClients(raw, issues);
   validateRemoteControl(raw, issues);
+  validateBrowser(raw, issues);
   validateDevelopers(raw, issues);
 
   return { spec: hasErrors(issues) ? null : (raw as unknown as DevboxSpec), issues };
@@ -342,6 +343,10 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   }
 
   validateResources(d.resources, `${base}.resources`, issues);
+  if (d.browser !== undefined && typeof d.browser !== "boolean") {
+    issues.push(err(`${base}.browser`, "must be true or false"));
+  }
+  validateAgentConfig(d.agent_config, `${base}.agent_config`, issues);
   validateGitIdentities(d, base, issues);
   validateAgentProfiles(d, base, issues);
   validateMemory(d.memory, `${base}.memory`, issues);
@@ -817,4 +822,54 @@ function validateProjects(projects: unknown, base: string, issues: Issue[]): voi
     }
     validateProjectRemoteControl(p.remote_control, `${path}.remote_control`, issues);
   });
+}
+
+const isPort = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 65535;
+
+/**
+ * The failover endpoint runs a real Chrome under a real account. Legacy picked the
+ * first profile silently, which made "whose browser is this?" a question you answered
+ * by reading the generated config.
+ */
+function validateBrowser(raw: Record<string, unknown>, issues: Issue[]): void {
+  const b = raw.browser;
+  if (b === undefined) return;
+  if (!isRecord(b)) {
+    issues.push(err("browser", "must be a mapping"));
+    return;
+  }
+  if (b.enabled !== undefined && typeof b.enabled !== "boolean") {
+    issues.push(err("browser.enabled", "must be true or false"));
+  }
+  const f = b.failover;
+  if (f === undefined) return;
+  if (!isRecord(f)) {
+    issues.push(err("browser.failover", "must be a mapping"));
+    return;
+  }
+  if (f.enabled !== undefined && typeof f.enabled !== "boolean") {
+    issues.push(err("browser.failover.enabled", "must be true or false"));
+  }
+  if (f.enabled === true && !isNonEmptyString(f.chrome_user)) {
+    issues.push(err("browser.failover.chrome_user", "is required — name the developer whose account runs the fallback Chrome"));
+  }
+  for (const k of ["cdp_port", "fallback_chrome_port", "client_tunnel_port"] as const) {
+    if (f[k] !== undefined && !isPort(f[k])) {
+      issues.push(err(`browser.failover.${k}`, "must be an integer in 1..65535"));
+    }
+  }
+}
+
+function validateAgentConfig(raw: unknown, base: string, issues: Issue[]): void {
+  if (raw === undefined) return;
+  if (!isRecord(raw)) {
+    issues.push(err(base, "must be a mapping with a source"));
+    return;
+  }
+  if (!isNonEmptyString(raw.source)) {
+    issues.push(err(`${base}.source`, "is required — the client-side directory to copy from"));
+  }
+  if (raw.include_settings !== undefined && typeof raw.include_settings !== "boolean") {
+    issues.push(err(`${base}.include_settings`, "must be true or false"));
+  }
 }

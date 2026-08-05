@@ -152,3 +152,10 @@ test("a reserved port is an error", () => {
     msgs(spec([{ user: "dev-a", login_ssh_keys: [], projects: [{ name: "p", repo: "r", ports: [3389] }] }])),
   ).toContain("error:developers[0].projects[0].ports");
 });
+
+test("browser.failover.chrome_user must name a real developer", () => {
+  const withFailover = (chrome_user: string) =>
+    spec([{ user: "dev-a", login_ssh_keys: [] }], { browser: { failover: { enabled: true, chrome_user } } });
+  expect(msgs(withFailover("dev-a"))).toEqual([]);
+  expect(msgs(withFailover("nobody"))).toContain("error:browser.failover.chrome_user");
+});

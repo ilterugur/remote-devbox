@@ -266,6 +266,34 @@ export interface ProjectRemoteControlSpec {
   build_env?: Record<string, string>;
 }
 
+/** Chrome and the browser MCP servers. Chrome is installed once for the whole box. */
+export interface BrowserSpec {
+  enabled?: boolean;
+  failover?: BrowserFailoverSpec;
+}
+
+/**
+ * A shared CDP endpoint the MCP servers attach to instead of each launching their own
+ * headless Chrome: a reverse tunnel to the client's browser when it is online, a
+ * box-local Chrome when it is not.
+ */
+export interface BrowserFailoverSpec {
+  enabled?: boolean;
+  /** The developer whose account runs the box-local fallback Chrome. */
+  chrome_user?: string;
+  cdp_port?: number;
+  fallback_chrome_port?: number;
+  client_tunnel_port?: number;
+}
+
+/** A curated config tree on the client, copied into this developer's agent config. */
+export interface AgentConfigSpec {
+  /** Client-side path, absolute or relative to the repo root. */
+  source: string;
+  /** settings.json is machine-coupled, so it is left out unless asked for. */
+  include_settings?: boolean;
+}
+
 export interface ProjectSpec {
   name: string;
   repo: string;
@@ -295,6 +323,9 @@ export interface DeveloperSpec {
   desktop?: DesktopSpec;
   file_bridge?: FileBridgeSpec;
   app_configs?: AppConfigsSpec;
+  /** Wire the browser MCP servers into this developer's agent config. */
+  browser?: boolean;
+  agent_config?: AgentConfigSpec;
   projects?: ProjectSpec[];
 }
 
@@ -309,6 +340,7 @@ export interface DevboxSpec {
   network: NetworkSpec;
   container: ContainerSpec;
   remote_control?: RemoteControlSpec;
+  browser?: BrowserSpec;
   shared_services?: SharedServicesSpec;
   clients?: ClientsSpec;
   developers: DeveloperSpec[];

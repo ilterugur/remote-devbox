@@ -92,6 +92,17 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       // operator who has such a laptop on the team is the one who knows it.
       cli_targets: [...(resolved.clients?.cli_targets ?? DEFAULT_CLI_TARGETS)],
     },
+    devbox_browser: {
+      enabled: resolved.browser?.enabled ?? true,
+      failover: {
+        enabled: resolved.browser?.failover?.enabled ?? false,
+        // Named, never inferred: this account's Chrome is the one the endpoint serves.
+        chrome_user: resolved.browser?.failover?.chrome_user ?? null,
+        cdp_port: resolved.browser?.failover?.cdp_port ?? 9222,
+        fallback_chrome_port: resolved.browser?.failover?.fallback_chrome_port ?? 9422,
+        client_tunnel_port: resolved.browser?.failover?.client_tunnel_port ?? 9322,
+      },
+    },
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),
     devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client, clientPorts)),
@@ -213,6 +224,10 @@ function normalizeDeveloper(
         return "entry" in r ? [{ ...r.entry, excludes: [...r.entry.excludes], payload: payloadBasename(r.entry) }] : [];
       }),
     },
+    browser: dev.browser ?? false,
+    agent_config: dev.agent_config
+      ? { source: dev.agent_config.source, include_settings: dev.agent_config.include_settings ?? false }
+      : null,
     projects: dev.projects.map((p) => ({
       name: p.name,
       repo: p.repo,

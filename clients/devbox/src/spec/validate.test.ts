@@ -426,3 +426,36 @@ test("a project's remote_control.name must be a non-empty string", () => {
   const spec = withProject({ remote_control: { name: "" } });
   expect(paths(spec)).toContain("error:developers[0].projects[0].remote_control.name");
 });
+
+test("browser.failover names the account whose Chrome backs the endpoint", () => {
+  const on = { ...minimal(), browser: { failover: { enabled: true } } };
+  expect(paths(on)).toContain("error:browser.failover.chrome_user");
+  const named = { ...minimal(), browser: { failover: { enabled: true, chrome_user: "dev-a" } } };
+  expect(paths(named)).toEqual([]);
+});
+
+test("browser ports must be valid ports", () => {
+  const spec = { ...minimal(), browser: { failover: { enabled: true, chrome_user: "dev-a", cdp_port: 0 } } };
+  expect(paths(spec)).toContain("error:browser.failover.cdp_port");
+});
+
+test("a developer's browser opt-in is a boolean", () => {
+  expect(paths({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [KEY], browser: true }] })).toEqual([]);
+  expect(
+    paths({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [KEY], browser: "yes" }] }),
+  ).toContain("error:developers[0].browser");
+});
+
+test("a developer's agent_config needs a source", () => {
+  const withCfg = (agent_config: unknown) => ({
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], agent_config }],
+  });
+  expect(paths(withCfg({ source: "claude-config/shared" }))).toEqual([]);
+  expect(paths(withCfg({ source: "claude-config/shared", include_settings: true }))).toEqual([]);
+  expect(paths(withCfg({}))).toContain("error:developers[0].agent_config.source");
+  expect(paths(withCfg({ source: "x", include_settings: "yes" }))).toContain(
+    "error:developers[0].agent_config.include_settings",
+  );
+  expect(paths(withCfg("claude-config/shared"))).toContain("error:developers[0].agent_config");
+});
