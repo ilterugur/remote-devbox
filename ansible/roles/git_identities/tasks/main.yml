@@ -80,6 +80,9 @@
           StrictHostKeyChecking accept-new
   become: true
   become_user: "{{ item.user }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
 
 # This role used to own the whole file, so an already-provisioned box still carries an
 # unmarked copy of the stanza and would now list github.com twice. Matched verbatim
