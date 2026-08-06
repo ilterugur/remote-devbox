@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { die, hostFor, lazyMountsFor, type Config } from "./config";
+import { die, hostFor, lazyMountsFor, shQuote, type Config } from "./config";
 
 export type AgentMode = "daemon" | "interval";
 
@@ -32,6 +32,8 @@ export type AgentSpec = {
 /** The box always listens here; only the client side of the forward is configurable. */
 const BOX_RDP_PORT = 3389;
 const LEGACY_BROWSER_AGENT_LABELS = ["com.devbox.agent-chrome", "com.devbox.cdp-tunnel"] as const;
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BROWSER_READY_TIMEOUT_SECONDS = 15;
 
 /**
  * The original browser failover agents were global and could retain a reverse tunnel
@@ -42,6 +44,101 @@ export function legacyBrowserAgentLabelsFor(cfg: Config, profile: string): strin
   return cfg.profiles.find((p) => p.user === profile)?.browserFailover
     ? [...LEGACY_BROWSER_AGENT_LABELS]
     : [];
+}
+
+/**
+ * Chrome selects an unused local CDP port itself and writes it into DevToolsActivePort.
+ * Keep the reverse tunnel in this same supervisor: otherwise a surviving SSH process
+ * could forward some unrelated Chrome that happened to bind the old fixed port.
+ */
+function browserSupervisorScript(dataDir: string, clientTunnelPort: number, host: string): string {
+  return `set -eu
+umask 077
+data_dir=${shQuote(dataDir)}
+marker="$data_dir/DevToolsActivePort"
+chrome=${shQuote(CHROME)}
+ssh_host=${shQuote(host)}
+tunnel_port=${shQuote(String(clientTunnelPort))}
+chrome_pid=
+tunnel_pid=
+
+cleanup() {
+  trap - EXIT HUP INT TERM
+  if [ -n "$tunnel_pid" ]; then
+    kill "$tunnel_pid" 2>/dev/null || true
+    wait "$tunnel_pid" 2>/dev/null || true
+  fi
+  if [ -n "$chrome_pid" ]; then
+    kill "$chrome_pid" 2>/dev/null || true
+    wait "$chrome_pid" 2>/dev/null || true
+  fi
+}
+
+fail() {
+  printf '%s\\n' "$1" >&2
+  exit 1
+}
+
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+mkdir -p "$data_dir"
+chmod 700 "$data_dir"
+rm -f "$marker"
+
+"$chrome" \\
+  "--user-data-dir=$data_dir" \\
+  --remote-debugging-address=127.0.0.1 \\
+  --remote-debugging-port=0 \\
+  --no-first-run \\
+  --no-default-browser-check &
+chrome_pid=$!
+
+deadline=$(( $(date +%s) + ${BROWSER_READY_TIMEOUT_SECONDS} ))
+cdp_port=
+while :; do
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    fail "managed Chrome exited before CDP became ready"
+  fi
+  if [ -s "$marker" ]; then
+    cdp_port=$(sed -n '1p' "$marker")
+    case "$cdp_port" in
+      ''|*[!0-9]*) fail "invalid DevToolsActivePort" ;;
+    esac
+    if [ "$cdp_port" -lt 1 ] || [ "$cdp_port" -gt 65535 ]; then
+      fail "invalid DevToolsActivePort"
+    fi
+    break
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    fail "timed out waiting for DevToolsActivePort"
+  fi
+  sleep 0.1
+done
+
+if ! /usr/bin/curl --fail --silent --show-error --max-time 1 \\
+  "http://127.0.0.1:$cdp_port/json/version" >/dev/null; then
+  fail "managed Chrome CDP endpoint is not ready"
+fi
+
+/usr/bin/ssh -N \\
+  -o ExitOnForwardFailure=yes \\
+  -o ServerAliveInterval=15 \\
+  -o ServerAliveCountMax=3 \\
+  -R "127.0.0.1:$tunnel_port:127.0.0.1:$cdp_port" \\
+  "$ssh_host" &
+tunnel_pid=$!
+
+while :; do
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    fail "managed Chrome exited"
+  fi
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    fail "CDP reverse tunnel exited"
+  fi
+  sleep 1
+done
+`;
 }
 
 export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
@@ -83,31 +180,19 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
   }
 
   if (p.browserFailover) {
-    const { cdpPort, clientTunnelPort } = p.browserFailover;
+    const { clientTunnelPort } = p.browserFailover;
     out.push({
       label: `com.devbox.${profile}.browser`,
       mode: "daemon",
-      description: `isolated Chrome CDP: 127.0.0.1:${cdpPort}`,
+      description: `isolated Chrome with CDP reverse tunnel to ${host}:127.0.0.1:${clientTunnelPort}`,
       argv: [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        `--user-data-dir=${join(homedir(), ".local", "share", "devbox", "browser", profile)}`,
-        "--remote-debugging-address=127.0.0.1",
-        `--remote-debugging-port=${cdpPort}`,
-        "--no-first-run",
-        "--no-default-browser-check",
-      ],
-    });
-    out.push({
-      label: `com.devbox.${profile}.cdp-tunnel`,
-      mode: "daemon",
-      description: `CDP reverse tunnel: ${host}:127.0.0.1:${clientTunnelPort} -> 127.0.0.1:${cdpPort}`,
-      argv: [
-        "ssh", "-N",
-        "-o", "ExitOnForwardFailure=yes",
-        "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=3",
-        "-R", `127.0.0.1:${clientTunnelPort}:127.0.0.1:${cdpPort}`,
-        host,
+        "sh",
+        "-c",
+        browserSupervisorScript(
+          join(homedir(), ".local", "share", "devbox", "browser", profile),
+          clientTunnelPort,
+          host,
+        ),
       ],
     });
   }
@@ -340,9 +425,21 @@ export function runAgentUp(cfg: Config, profile: string): void {
 
 /** Remove this profile's agents — the described ones and any left over from a config
  *  that has since changed. */
+export function agentLabelsForDown(
+  cfg: Config,
+  profile: string,
+  installed: string[] = installedAgentLabels(profile),
+): string[] {
+  return [...new Set([
+    ...agentsFor(cfg, profile).map((spec) => spec.label),
+    ...installed,
+    ...legacyBrowserAgentLabelsFor(cfg, profile),
+  ])];
+}
+
 export function runAgentDown(cfg: Config, profile: string): void {
   requireMac();
-  const labels = new Set([...agentsFor(cfg, profile).map((s) => s.label), ...installedAgentLabels(profile)]);
+  const labels = new Set(agentLabelsForDown(cfg, profile));
   if (!labels.size) return void out(`devbox: no client agents installed for "${profile}"`);
   for (const label of labels) removeAgent(label, "");
 }

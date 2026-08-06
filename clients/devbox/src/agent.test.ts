@@ -91,29 +91,30 @@ describe("agentsFor", () => {
     expect(agentsFor(cfg({}), "ilterugur")).toEqual([]);
   });
 
-  test("a browser-failover profile gets isolated Chrome and reverse-tunnel daemons", () => {
+  test("a browser-failover profile gets one ownership-coupled Chrome supervisor", () => {
     const agents = agentsFor(
       cfg({ browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } }),
       "ilterugur",
     );
 
-    expect(agents).toHaveLength(2);
-    const browser = agents.find((agent) => agent.label === "com.devbox.ilterugur.browser")!;
+    expect(agents).toHaveLength(1);
+    const browser = agents[0]!;
+    expect(browser.label).toBe("com.devbox.ilterugur.browser");
     expect(browser.mode).toBe("daemon");
-    expect(browser.argv).toContain("--remote-debugging-address=127.0.0.1");
-    expect(browser.argv).toContain("--remote-debugging-port=9222");
-    expect(browser.argv.find((arg) => arg.startsWith("--user-data-dir="))).toContain("ilterugur");
-
-    const tunnel = agents.find((agent) => agent.label === "com.devbox.ilterugur.cdp-tunnel")!;
-    expect(tunnel.mode).toBe("daemon");
-    expect(tunnel.argv).toEqual([
-      "ssh", "-N",
-      "-o", "ExitOnForwardFailure=yes",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=3",
-      "-R", "127.0.0.1:9322:127.0.0.1:9222",
-      "devbox-ilterugur",
-    ]);
+    expect(browser.argv.slice(0, 2)).toEqual(["sh", "-c"]);
+    const script = browser.argv[2]!;
+    expect(script).toContain("--remote-debugging-address=127.0.0.1");
+    expect(script).toContain("--remote-debugging-port=0");
+    expect(script).not.toContain("9222");
+    expect(script).toContain('"--user-data-dir=$data_dir"');
+    expect(script).toContain("DevToolsActivePort");
+    expect(script.indexOf('rm -f "$marker"')).toBeLessThan(script.indexOf('"$chrome"'));
+    expect(script).toContain("/json/version");
+    expect(script).toContain('-R "127.0.0.1:$tunnel_port:127.0.0.1:$cdp_port"');
+    expect(script).toContain("devbox-ilterugur");
+    expect(script).toContain("trap cleanup EXIT");
+    expect(script).toContain('kill "$tunnel_pid"');
+    expect(script).toContain('kill "$chrome_pid"');
   });
 
   test("another profile gets no browser agents", () => {
@@ -152,6 +153,30 @@ describe("agentsFor", () => {
       "com.devbox.cdp-tunnel",
     ]);
     expect(legacyLabelsFor!(browserCfg, "other")).toEqual([]);
+  });
+
+  test("agent down includes legacy browser labels only for the matching owner", () => {
+    const labelsForDown = agentModule.agentLabelsForDown as
+      | ((cfg: Config, profile: string, installed?: string[]) => string[])
+      | undefined;
+    const browserCfg: Config = {
+      prefix: "devbox",
+      default: "ilterugur",
+      locale: "en_US.UTF-8",
+      launch: "",
+      profiles: [
+        { user: "ilterugur", projects: [], browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } },
+        { user: "other", projects: [] },
+      ],
+    };
+
+    expect(labelsForDown).toBeDefined();
+    expect(labelsForDown!(browserCfg, "ilterugur", [])).toEqual([
+      "com.devbox.ilterugur.browser",
+      "com.devbox.agent-chrome",
+      "com.devbox.cdp-tunnel",
+    ]);
+    expect(labelsForDown!(browserCfg, "other", [])).toEqual([]);
   });
 
   test("configured lazy mounts get a 60s reconciler", () => {
