@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as agentModule from "./agent";
@@ -53,6 +53,116 @@ esac
   } finally {
     process.env.PATH = originalPath;
   }
+}
+
+type RenderBrowserSupervisor = (opts: {
+  dataDir: string;
+  clientTunnelPort: number;
+  host: string;
+  chromePath?: string;
+  curlPath?: string;
+  sshPath?: string;
+  readyTimeoutSeconds?: number;
+  pollIntervalSeconds?: number;
+  monitorIntervalSeconds?: number;
+}) => string;
+
+type SupervisorFixture = {
+  chromePath: string;
+  curlPath: string;
+  sshPath: string;
+  dataDir: string;
+  events: string;
+  state: string;
+  markerPort: string;
+  chromePid: string;
+  sshPid: string;
+};
+
+function fakeExecutable(path: string, source: string): void {
+  writeFileSync(path, `#!/bin/sh\n${source}`);
+  chmodSync(path, 0o755);
+}
+
+function supervisorFixture(markerPort: string): SupervisorFixture {
+  const root = mkdtempSync(join(tmpdir(), "devbox-browser-supervisor-"));
+  const bin = join(root, "bin");
+  const state = join(root, "state");
+  const events = join(root, "events");
+  mkdirSync(bin);
+  mkdirSync(state);
+
+  const chromePath = join(bin, "chrome");
+  const curlPath = join(bin, "curl");
+  const sshPath = join(bin, "ssh");
+  fakeExecutable(chromePath, [
+    'for arg in "$@"; do',
+    '  case "$arg" in',
+    '    --user-data-dir=*) data_dir=${arg#--user-data-dir=} ;;',
+    '  esac',
+    'done',
+    'printf "%s\\n/devtools/browser/fake\\n" "$MARKER_PORT" > "$data_dir/DevToolsActivePort"',
+    'printf "%s\\n" "$$" > "$STATE/chrome.pid"',
+    'printf "%s\\n" "chrome $*" >> "$EVENTS"',
+    'trap \'printf "%s\\n" chrome-term >> "$EVENTS"; exit 0\' TERM INT HUP',
+    'while :; do sleep 0.01; done',
+  ].join("\n"));
+  fakeExecutable(curlPath, [
+    'printf "%s\\n" "curl $*" >> "$EVENTS"',
+    'exit 0',
+  ].join("\n"));
+  fakeExecutable(sshPath, [
+    'printf "%s\\n" "ssh $*" >> "$EVENTS"',
+    'printf "%s\\n" "$$" > "$STATE/ssh.pid"',
+    'trap \'printf "%s\\n" ssh-term >> "$EVENTS"; exit 0\' TERM INT HUP',
+    'while :; do sleep 0.01; done',
+  ].join("\n"));
+
+  return {
+    chromePath,
+    curlPath,
+    sshPath,
+    dataDir: join(root, "browser-profile"),
+    events,
+    state,
+    markerPort,
+    chromePid: join(state, "chrome.pid"),
+    sshPid: join(state, "ssh.pid"),
+  };
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 1_500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`condition did not become true within ${timeoutMs}ms`);
+}
+
+async function waitForExit(process: ReturnType<typeof Bun.spawn>, timeoutMs = 1_500): Promise<number> {
+  return await Promise.race([
+    process.exited,
+    new Promise<number>((_, reject) => setTimeout(() => reject(new Error("supervisor did not exit")), timeoutMs)),
+  ]);
+}
+
+function alive(pidFile: string): boolean {
+  if (!existsSync(pidFile)) return false;
+  try {
+    process.kill(Number(readFileSync(pidFile, "utf8").trim()), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startSupervisor(script: string, fixture: SupervisorFixture) {
+  return Bun.spawn(["/bin/sh", "-c", script], {
+    env: { ...process.env, EVENTS: fixture.events, MARKER_PORT: fixture.markerPort, STATE: fixture.state },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 describe("agentsFor", () => {
@@ -115,6 +225,90 @@ describe("agentsFor", () => {
     expect(script).toContain("trap cleanup EXIT");
     expect(script).toContain('kill "$tunnel_pid"');
     expect(script).toContain('kill "$chrome_pid"');
+  });
+
+  test("the browser supervisor forwards only its ready dynamic CDP and tears down both children", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    const first = supervisorFixture("49123");
+    const firstSupervisor = startSupervisor(renderSupervisor!({
+      dataDir: first.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: first.chromePath,
+      curlPath: first.curlPath,
+      sshPath: first.sshPath,
+      readyTimeoutSeconds: 3,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+    }), first);
+    try {
+      await waitFor(() => existsSync(first.sshPid));
+      const events = readFileSync(first.events, "utf8").trim().split("\n");
+      const chrome = events.findIndex((line) => line.startsWith("chrome "));
+      const curl = events.findIndex((line) => line.startsWith("curl "));
+      const ssh = events.findIndex((line) => line.startsWith("ssh "));
+      expect(events[chrome]).toContain("--remote-debugging-port=0");
+      expect(events[curl]).toContain("http://127.0.0.1:49123/json/version");
+      expect(events[ssh]).toContain("127.0.0.1:9322:127.0.0.1:49123");
+      expect(events.join("\n")).not.toContain("9222");
+      expect(chrome).toBeLessThan(curl);
+      expect(curl).toBeLessThan(ssh);
+
+      process.kill(firstSupervisor.pid, "SIGTERM");
+      await waitForExit(firstSupervisor);
+      await waitFor(() => !alive(first.chromePid) && !alive(first.sshPid));
+    } finally {
+      try { process.kill(firstSupervisor.pid, "SIGTERM"); } catch {}
+    }
+
+    const second = supervisorFixture("49124");
+    const secondSupervisor = startSupervisor(renderSupervisor!({
+      dataDir: second.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: second.chromePath,
+      curlPath: second.curlPath,
+      sshPath: second.sshPath,
+      readyTimeoutSeconds: 3,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+    }), second);
+    try {
+      await waitFor(() => existsSync(second.sshPid));
+      process.kill(Number(readFileSync(second.chromePid, "utf8").trim()), "SIGTERM");
+      await waitForExit(secondSupervisor);
+      await waitFor(() => !alive(second.chromePid) && !alive(second.sshPid));
+    } finally {
+      try { process.kill(secondSupervisor.pid, "SIGTERM"); } catch {}
+    }
+  });
+
+  test("an invalid DevToolsActivePort fails before the supervisor launches SSH", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    const fixture = supervisorFixture("not-a-port");
+    const supervisor = startSupervisor(renderSupervisor!({
+      dataDir: fixture.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: fixture.chromePath,
+      curlPath: fixture.curlPath,
+      sshPath: fixture.sshPath,
+      readyTimeoutSeconds: 3,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+    }), fixture);
+    try {
+      expect(await waitForExit(supervisor)).not.toBe(0);
+      expect(existsSync(fixture.sshPid)).toBe(false);
+      expect(existsSync(fixture.events) ? readFileSync(fixture.events, "utf8") : "").not.toContain("ssh ");
+      await waitFor(() => !alive(fixture.chromePid));
+    } finally {
+      try { process.kill(supervisor.pid, "SIGTERM"); } catch {}
+    }
   });
 
   test("another profile gets no browser agents", () => {

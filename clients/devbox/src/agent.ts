@@ -33,6 +33,8 @@ export type AgentSpec = {
 const BOX_RDP_PORT = 3389;
 const LEGACY_BROWSER_AGENT_LABELS = ["com.devbox.agent-chrome", "com.devbox.cdp-tunnel"] as const;
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CURL = "/usr/bin/curl";
+const SSH = "/usr/bin/ssh";
 const BROWSER_READY_TIMEOUT_SECONDS = 15;
 
 /**
@@ -49,16 +51,58 @@ export function legacyBrowserAgentLabelsFor(cfg: Config, profile: string): strin
 /**
  * Chrome selects an unused local CDP port itself and writes it into DevToolsActivePort.
  * Keep the reverse tunnel in this same supervisor: otherwise a surviving SSH process
- * could forward some unrelated Chrome that happened to bind the old fixed port.
+ * could forward some unrelated Chrome that happened to bind the old fixed port. The
+ * executable/timing options are intentionally narrow test seams; production callers
+ * use the absolute system paths and conservative defaults below.
  */
-function browserSupervisorScript(dataDir: string, clientTunnelPort: number, host: string): string {
+export type BrowserSupervisorOptions = {
+  dataDir: string;
+  clientTunnelPort: number;
+  host: string;
+  chromePath?: string;
+  curlPath?: string;
+  sshPath?: string;
+  readyTimeoutSeconds?: number;
+  pollIntervalSeconds?: number;
+  monitorIntervalSeconds?: number;
+};
+
+function absoluteExecutable(path: string, name: string): string {
+  if (!path.startsWith("/")) throw new Error(`${name} must be an absolute path`);
+  return path;
+}
+
+function boundedSeconds(value: number | undefined, fallback: number, name: string): string {
+  const seconds = value ?? fallback;
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 60)
+    throw new Error(`${name} must be a number in (0, 60]`);
+  return String(seconds);
+}
+
+export function renderBrowserSupervisor(opts: BrowserSupervisorOptions): string {
+  if (!opts.dataDir.startsWith("/")) throw new Error("browser data directory must be absolute");
+  if (!Number.isInteger(opts.clientTunnelPort) || opts.clientTunnelPort < 1 || opts.clientTunnelPort > 65_535)
+    throw new Error("browser client tunnel port must be an integer in 1..65535");
+  const chromePath = absoluteExecutable(opts.chromePath ?? CHROME, "Chrome path");
+  const curlPath = absoluteExecutable(opts.curlPath ?? CURL, "curl path");
+  const sshPath = absoluteExecutable(opts.sshPath ?? SSH, "ssh path");
+  const readyTimeoutSeconds = boundedSeconds(
+    opts.readyTimeoutSeconds,
+    BROWSER_READY_TIMEOUT_SECONDS,
+    "browser ready timeout",
+  );
+  const pollIntervalSeconds = boundedSeconds(opts.pollIntervalSeconds, 0.1, "browser marker poll interval");
+  const monitorIntervalSeconds = boundedSeconds(opts.monitorIntervalSeconds, 1, "browser monitor interval");
+
   return `set -eu
 umask 077
-data_dir=${shQuote(dataDir)}
+data_dir=${shQuote(opts.dataDir)}
 marker="$data_dir/DevToolsActivePort"
-chrome=${shQuote(CHROME)}
-ssh_host=${shQuote(host)}
-tunnel_port=${shQuote(String(clientTunnelPort))}
+chrome=${shQuote(chromePath)}
+curl=${shQuote(curlPath)}
+ssh=${shQuote(sshPath)}
+ssh_host=${shQuote(opts.host)}
+tunnel_port=${shQuote(String(opts.clientTunnelPort))}
 chrome_pid=
 tunnel_pid=
 
@@ -94,7 +138,7 @@ rm -f "$marker"
   --no-default-browser-check &
 chrome_pid=$!
 
-deadline=$(( $(date +%s) + ${BROWSER_READY_TIMEOUT_SECONDS} ))
+deadline=$(( $(date +%s) + ${readyTimeoutSeconds} ))
 cdp_port=
 while :; do
   if ! kill -0 "$chrome_pid" 2>/dev/null; then
@@ -113,15 +157,15 @@ while :; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
     fail "timed out waiting for DevToolsActivePort"
   fi
-  sleep 0.1
+  sleep ${pollIntervalSeconds}
 done
 
-if ! /usr/bin/curl --fail --silent --show-error --max-time 1 \\
+if ! "$curl" --fail --silent --show-error --max-time 1 \\
   "http://127.0.0.1:$cdp_port/json/version" >/dev/null; then
   fail "managed Chrome CDP endpoint is not ready"
 fi
 
-/usr/bin/ssh -N \\
+"$ssh" -N \\
   -o ExitOnForwardFailure=yes \\
   -o ServerAliveInterval=15 \\
   -o ServerAliveCountMax=3 \\
@@ -136,7 +180,7 @@ while :; do
   if ! kill -0 "$tunnel_pid" 2>/dev/null; then
     fail "CDP reverse tunnel exited"
   fi
-  sleep 1
+  sleep ${monitorIntervalSeconds}
 done
 `;
 }
@@ -188,11 +232,11 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
       argv: [
         "sh",
         "-c",
-        browserSupervisorScript(
-          join(homedir(), ".local", "share", "devbox", "browser", profile),
+        renderBrowserSupervisor({
+          dataDir: join(homedir(), ".local", "share", "devbox", "browser", profile),
           clientTunnelPort,
           host,
-        ),
+        }),
       ],
     });
   }
