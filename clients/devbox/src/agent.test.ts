@@ -79,6 +79,9 @@ type SupervisorFixture = {
   sshPid: string;
 };
 
+const SUPERVISOR_READY_TIMEOUT_SECONDS = 3;
+const BEHAVIORAL_FIXTURE_BUDGET_MS = 5_000;
+
 function fakeExecutable(path: string, source: string): void {
   writeFileSync(path, `#!/bin/sh\n${source}`);
   chmodSync(path, 0o755);
@@ -165,6 +168,19 @@ function startSupervisor(script: string, fixture: SupervisorFixture) {
   });
 }
 
+async function stopSupervisor(supervisor: ReturnType<typeof Bun.spawn>): Promise<void> {
+  try {
+    process.kill(supervisor.pid, "SIGTERM");
+  } catch {
+    // It may already have exited on the test's expected failure path.
+  }
+  try {
+    await waitForExit(supervisor, BEHAVIORAL_FIXTURE_BUDGET_MS);
+  } catch {
+    // Preserve the original assertion failure; the fixture still gets its termination signal.
+  }
+}
+
 describe("agentsFor", () => {
   test("a desktop profile gets a keep-alive ssh tunnel on its own port", () => {
     const [a, ...rest] = agentsFor(cfg({ desktop: { clientPort: 3390 } }), "ilterugur");
@@ -227,6 +243,10 @@ describe("agentsFor", () => {
     expect(script).toContain('kill "$chrome_pid"');
   });
 
+  test("the behavioral fixture budget outlives the supervisor ready window", () => {
+    expect(BEHAVIORAL_FIXTURE_BUDGET_MS).toBeGreaterThan(SUPERVISOR_READY_TIMEOUT_SECONDS * 1_000);
+  });
+
   test("the browser supervisor forwards only its ready dynamic CDP and tears down both children", async () => {
     const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
     expect(renderSupervisor).toBeDefined();
@@ -239,12 +259,12 @@ describe("agentsFor", () => {
       chromePath: first.chromePath,
       curlPath: first.curlPath,
       sshPath: first.sshPath,
-      readyTimeoutSeconds: 3,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
       pollIntervalSeconds: 0.01,
       monitorIntervalSeconds: 0.01,
     }), first);
     try {
-      await waitFor(() => existsSync(first.sshPid));
+      await waitFor(() => existsSync(first.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
       const events = readFileSync(first.events, "utf8").trim().split("\n");
       const chrome = events.findIndex((line) => line.startsWith("chrome "));
       const curl = events.findIndex((line) => line.startsWith("curl "));
@@ -257,10 +277,10 @@ describe("agentsFor", () => {
       expect(curl).toBeLessThan(ssh);
 
       process.kill(firstSupervisor.pid, "SIGTERM");
-      await waitForExit(firstSupervisor);
-      await waitFor(() => !alive(first.chromePid) && !alive(first.sshPid));
+      await waitForExit(firstSupervisor, BEHAVIORAL_FIXTURE_BUDGET_MS);
+      await waitFor(() => !alive(first.chromePid) && !alive(first.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
     } finally {
-      try { process.kill(firstSupervisor.pid, "SIGTERM"); } catch {}
+      await stopSupervisor(firstSupervisor);
     }
 
     const second = supervisorFixture("49124");
@@ -271,17 +291,17 @@ describe("agentsFor", () => {
       chromePath: second.chromePath,
       curlPath: second.curlPath,
       sshPath: second.sshPath,
-      readyTimeoutSeconds: 3,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
       pollIntervalSeconds: 0.01,
       monitorIntervalSeconds: 0.01,
     }), second);
     try {
-      await waitFor(() => existsSync(second.sshPid));
+      await waitFor(() => existsSync(second.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
       process.kill(Number(readFileSync(second.chromePid, "utf8").trim()), "SIGTERM");
-      await waitForExit(secondSupervisor);
-      await waitFor(() => !alive(second.chromePid) && !alive(second.sshPid));
+      await waitForExit(secondSupervisor, BEHAVIORAL_FIXTURE_BUDGET_MS);
+      await waitFor(() => !alive(second.chromePid) && !alive(second.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
     } finally {
-      try { process.kill(secondSupervisor.pid, "SIGTERM"); } catch {}
+      await stopSupervisor(secondSupervisor);
     }
   });
 
@@ -297,17 +317,17 @@ describe("agentsFor", () => {
       chromePath: fixture.chromePath,
       curlPath: fixture.curlPath,
       sshPath: fixture.sshPath,
-      readyTimeoutSeconds: 3,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
       pollIntervalSeconds: 0.01,
       monitorIntervalSeconds: 0.01,
     }), fixture);
     try {
-      expect(await waitForExit(supervisor)).not.toBe(0);
+      expect(await waitForExit(supervisor, BEHAVIORAL_FIXTURE_BUDGET_MS)).not.toBe(0);
       expect(existsSync(fixture.sshPid)).toBe(false);
       expect(existsSync(fixture.events) ? readFileSync(fixture.events, "utf8") : "").not.toContain("ssh ");
-      await waitFor(() => !alive(fixture.chromePid));
+      await waitFor(() => !alive(fixture.chromePid), BEHAVIORAL_FIXTURE_BUDGET_MS);
     } finally {
-      try { process.kill(supervisor.pid, "SIGTERM"); } catch {}
+      await stopSupervisor(supervisor);
     }
   });
 
