@@ -78,6 +78,25 @@ shared_services:
   enabled: false
   engine: system-docker
 
+# ── Server-side browser ───────────────────────────────────────────────────────
+# Headless Chrome plus two MCP servers (Playwright to drive it, Chrome DevTools for
+# traces and throttling) in the agent config of every developer that opts in below.
+# This is NOT the client-side "Claude in Chrome" extension.
+#
+# failover: instead of each MCP launching its own headless Chrome, both attach to one
+# CDP endpoint — the client's real browser through a reverse tunnel while it is
+# online, and a box-local Chrome when it is not. chrome_user names the account that
+# box-local Chrome runs as; it is required, because "whichever developer came first"
+# is not something anyone should have to read the generated config to discover.
+# browser:
+#   enabled: true
+#   failover:
+#     enabled: false
+#     chrome_user: dev-a
+#     cdp_port: 9222
+#     fallback_chrome_port: 9422
+#     client_tunnel_port: 9322
+
 # ── Always-on Remote Control servers ──────────────────────────────────────────
 # One per project: a tmux-hosted agent session your phone attaches to. Every project
 # gets one unless it says otherwise — `remote_control: false` on a project turns that
@@ -228,6 +247,18 @@ developers:
     #       client: "~/Library/DBeaverData/workspace6/General/.dbeaver"
     #       box: "~/.local/share/DBeaverData/workspace6/General/.dbeaver"
     #       mode: dir
+
+    # A curated config tree on this client — skills, commands, mcp.json, statusline —
+    # copied into this developer's agent config. Per developer on purpose: one shared
+    # tree for everyone meant one person's personal skills landed in a colleague's
+    # account. Credentials are never copied, and settings.json is machine-coupled, so
+    # it stays out unless include_settings says otherwise.
+    # agent_config:
+    #   source: "claude-config/shared"   # absolute, ~-relative, or repo-relative
+    #   include_settings: false
+
+    # Wire the browser MCP servers into this developer's agent config.
+    # browser: true
 
     projects:
       # Inherits every default: git=work, agent=claude-work, memory=shared,

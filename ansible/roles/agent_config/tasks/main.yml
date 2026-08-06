@@ -1,19 +1,48 @@
 ---
-- name: Check for a curated shared-config source on the client
+# Each developer names their own curated config tree on the client
+# (developers[].agent_config.source). It is pushed to /opt/remote-shared/<user> and
+# fanned into that developer's ~/.claude — skills, commands, mcp.json, statusline.
+# Credentials and identity files are never copied, and settings.json only on request:
+# it is machine-coupled, so sharing it moves one machine's hooks onto another.
+#
+# Per developer on purpose. One shared tree for everyone meant one person's personal
+# skills landed in a colleague's account, under their agent's name.
+
+# A source may be absolute, ~-relative, or relative to the repo root. Resolve all
+# three to one absolute client path up front, so every later task stats and copies
+# the same thing no matter where ansible-playbook was invoked from.
+- name: Resolve each curated source to an absolute client path
+  ansible.builtin.set_fact:
+    agent_config_devs: >-
+      {{ agent_config_devs | default([])
+         + [item | combine({'source_abs':
+              (item.agent_config.source | expanduser) if item.agent_config.source is match('^[/~]')
+              else (playbook_dir ~ '/../' ~ item.agent_config.source)})] }}
+  loop: "{{ devbox_developers | selectattr('agent_config') | list }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Check each curated source on the client
   ansible.builtin.stat:
-    path: "{{ claude_config_src }}"
+    path: "{{ item.source_abs }}"
   delegate_to: localhost
   become: false
-  register: cfg_src
+  loop: "{{ agent_config_devs }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: agent_config_src
 
-- name: Note when there is nothing to sync
+- name: Warn about a curated source that is not there
   ansible.builtin.debug:
     msg: >-
-      sync_claude_config is on but {{ claude_config_src }} doesn't exist yet —
-      run scripts/bundle-local-config.sh first. Skipping config sync.
-  when: sync_claude_config | bool and not (cfg_src.stat.exists | default(false))
+      {{ item.item.user }}: {{ item.item.source_abs }} does not exist on the
+      client — nothing to sync. Create it, or drop agent_config for this developer.
+  loop: "{{ agent_config_src.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+  when: not (item.stat.isdir | default(false))
 
-- name: Ensure shared config dir + the devbox share dir exist
+- name: Ensure the shared config root + the devbox share dir exist
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -23,7 +52,7 @@
   loop:
     - /opt/remote-shared
     - /usr/local/share/remote-devbox
-  when: sync_claude_config | bool
+  when: agent_config_devs | default([]) | length > 0
 
 - name: Deploy the shared exclude list
   ansible.builtin.copy:
@@ -32,32 +61,39 @@
     owner: root
     group: root
     mode: "0644"
-  when: sync_claude_config | bool
+  when: agent_config_devs | default([]) | length > 0
 
-- name: Push curated config (client -> box)
-  ansible.posix.synchronize:
-    src: "{{ claude_config_src }}/"
-    dest: /opt/remote-shared/
-    archive: true
-    delete: false
-    rsync_opts:
-      - "--exclude-from={{ role_path }}/files/sync-excludes.txt"
-  when: sync_claude_config | bool and (cfg_src.stat.isdir | default(false))
-
-- name: Deploy config-apply helper
+- name: Deploy the config-apply helper
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../scripts/remote-config-apply.sh"
     dest: /usr/local/bin/remote-config-apply
     owner: root
     group: root
     mode: "0755"
-  when: sync_claude_config | bool
+  when: agent_config_devs | default([]) | length > 0
 
-- name: Fan shared config into each profile (never touches credentials/identity)
+# One directory per developer, so the fan-out step can never read the wrong tree.
+- name: Push each developer's curated config (client -> box)
+  ansible.posix.synchronize:
+    src: "{{ item.item.source_abs }}/"
+    dest: "/opt/remote-shared/{{ item.item.user }}/"
+    archive: true
+    delete: false
+    rsync_opts:
+      - "--exclude-from={{ role_path }}/files/sync-excludes.txt"
+  loop: "{{ agent_config_src.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+  when: item.stat.isdir | default(false)
+
+- name: Fan the curated config into each developer's agent config
   ansible.builtin.command:
     cmd: >-
       /usr/local/bin/remote-config-apply
-      {{ '--with-settings' if claude_sync_settings | bool else '' }}
-      {{ profiles | map(attribute='user') | join(' ') }}
-  when: sync_claude_config | bool and cfg_src.stat.exists | default(false)
+      {{ '--with-settings' if item.item.agent_config.include_settings else '' }}
+      {{ item.item.user }}
+  loop: "{{ agent_config_src.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+  when: item.stat.isdir | default(false)
   changed_when: true

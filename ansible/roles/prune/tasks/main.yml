@@ -1,5 +1,5 @@
 ---
-# Declarative cleanup of things removed from `profiles`. OPT-IN — only runs via
+# Declarative cleanup of things removed from devbox.yml. OPT-IN — only runs via
 #   ansible-playbook playbook.yml --tags prune
 #
 # Scope: it ONLY ever touches remote-devbox's OWN resources —
@@ -19,28 +19,19 @@
     patterns: "agent-rc-*.service"
   register: existing_units
 
-# ── Flatten (profile, project) × the profile's agents, mirroring the rc_matrix
-#    built in ansible/roles/agent_remote/tasks/_matrix.yml, so the expected-keep
-#    set matches exactly what agent_remote generates: agent-rc-<agent>-<user>-
-#    <project>.service and its agent-rc-resume-<agent>-... companion.
-- name: Flatten (profile, project) pairs with each profile's resolved agent list
-  ansible.builtin.set_fact:
-    rc_pairs: >-
-      {{ rc_pairs | default([])
-         + [{'user': item.0.user, 'project': item.1.project, 'agents': item.0.agents | default(['claude'])}] }}
-  loop: "{{ profiles | subelements('servers', skip_missing=True) }}"
-  loop_control:
-    label: "{{ item.0.user }}-{{ item.1.project }}"
-
-- name: Compute the set of declared unit names (main + resume companion per agent)
+# devbox_rc_units is already the flat, fully-resolved list agent_remote generates its
+# units from, so the keep-set comes from that same source instead of a parallel
+# flattening that could drift out of step with it.
+- name: Compute the set of declared unit names (main + resume companion)
   ansible.builtin.set_fact:
     declared_units: >-
       {{ declared_units | default([])
-         + ['agent-rc-' + item.1 + '-' + item.0.user + '-' + item.0.project + '.service']
-         + ['agent-rc-resume-' + item.1 + '-' + item.0.user + '-' + item.0.project + '.service'] }}
-  loop: "{{ rc_pairs | default([]) | subelements('agents') }}"
+         + ['agent-rc-' ~ row.agent ~ '-' ~ row.user ~ '-' ~ row.project ~ '.service']
+         + ['agent-rc-resume-' ~ row.agent ~ '-' ~ row.user ~ '-' ~ row.project ~ '.service'] }}
+  loop: "{{ devbox_rc_units }}"
   loop_control:
-    label: "{{ item.0.user }}-{{ item.0.project }}-{{ item.1 }}"
+    loop_var: row
+    label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
 
 - name: Determine orphaned services
   ansible.builtin.set_fact:
@@ -53,9 +44,9 @@
         or existing_units.files | length == 0
         or (prune_force_empty | default(false) | bool)
     fail_msg: >-
-      No servers are declared in `profiles`, but {{ existing_units.files | length }}
-      agent-rc service(s) exist — refusing to remove them all (looks like a dropped
-      `servers:`). If you truly mean to remove every service, pass
+      No Remote Control servers are declared, but {{ existing_units.files | length }}
+      agent-rc service(s) exist — refusing to remove them all (that looks like a
+      dropped projects: list, not an intent). To really remove every service, pass
       -e prune_force_empty=true.
 
 - name: Find remote-devbox-managed profile users (marker — ours only)
@@ -72,7 +63,7 @@
   ansible.builtin.set_fact:
     orphan_users: >-
       {{ managed_markers.files | map(attribute='path') | map('dirname') | map('basename')
-         | difference(profiles | map(attribute='user') | list) }}
+         | difference(devbox_developers | map(attribute='user') | list) }}
   when: prune_removed_users | default(false) | bool
 
 - name: Anything to do?
@@ -81,7 +72,7 @@
 
 - name: Nothing orphaned
   ansible.builtin.debug:
-    msg: "Nothing to prune — everything on the box matches your profiles."
+    msg: "Nothing to prune — everything on the box matches devbox.yml."
   when: not prune_has_work
 
 # ── Confirm before removing anything ──────────────────────────────────────────

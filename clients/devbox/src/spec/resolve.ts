@@ -151,6 +151,7 @@ export function resolveRemoteControl(
 
   return {
     agent: provider,
+    agent_profile: agentProfile,
     name: override?.name ?? `${dev.user} · ${project.name}`,
     spawn: override?.spawn ?? box.spawn ?? RC_DEFAULTS.spawn,
     capacity: override?.capacity ?? box.capacity ?? RC_DEFAULTS.capacity,

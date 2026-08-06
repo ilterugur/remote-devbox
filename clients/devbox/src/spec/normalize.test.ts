@@ -45,6 +45,7 @@ const rcResolved = (): ResolvedSpec => ({
           ...resolved.developers[0]!.projects[0]!,
           remote_control: {
             agent: "claude",
+            agent_profile: "claude-main",
             name: "dev-a · p",
             spawn: "worktree",
             capacity: 4,
@@ -88,6 +89,7 @@ test("rc units are a flat list across developers and projects", () => {
     user: "dev-a",
     project: "p",
     agent: "claude",
+    agent_profile: "claude-main",
     name: "dev-a · p",
     spawn: "worktree",
     capacity: 4,
@@ -266,4 +268,30 @@ test("swappiness is null when unset, so the role leaves the kernel default alone
   expect((normalize(resolved).devbox_host as any).swappiness).toBeNull();
   const tuned: ResolvedSpec = { ...resolved, host: { swappiness: 10 } };
   expect((normalize(tuned).devbox_host as any).swappiness).toBe(10);
+});
+
+test("browser defaults are concrete, and failover is off until asked for", () => {
+  const b = normalize(resolved).devbox_browser as Record<string, unknown>;
+  expect(b.enabled).toBe(true);
+  expect(b.failover).toEqual({
+    enabled: false,
+    chrome_user: null,
+    cdp_port: 9222,
+    fallback_chrome_port: 9422,
+    client_tunnel_port: 9322,
+  });
+});
+
+test("a developer's browser opt-in and agent_config are concrete", () => {
+  const dev = dev0();
+  expect(dev.browser).toBe(false);
+  expect(dev.agent_config).toBeNull();
+
+  const opted: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, browser: true, agent_config: { source: "claude-config/shared" } }],
+  };
+  const d = (normalize(opted).devbox_developers as Record<string, unknown>[])[0]!;
+  expect(d.browser).toBe(true);
+  expect(d.agent_config).toEqual({ source: "claude-config/shared", include_settings: false });
 });

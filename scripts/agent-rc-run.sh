@@ -16,6 +16,15 @@ ADAPTER="/usr/local/share/agent-devbox/adapters/${AGENT}.sh"
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/${AGENT_CFG_DEFAULT}}"
 DIR="${CLAUDE_RC_PROJECT_DIR:?CLAUDE_RC_PROJECT_DIR not set}"
+
+# An interactive session gets its memory wiring from the profile launcher, which this
+# service does not go through — it execs the agent binary directly. Source the same
+# file here, or a Remote Control session runs with memory silently switched off.
+PROFILE="${CLAUDE_RC_AGENT_PROFILE:-}"
+if [ -n "${PROFILE}" ] && [ -r "${HOME}/.agent-profiles/${PROFILE}/memory.env" ]; then
+  # shellcheck disable=SC1090
+  . "${HOME}/.agent-profiles/${PROFILE}/memory.env"
+fi
 NAME="${CLAUDE_RC_NAME:-${AGENT}}"
 SPAWN="${CLAUDE_RC_SPAWN:-worktree}"
 CAPACITY="${CLAUDE_RC_CAPACITY:-4}"

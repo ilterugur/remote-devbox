@@ -13,7 +13,7 @@ defaults
     timeout check 2s
 
 frontend cdp_front
-    bind 127.0.0.1:{{ browser_cdp_port }}
+    bind 127.0.0.1:{{ devbox_browser.failover.cdp_port }}
     default_backend cdp_pool
 
 backend cdp_pool
@@ -21,5 +21,5 @@ backend cdp_pool
     http-check send meth GET uri /json/version ver HTTP/1.1 hdr Host 127.0.0.1
     http-check expect status 200
     default-server inter 2s fall 2 rise 1
-    server client 127.0.0.1:{{ browser_client_tunnel_port }} check
-    server local  127.0.0.1:{{ browser_fallback_chrome_port }} check backup
+    server client 127.0.0.1:{{ devbox_browser.failover.client_tunnel_port }} check
+    server local  127.0.0.1:{{ devbox_browser.failover.fallback_chrome_port }} check backup

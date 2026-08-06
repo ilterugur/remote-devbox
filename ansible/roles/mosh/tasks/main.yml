@@ -43,7 +43,6 @@
   # community.general.ufw only adds rules — toggling tailscale_enabled false→true
   # doesn't remove the old public (no-interface) allow rule, so the UDP range would
   # stay reachable from the public internet even after "re-scoping" to tailscale0.
-  # Mirrors the legacy-cleanup idiom in roles/hindsight/tasks/main.yml.
   community.general.ufw:
     rule: allow
     direction: in

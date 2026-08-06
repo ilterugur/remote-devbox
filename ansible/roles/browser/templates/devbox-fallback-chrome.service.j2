@@ -1,13 +1,13 @@
 [Unit]
-Description=devbox fallback headless Chrome (CDP 127.0.0.1:{{ browser_fallback_chrome_port }})
+Description=devbox fallback headless Chrome (CDP 127.0.0.1:{{ devbox_browser.failover.fallback_chrome_port }})
 After=network.target
 
 [Service]
 Type=simple
-User={{ browser_failover_chrome_user }}
-Group={{ browser_failover_chrome_user }}
-Environment=HOME=/home/{{ browser_failover_chrome_user }}
-ExecStart=/usr/bin/google-chrome --headless=new --remote-debugging-port={{ browser_fallback_chrome_port }} --remote-debugging-address=127.0.0.1 --remote-allow-origins=* --user-data-dir=/home/{{ browser_failover_chrome_user }}/.cache/devbox-fallback-chrome --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --window-size=1440,900
+User={{ devbox_browser.failover.chrome_user }}
+Group={{ devbox_browser.failover.chrome_user }}
+Environment=HOME=/home/{{ devbox_browser.failover.chrome_user }}
+ExecStart=/usr/bin/google-chrome --headless=new --remote-debugging-port={{ devbox_browser.failover.fallback_chrome_port }} --remote-debugging-address=127.0.0.1 --remote-allow-origins=* --user-data-dir=/home/{{ devbox_browser.failover.chrome_user }}/.cache/devbox-fallback-chrome --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --window-size=1440,900
 Restart=always
 RestartSec=5
 

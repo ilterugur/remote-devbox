@@ -11,6 +11,8 @@ ansible/.generated/
 
 # Ansible
 *.retry
+# Retired legacy config kept locally for reference; may still hold secrets.
+*.retired
 .vault_pass
 *.vault
 
