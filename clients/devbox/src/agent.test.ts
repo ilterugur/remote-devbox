@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as agentModule from "./agent";
 import {
   agentEnv,
   agentsFor,
@@ -88,6 +89,69 @@ describe("agentsFor", () => {
 
   test("no desktop, no tunnel", () => {
     expect(agentsFor(cfg({}), "ilterugur")).toEqual([]);
+  });
+
+  test("a browser-failover profile gets isolated Chrome and reverse-tunnel daemons", () => {
+    const agents = agentsFor(
+      cfg({ browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } }),
+      "ilterugur",
+    );
+
+    expect(agents).toHaveLength(2);
+    const browser = agents.find((agent) => agent.label === "com.devbox.ilterugur.browser")!;
+    expect(browser.mode).toBe("daemon");
+    expect(browser.argv).toContain("--remote-debugging-address=127.0.0.1");
+    expect(browser.argv).toContain("--remote-debugging-port=9222");
+    expect(browser.argv.find((arg) => arg.startsWith("--user-data-dir="))).toContain("ilterugur");
+
+    const tunnel = agents.find((agent) => agent.label === "com.devbox.ilterugur.cdp-tunnel")!;
+    expect(tunnel.mode).toBe("daemon");
+    expect(tunnel.argv).toEqual([
+      "ssh", "-N",
+      "-o", "ExitOnForwardFailure=yes",
+      "-o", "ServerAliveInterval=15",
+      "-o", "ServerAliveCountMax=3",
+      "-R", "127.0.0.1:9322:127.0.0.1:9222",
+      "devbox-ilterugur",
+    ]);
+  });
+
+  test("another profile gets no browser agents", () => {
+    const browserCfg: Config = {
+      prefix: "devbox",
+      default: "ilterugur",
+      locale: "en_US.UTF-8",
+      launch: "",
+      profiles: [
+        { user: "ilterugur", projects: [], browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } },
+        { user: "other", projects: [] },
+      ],
+    };
+
+    expect(agentsFor(browserCfg, "other")).toEqual([]);
+  });
+
+  test("only the configured browser-failover owner reconciles legacy global browser agents", () => {
+    const legacyLabelsFor = agentModule.legacyBrowserAgentLabelsFor as
+      | ((cfg: Config, profile: string) => string[])
+      | undefined;
+    const browserCfg: Config = {
+      prefix: "devbox",
+      default: "ilterugur",
+      locale: "en_US.UTF-8",
+      launch: "",
+      profiles: [
+        { user: "ilterugur", projects: [], browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } },
+        { user: "other", projects: [] },
+      ],
+    };
+
+    expect(legacyLabelsFor).toBeDefined();
+    expect(legacyLabelsFor!(browserCfg, "ilterugur")).toEqual([
+      "com.devbox.agent-chrome",
+      "com.devbox.cdp-tunnel",
+    ]);
+    expect(legacyLabelsFor!(browserCfg, "other")).toEqual([]);
   });
 
   test("configured lazy mounts get a 60s reconciler", () => {

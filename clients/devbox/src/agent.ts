@@ -31,6 +31,18 @@ export type AgentSpec = {
 
 /** The box always listens here; only the client side of the forward is configurable. */
 const BOX_RDP_PORT = 3389;
+const LEGACY_BROWSER_AGENT_LABELS = ["com.devbox.agent-chrome", "com.devbox.cdp-tunnel"] as const;
+
+/**
+ * The original browser failover agents were global and could retain a reverse tunnel
+ * owned by a different local account. Reconcile them only for the profile that is
+ * explicitly configured to own browser failover.
+ */
+export function legacyBrowserAgentLabelsFor(cfg: Config, profile: string): string[] {
+  return cfg.profiles.find((p) => p.user === profile)?.browserFailover
+    ? [...LEGACY_BROWSER_AGENT_LABELS]
+    : [];
+}
 
 export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
   const p = cfg.profiles.find((x) => x.user === profile);
@@ -65,6 +77,36 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=3",
         "-L", `127.0.0.1:${port}:127.0.0.1:${BOX_RDP_PORT}`,
+        host,
+      ],
+    });
+  }
+
+  if (p.browserFailover) {
+    const { cdpPort, clientTunnelPort } = p.browserFailover;
+    out.push({
+      label: `com.devbox.${profile}.browser`,
+      mode: "daemon",
+      description: `isolated Chrome CDP: 127.0.0.1:${cdpPort}`,
+      argv: [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        `--user-data-dir=${join(homedir(), ".local", "share", "devbox", "browser", profile)}`,
+        "--remote-debugging-address=127.0.0.1",
+        `--remote-debugging-port=${cdpPort}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+      ],
+    });
+    out.push({
+      label: `com.devbox.${profile}.cdp-tunnel`,
+      mode: "daemon",
+      description: `CDP reverse tunnel: ${host}:127.0.0.1:${clientTunnelPort} -> 127.0.0.1:${cdpPort}`,
+      argv: [
+        "ssh", "-N",
+        "-o", "ExitOnForwardFailure=yes",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+        "-R", `127.0.0.1:${clientTunnelPort}:127.0.0.1:${cdpPort}`,
         host,
       ],
     });
@@ -251,6 +293,11 @@ function removeAgent(label: string, why: string): void {
  *  it should not. Idempotent. */
 export function runAgentUp(cfg: Config, profile: string): void {
   requireMac();
+  // Do this before the new reverse tunnel is bootstrapped: the stale global tunnel may
+  // still own the remote port and would make ExitOnForwardFailure reject the new agent.
+  for (const label of legacyBrowserAgentLabelsFor(cfg, profile))
+    removeAgent(label, " (replaced by profile-scoped browser failover)");
+
   const specs = agentsFor(cfg, profile);
   const logDir = logDirFor();
   if (specs.length && !isDry()) mkdirSync(logDir, { recursive: true });
