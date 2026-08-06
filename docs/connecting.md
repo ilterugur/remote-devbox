@@ -160,7 +160,19 @@ devbox apply browser
 This also publishes the current client CLI: the `box_cli` Ansible role is tagged
 `always`, so it runs with the browser phase.
 
-On that named client's machine, start and inspect the profile-scoped lifecycle:
+On that named client's machine, fetch the generated installer through the profile SSH
+alias into a local temporary file. Inspect it before running it; do **not** pipe a remote
+command directly to a shell. The installer refreshes both the client binary and the
+client configuration that carries the browser-failover owner slice.
+
+```bash
+installer=$(mktemp "${TMPDIR:-/tmp}/devbox-installer.XXXXXX")
+ssh devbox-<chrome_user> 'devbox client-config --installer' > "$installer"
+less "$installer"                         # inspect before execution
+sh "$installer"                           # refresh the binary and client config
+```
+
+Only after that refresh, start and inspect the profile-scoped lifecycle:
 
 ```bash
 devbox agent up -p <chrome_user>       # isolated local Chrome plus reverse CDP tunnel
@@ -183,8 +195,7 @@ Client-side services are launchd agents written by
 | --- | --- |
 | `com.devbox.<user>.desktop` | holds the RDP tunnel open — `127.0.0.1:<client_port>` → the box's 3389 |
 | `com.devbox.<user>.mount` | re-runs `devbox mount up` every 60s, so the `mnt` bridge survives sleep and wake |
-| `com.devbox.<user>.browser` | isolated local Chrome, with CDP bound to `127.0.0.1` |
-| `com.devbox.<user>.cdp-tunnel` | reverse CDP tunnel for the configured browser-failover owner |
+| `com.devbox.<user>.browser` | ownership-coupled browser supervisor: starts the isolated Chrome, validates its loopback CDP, and holds the reverse tunnel only while that Chrome runs |
 
 ```bash
 devbox agent status   # what is described, what launchd has loaded, what the local port does
@@ -194,8 +205,8 @@ devbox agent down     # remove them
 
 Each agent appears only when its profile asks for it: the desktop one for a developer with
 `desktop.enabled`, the mount one for a developer with `file_bridge.lazy_mounts`, and the
-browser pair only for the named `browser.failover.chrome_user`. A profile with none gets
-nothing, and `devbox agent up` says so rather than writing an empty agent.
+browser supervisor only for the named `browser.failover.chrome_user`. A profile with none
+gets nothing, and `devbox agent up` says so rather than writing an empty agent.
 
 Logs are in `~/.local/state/devbox/<label>.log`. Neither agent is required — they are
 what makes a saved RDP entry and a mounted path keep working without you thinking about
