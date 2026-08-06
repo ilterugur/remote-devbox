@@ -154,7 +154,8 @@ one real developer, then have the operator provision both the endpoint and the c
 client binary:
 
 ```bash
-devbox apply browser,cli
+devbox apply browser
+devbox apply cli
 ```
 
 On that named client's machine, start and inspect the profile-scoped lifecycle:

@@ -90,8 +90,8 @@ shared_services:
 # is not something anyone should have to read the generated config to discover.
 # It also selects the only client profile allowed to start the local Chrome and reverse
 # tunnel. Use a dedicated, low-risk account: CDP can control that browser profile.
-# After enabling it, the operator runs `devbox apply browser,cli`; that provisions the
-# box endpoint and publishes the current client CLI. The named client then runs
+# After enabling it, the operator runs `devbox apply browser`, then `devbox apply cli`;
+# that provisions the box endpoint and publishes the current client CLI. The named client then runs
 # `devbox agent up -p <chrome_user>` to start its isolated browser and tunnel.
 # browser:
 #   enabled: true
