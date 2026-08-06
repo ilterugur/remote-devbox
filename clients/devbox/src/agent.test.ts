@@ -6,6 +6,11 @@ import * as agentModule from "./agent";
 import {
   agentEnv,
   agentsFor,
+  browserPortAgent,
+  browserPortsFor,
+  browserAutoBindPorts,
+  browserModeHint,
+  readBrowserMode,
   bootoutIfLoaded,
   installedAgentLabels,
   localForwardPort,
@@ -257,6 +262,51 @@ describe("agentsFor", () => {
     expect(script).toContain("trap cleanup EXIT");
     expect(script).toContain('kill "$tunnel_pid"');
     expect(script).toContain('kill "$chrome_pid"');
+  });
+
+  test("a browser port gets an owned loopback SSH forward", () => {
+    const agent = browserPortAgent("ilterugur", 5173, "devbox-ilterugur");
+    expect(agent.label).toBe("com.devbox.ilterugur.browser-port-5173");
+    expect(agent.mode).toBe("daemon");
+    expect(agent.argv).toEqual([
+      "ssh", "-N",
+      "-o", "ExitOnForwardFailure=yes",
+      "-o", "ServerAliveInterval=15",
+      "-o", "ServerAliveCountMax=3",
+      "-L", "127.0.0.1:5173:127.0.0.1:5173",
+      "devbox-ilterugur",
+    ]);
+  });
+
+  test("browser bind targets are deduplicated from configured project ports", () => {
+    const browserCfg = cfg({
+      browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 },
+      projects: [
+        { name: "web", ports: [5173, 3000] },
+        { name: "api", ports: [3000, 3100] },
+      ],
+    });
+    expect(browserPortsFor(browserCfg, "ilterugur", { project: "web" })).toEqual([3000, 5173]);
+    expect(browserPortsFor(browserCfg, "ilterugur", { all: true })).toEqual([3000, 3100, 5173]);
+  });
+
+  test("browser mode defaults to client when no state was saved", () => {
+    const home = mkdtempSync(join(tmpdir(), "devbox-browser-mode-"));
+    expect(readBrowserMode("ilterugur", home)).toBe("client");
+  });
+
+  test("client mode offers a bind hint unless autobind is configured", () => {
+    const manual = cfg({
+      browserFailover: { cdpPort: 9222, clientTunnelPort: 9322, autoBind: false },
+      projects: [{ name: "web", ports: [5173] }],
+    });
+    expect(browserModeHint(manual, "ilterugur")).toContain("devbox browser bind --all -p ilterugur");
+
+    const automatic = cfg({
+      browserFailover: { cdpPort: 9222, clientTunnelPort: 9322, autoBind: true },
+      projects: [{ name: "web", ports: [5173, 3000] }],
+    });
+    expect(browserAutoBindPorts(automatic, "ilterugur")).toEqual([3000, 5173]);
   });
 
   test("reports a local listener only for an SSH local-forward agent", () => {

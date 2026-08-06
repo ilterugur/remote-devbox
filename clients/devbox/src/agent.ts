@@ -14,9 +14,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { die, hostFor, lazyMountsFor, shQuote, type Config } from "./config";
+import { die, hostFor, lazyMountsFor, resolveCfgDir, shQuote, type Config } from "./config";
 
 export type AgentMode = "daemon" | "interval";
+export type BrowserMode = "client" | "server";
+export type BrowserPortTarget = { project?: string; all?: boolean; port?: number };
 
 export type AgentSpec = {
   label: string;
@@ -36,6 +38,91 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const CURL = "/usr/bin/curl";
 const SSH = "/usr/bin/ssh";
 const BROWSER_READY_TIMEOUT_SECONDS = 15;
+
+export const browserModePath = (profile: string, home: string = homedir()): string =>
+  join(resolveCfgDir(home), `browser-mode-${profile}`);
+
+/** Missing/invalid state retains the pre-switch behavior: client Chrome is primary. */
+export function readBrowserMode(profile: string, home: string = homedir()): BrowserMode {
+  try {
+    return readFileSync(browserModePath(profile, home), "utf8").trim() === "server" ? "server" : "client";
+  } catch {
+    return "client";
+  }
+}
+
+export function writeBrowserMode(profile: string, mode: BrowserMode, home: string = homedir()): void {
+  const dir = resolveCfgDir(home);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(browserModePath(profile, home), mode + "\n");
+}
+
+function validPort(port: unknown): port is number {
+  return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
+function browserProfile(cfg: Config, profile: string) {
+  const selected = cfg.profiles.find((item) => item.user === profile);
+  if (!selected?.browserFailover)
+    die(`browser failover is not configured for "${profile}"`);
+  return selected;
+}
+
+export const browserPortLabel = (profile: string, port: number): string =>
+  `com.devbox.${profile}.browser-port-${port}`;
+
+/** One loopback-only forward per port keeps collision handling inside SSH's checked bind. */
+export function browserPortAgent(profile: string, port: number, host: string): AgentSpec {
+  if (!validPort(port)) throw new Error("browser port must be an integer in 1..65535");
+  return {
+    label: browserPortLabel(profile, port),
+    mode: "daemon",
+    description: `Devbox port: 127.0.0.1:${port} -> ${host}:127.0.0.1:${port}`,
+    argv: [
+      "ssh", "-N",
+      "-o", "ExitOnForwardFailure=yes",
+      "-o", "ServerAliveInterval=15",
+      "-o", "ServerAliveCountMax=3",
+      "-L", `127.0.0.1:${port}:127.0.0.1:${port}`,
+      host,
+    ],
+  };
+}
+
+/** Resolve exactly one binding target and collapse duplicated declarations to one port. */
+export function browserPortsFor(cfg: Config, profile: string, target: BrowserPortTarget): number[] {
+  const selected = browserProfile(cfg, profile);
+  const chosen = Number(!!target.project) + Number(target.all === true) + Number(target.port !== undefined);
+  if (chosen !== 1) die("choose exactly one browser bind target: <project>, --all, or --port <port>");
+  if (target.port !== undefined) {
+    if (!validPort(target.port)) die("browser port must be an integer in 1..65535");
+    return [target.port];
+  }
+  const projects = target.all
+    ? selected.projects
+    : selected.projects.filter((project) => project.name === target.project);
+  if (!projects.length) die(`no project named "${target.project}" is configured for "${profile}"`);
+  const ports = projects.flatMap((project) => project.ports ?? []).filter(validPort);
+  if (!ports.length) {
+    const noun = target.all ? "configured projects" : `project "${target.project}"`;
+    die(`${noun} has no declared ports to bind`);
+  }
+  return [...new Set(ports)].sort((a, b) => a - b);
+}
+
+/** Autobind is opt-in; an empty project-port set is a harmless no-op on mode change. */
+export function browserAutoBindPorts(cfg: Config, profile: string): number[] {
+  const selected = browserProfile(cfg, profile);
+  if (selected.browserFailover?.autoBind !== true) return [];
+  return [...new Set(selected.projects.flatMap((project) => project.ports ?? []).filter(validPort))]
+    .sort((a, b) => a - b);
+}
+
+export function browserModeHint(cfg: Config, profile: string): string | null {
+  const selected = browserProfile(cfg, profile);
+  if (selected.browserFailover?.autoBind === true) return null;
+  return `bind Devbox project ports when needed: devbox browser bind --all -p ${profile}`;
+}
 
 /**
  * The original browser failover agents were global and could retain a reverse tunnel
@@ -411,9 +498,25 @@ export function installedAgentLabels(profile: string, home: string = homedir()):
     .filter((n) => {
       if (!n.startsWith(prefix) || !n.endsWith(".plist")) return false;
       const name = n.slice(prefix.length, -6);
-      return name.length > 0 && !name.includes(".");
+      // Port forwards have their own explicit lifecycle. `agent up` must not erase a
+      // manual `devbox browser bind` simply because autobind is off.
+      return ["desktop", "browser", "mount"].includes(name);
     })
     .map((n) => n.slice(0, -6))
+    .sort();
+}
+
+export function installedBrowserPortAgentLabels(profile: string, home: string = homedir()): string[] {
+  const prefix = `com.devbox.${profile}.browser-port-`;
+  let names: string[];
+  try {
+    names = readdirSync(join(home, "Library", "LaunchAgents"));
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([1-9][0-9]*)\\.plist$`).test(name))
+    .map((name) => name.slice(0, -6))
     .sort();
 }
 
@@ -427,6 +530,74 @@ function removeAgent(label: string, why: string): void {
   out(`  ✓ ${label} removed${why}`);
 }
 
+/** Install/update a narrow set of owned specs. Callers decide reconciliation scope. */
+function installAgents(specs: AgentSpec[]): void {
+  const logDir = logDirFor();
+  if (specs.length && !isDry()) mkdirSync(logDir, { recursive: true });
+  for (const spec of specs) {
+    if (spec.warning) out(`  ! ${spec.label} — ${spec.warning}`);
+    const resolved: AgentSpec = { ...spec, argv: resolveArgv(spec.argv) };
+    const path = plistPath(spec.label);
+    const wanted = renderPlist(resolved, logDir);
+    if (isDry()) {
+      out(`  ── would write ${path}`);
+      out(`     ${resolved.argv.join(" ")}`);
+      continue;
+    }
+    const current = existsSync(path) ? readFileSync(path, "utf8") : null;
+    if (current === wanted && isLoaded(spec.label)) {
+      out(`  ✓ ${spec.label} already current`);
+      continue;
+    }
+    bootoutIfLoaded(spec.label);
+    mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+    writeFileSync(path, wanted);
+    const result = launchctl("bootstrap", domain(), path);
+    if (result.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(result.stderr || "").trim()}`);
+    out(`  ✓ ${spec.label} — ${spec.description}`);
+  }
+}
+
+function browserSupervisor(cfg: Config, profile: string): AgentSpec {
+  const spec = agentsFor(cfg, profile).find((candidate) => candidate.label === `com.devbox.${profile}.browser`);
+  if (!spec) die(`browser failover is not configured for "${profile}"`);
+  return spec;
+}
+
+export function runBrowserBind(cfg: Config, profile: string, target: BrowserPortTarget): void {
+  requireMac();
+  if (readBrowserMode(profile) !== "client")
+    die(`browser mode is server — switch first: devbox browser mode client -p ${profile}`);
+  const ports = browserPortsFor(cfg, profile, target);
+  installAgents(ports.map((port) => browserPortAgent(profile, port, hostFor(cfg, profile))));
+}
+
+export function runBrowserUnbind(cfg: Config, profile: string, target: BrowserPortTarget): void {
+  requireMac();
+  const ports = browserPortsFor(cfg, profile, target);
+  for (const port of ports) removeAgent(browserPortLabel(profile, port), "");
+}
+
+export function runBrowserMode(cfg: Config, profile: string, mode: BrowserMode): void {
+  requireMac();
+  browserProfile(cfg, profile);
+  writeBrowserMode(profile, mode);
+  if (mode === "server") {
+    removeAgent(`com.devbox.${profile}.browser`, " (server browser mode)");
+    for (const label of installedBrowserPortAgentLabels(profile)) removeAgent(label, " (server browser mode)");
+    out(`browser mode -> server — browser localhost now resolves on the Devbox`);
+    return;
+  }
+  for (const label of legacyBrowserAgentLabelsFor(cfg, profile))
+    removeAgent(label, " (replaced by profile-scoped browser failover)");
+  installAgents([browserSupervisor(cfg, profile)]);
+  const ports = browserAutoBindPorts(cfg, profile);
+  if (ports.length) installAgents(ports.map((port) => browserPortAgent(profile, port, hostFor(cfg, profile))));
+  out(`browser mode -> client — browser localhost now resolves on this machine`);
+  const hint = browserModeHint(cfg, profile);
+  if (hint) out(`  ${hint}`);
+}
+
 /** Install (or update) every agent this profile should have running, and remove the ones
  *  it should not. Idempotent. */
 export function runAgentUp(cfg: Config, profile: string): void {
@@ -436,38 +607,14 @@ export function runAgentUp(cfg: Config, profile: string): void {
   for (const label of legacyBrowserAgentLabelsFor(cfg, profile))
     removeAgent(label, " (replaced by profile-scoped browser failover)");
 
-  const specs = agentsFor(cfg, profile);
-  const logDir = logDirFor();
-  if (specs.length && !isDry()) mkdirSync(logDir, { recursive: true });
-
-  for (const spec of specs) {
-    if (spec.warning) out(`  ! ${spec.label} — ${spec.warning}`);
-    const resolved: AgentSpec = { ...spec, argv: resolveArgv(spec.argv) };
-    const path = plistPath(spec.label);
-    const wanted = renderPlist(resolved, logDir);
-
-    if (isDry()) {
-      out(`  ── would write ${path}`);
-      out(`     ${resolved.argv.join(" ")}`);
-      continue;
-    }
-
-    const current = existsSync(path) ? readFileSync(path, "utf8") : null;
-    if (current === wanted && isLoaded(spec.label)) {
-      out(`  ✓ ${spec.label} already current`);
-      continue;
-    }
-    // bootout BEFORE the write: bootstrap on an already-loaded label is an error, so the
-    // reload is what makes a changed plist take effect — and if the bootout fails we abort
-    // with the file on disk still being the one launchd loaded. Writing first would leave
-    // a live label pointing at content it was never bootstrapped with.
-    bootoutIfLoaded(spec.label);
-    mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
-    writeFileSync(path, wanted);
-    const r = launchctl("bootstrap", domain(), path);
-    if (r.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(r.stderr || "").trim()}`);
-    out(`  ✓ ${spec.label} — ${spec.description}`);
+  const mode = readBrowserMode(profile);
+  const specs = agentsFor(cfg, profile)
+    .filter((spec) => spec.label !== `com.devbox.${profile}.browser` || mode === "client");
+  if (mode === "client") {
+    for (const port of browserAutoBindPorts(cfg, profile))
+      specs.push(browserPortAgent(profile, port, hostFor(cfg, profile)));
   }
+  installAgents(specs);
 
   const wantedLabels = new Set(specs.map((s) => s.label));
   for (const label of installedAgentLabels(profile)) {
@@ -486,6 +633,7 @@ export function agentLabelsForDown(
   return [...new Set([
     ...agentsFor(cfg, profile).map((spec) => spec.label),
     ...installed,
+    ...installedBrowserPortAgentLabels(profile),
     ...legacyBrowserAgentLabelsFor(cfg, profile),
   ])];
 }
@@ -510,9 +658,17 @@ export function localForwardPort(spec: AgentSpec): string | null {
 /** What is described, what launchd has, and — for the desktop — what the local end of the
  *  tunnel is actually doing. */
 export function runAgentStatus(cfg: Config, profile: string): void {
-  const specs = agentsFor(cfg, profile);
+  const mode = readBrowserMode(profile);
+  const specs = agentsFor(cfg, profile)
+    .filter((spec) => spec.label !== `com.devbox.${profile}.browser` || mode === "client");
+  if (mode === "client") {
+    for (const port of browserAutoBindPorts(cfg, profile))
+      specs.push(browserPortAgent(profile, port, hostFor(cfg, profile)));
+  }
   const installed = installedAgentLabels(profile);
-  if (!specs.length && !installed.length) return void out(`devbox: no client agents configured for "${profile}"`);
+  const browserPorts = installedBrowserPortAgentLabels(profile);
+  if (!specs.length && !installed.length && !browserPorts.length) return void out(`devbox: no client agents configured for "${profile}"`);
+  if (cfg.profiles.find((item) => item.user === profile)?.browserFailover) out(`browser mode: ${mode}`);
   for (const spec of specs) {
     const loaded = process.platform === "darwin" && isLoaded(spec.label);
     out(`  ${loaded ? "●" : "○"} ${spec.label} — ${spec.description}`);
@@ -535,4 +691,13 @@ export function runAgentStatus(cfg: Config, profile: string): void {
   for (const label of installed) {
     if (!wantedLabels.has(label)) out(`  ? ${label} — installed but no longer configured ('devbox agent up' removes it)`);
   }
+  for (const label of browserPorts) {
+    const loaded = process.platform === "darwin" && isLoaded(label);
+    out(`  ${loaded ? "●" : "○"} ${label} — manual browser port binding`);
+  }
+}
+
+export function runBrowserStatus(cfg: Config, profile: string): void {
+  browserProfile(cfg, profile);
+  runAgentStatus(cfg, profile);
 }
