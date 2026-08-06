@@ -31,7 +31,16 @@ import { runPush } from "./push";
 import { runPull } from "./pull";
 import { runAdd } from "./add";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
-import { runAgentDown, runAgentStatus, runAgentUp } from "./agent";
+import {
+  runAgentDown,
+  runAgentStatus,
+  runAgentUp,
+  runBrowserBind,
+  runBrowserMode,
+  runBrowserStatus,
+  runBrowserUnbind,
+  type BrowserMode,
+} from "./agent";
 import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { runConfigLink, runConfigStatus, runConfigUnlink } from "./app-configs/run";
 import { runEditors } from "./editors";
@@ -183,6 +192,35 @@ cli
       case "down": return runAgentDown(cfg(), prof);
       case "status": return runAgentStatus(cfg(), prof);
       default: return die(`unknown agent action "${action}" (up|down|status)`);
+    }
+  });
+
+cli
+  .command("browser [action] [value]", "manage browser mode and Devbox port bindings (mode|bind|unbind|status)")
+  .option("-p, --profile <profile>", "target profile")
+  .option("--all", "all declared project ports")
+  .option("--port <port>", "one explicit TCP port")
+  .action((action: string | undefined, value: string | undefined, opts: { profile?: string; all?: boolean; port?: string }) => {
+    const profile = resolveProfile(cfg(), opts.profile);
+    const port = opts.port === undefined ? undefined : Number(opts.port);
+    if (opts.port !== undefined && (!Number.isInteger(port) || String(port) !== opts.port.trim()))
+      die("browser --port must be an integer in 1..65535");
+    switch (action ?? "status") {
+      case "status":
+        if (value) die("browser status takes no value");
+        return runBrowserStatus(cfg(), profile);
+      case "mode": {
+        const mode = value ?? "status";
+        if (mode === "status") return runBrowserStatus(cfg(), profile);
+        if (mode !== "client" && mode !== "server") die("browser mode must be client, server, or status");
+        return runBrowserMode(cfg(), profile, mode as BrowserMode);
+      }
+      case "bind":
+        return runBrowserBind(cfg(), profile, { project: value, all: opts.all === true, port });
+      case "unbind":
+        return runBrowserUnbind(cfg(), profile, { project: value, all: opts.all === true, port });
+      default:
+        return die(`unknown browser action "${action}" (mode|bind|unbind|status)`);
     }
   });
 

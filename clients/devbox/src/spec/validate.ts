@@ -850,6 +850,9 @@ function validateBrowser(raw: Record<string, unknown>, issues: Issue[]): void {
   if (f.enabled !== undefined && typeof f.enabled !== "boolean") {
     issues.push(err("browser.failover.enabled", "must be true or false"));
   }
+  if (f.autobind !== undefined && typeof f.autobind !== "boolean") {
+    issues.push(err("browser.failover.autobind", "must be true or false"));
+  }
   if (f.enabled === true && !isNonEmptyString(f.chrome_user)) {
     issues.push(err("browser.failover.chrome_user", "is required — name the developer whose account runs the fallback Chrome"));
   }

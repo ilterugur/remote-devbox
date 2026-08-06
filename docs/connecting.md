@@ -180,6 +180,46 @@ devbox agent status -p <chrome_user>   # local agents and their state
 devbox agent down -p <chrome_user>     # stop and remove them
 ```
 
+### Browser execution mode and Devbox project ports
+
+The failover endpoint is a CDP TCP proxy, not an HTTP navigation proxy. Choose
+which machine should resolve browser `localhost` explicitly:
+
+```bash
+devbox browser mode server -p <chrome_user>  # Devbox Chrome: localhost is the Devbox
+devbox browser mode client -p <chrome_user>  # isolated client Chrome: localhost is your Mac
+devbox browser status -p <chrome_user>
+```
+
+`server` unloads only the client browser supervisor and its owned port
+forwards; RDP, mounts, and sync agents stay untouched. `client` restores the
+isolated Chrome/reverse CDP tunnel. Start a fresh browser MCP connection after
+switching so it attaches to the selected backing Chrome.
+
+When client mode needs a Devbox development server in your Mac browser, bind
+only the port(s) you mean to expose. Each binding is loopback-only and fails if
+the same local port is already in use; the command never stops or hijacks the
+existing process.
+
+```bash
+devbox browser bind insurchat -p <chrome_user>  # ports declared on one project
+devbox browser bind --all -p <chrome_user>      # all declared project ports
+devbox browser bind --port 5173 -p <chrome_user>
+devbox browser unbind insurchat -p <chrome_user>
+```
+
+The default is manual binding. To bind all declared `projects[].ports` whenever
+you select client mode, set this in `devbox.yml`, apply it, then refresh the
+client installer:
+
+```yaml
+browser:
+  failover:
+    enabled: true
+    chrome_user: <chrome_user>
+    autobind: true
+```
+
 Use only a dedicated, low-risk account as `chrome_user`. CDP has browser-control
 authority, so the local Chrome uses its own Devbox data directory and the reverse tunnel
 binds at `127.0.0.1` on both the client and box; it is not a LAN or public browser

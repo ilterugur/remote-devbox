@@ -284,6 +284,8 @@ export interface BrowserFailoverSpec {
   cdp_port?: number;
   fallback_chrome_port?: number;
   client_tunnel_port?: number;
+  /** When client mode is selected, bind every configured project port on the client. */
+  autobind?: boolean;
 }
 
 /** A curated config tree on the client, copied into this developer's agent config. */

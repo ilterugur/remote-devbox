@@ -439,6 +439,11 @@ test("browser ports must be valid ports", () => {
   expect(paths(spec)).toContain("error:browser.failover.cdp_port");
 });
 
+test("browser autobind must be a boolean", () => {
+  const spec = { ...minimal(), browser: { failover: { enabled: true, chrome_user: "dev-a", autobind: "yes" } } };
+  expect(paths(spec)).toContain("error:browser.failover.autobind");
+});
+
 test("a developer's browser opt-in is a boolean", () => {
   expect(paths({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [KEY], browser: true }] })).toEqual([]);
   expect(

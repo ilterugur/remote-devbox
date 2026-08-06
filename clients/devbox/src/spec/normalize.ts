@@ -101,6 +101,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
         cdp_port: resolved.browser?.failover?.cdp_port ?? 9222,
         fallback_chrome_port: resolved.browser?.failover?.fallback_chrome_port ?? 9422,
         client_tunnel_port: resolved.browser?.failover?.client_tunnel_port ?? 9322,
+        autobind: resolved.browser?.failover?.autobind ?? false,
       },
     },
     devbox_remote_control: normalizeRemoteControl(resolved),

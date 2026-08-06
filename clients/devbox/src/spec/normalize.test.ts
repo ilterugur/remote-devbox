@@ -279,7 +279,16 @@ test("browser defaults are concrete, and failover is off until asked for", () =>
     cdp_port: 9222,
     fallback_chrome_port: 9422,
     client_tunnel_port: 9322,
+    autobind: false,
   });
+});
+
+test("browser failover preserves an explicit autobind setting", () => {
+  const out = normalize({
+    ...resolved,
+    browser: { failover: { enabled: true, chrome_user: "dev-a", autobind: true } },
+  }).devbox_browser as Record<string, any>;
+  expect(out.failover.autobind).toBe(true);
 });
 
 test("a developer's browser opt-in and agent_config are concrete", () => {
