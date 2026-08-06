@@ -78,6 +78,8 @@ type SupervisorFixture = {
   markerPort: string;
   chromePid: string;
   sshPid: string;
+  curlCalls: string;
+  curlFailures: string;
 };
 
 const SUPERVISOR_READY_TIMEOUT_SECONDS = 3;
@@ -88,7 +90,7 @@ function fakeExecutable(path: string, source: string): void {
   chmodSync(path, 0o755);
 }
 
-function supervisorFixture(markerPort: string): SupervisorFixture {
+function supervisorFixture(markerPort: string, curlFailures = 0): SupervisorFixture {
   const root = mkdtempSync(join(tmpdir(), "devbox-browser-supervisor-"));
   const bin = join(root, "bin");
   const state = join(root, "state");
@@ -99,6 +101,7 @@ function supervisorFixture(markerPort: string): SupervisorFixture {
   const chromePath = join(bin, "chrome");
   const curlPath = join(bin, "curl");
   const sshPath = join(bin, "ssh");
+  const curlCalls = join(state, "curl.calls");
   fakeExecutable(chromePath, [
     'for arg in "$@"; do',
     '  case "$arg" in',
@@ -113,6 +116,10 @@ function supervisorFixture(markerPort: string): SupervisorFixture {
   ].join("\n"));
   fakeExecutable(curlPath, [
     'printf "%s\\n" "curl $*" >> "$EVENTS"',
+    'calls=$(cat "$STATE/curl.calls" 2>/dev/null || echo 0)',
+    'calls=$((calls + 1))',
+    'printf "%s\\n" "$calls" > "$STATE/curl.calls"',
+    'if [ "$calls" -le "$CURL_FAILURES" ]; then exit 1; fi',
     'exit 0',
   ].join("\n"));
   fakeExecutable(sshPath, [
@@ -132,6 +139,8 @@ function supervisorFixture(markerPort: string): SupervisorFixture {
     markerPort,
     chromePid: join(state, "chrome.pid"),
     sshPid: join(state, "ssh.pid"),
+    curlCalls,
+    curlFailures: String(curlFailures),
   };
 }
 
@@ -163,7 +172,13 @@ function alive(pidFile: string): boolean {
 
 function startSupervisor(script: string, fixture: SupervisorFixture) {
   return Bun.spawn(["/bin/sh", "-c", script], {
-    env: { ...process.env, EVENTS: fixture.events, MARKER_PORT: fixture.markerPort, STATE: fixture.state },
+    env: {
+      ...process.env,
+      EVENTS: fixture.events,
+      MARKER_PORT: fixture.markerPort,
+      STATE: fixture.state,
+      CURL_FAILURES: fixture.curlFailures,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -338,6 +353,30 @@ describe("agentsFor", () => {
       expect(existsSync(fixture.sshPid)).toBe(false);
       expect(existsSync(fixture.events) ? readFileSync(fixture.events, "utf8") : "").not.toContain("ssh ");
       await waitFor(() => !alive(fixture.chromePid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+    } finally {
+      await stopSupervisor(supervisor);
+    }
+  });
+
+  test("retries the CDP readiness probe until the managed Chrome is ready", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    const fixture = supervisorFixture("49125", 1);
+    const supervisor = startSupervisor(renderSupervisor!({
+      dataDir: fixture.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: fixture.chromePath,
+      curlPath: fixture.curlPath,
+      sshPath: fixture.sshPath,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+    }), fixture);
+    try {
+      await waitFor(() => existsSync(fixture.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+      expect(Number(readFileSync(fixture.curlCalls, "utf8").trim())).toBeGreaterThanOrEqual(2);
     } finally {
       await stopSupervisor(supervisor);
     }

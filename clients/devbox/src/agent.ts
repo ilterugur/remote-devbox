@@ -160,10 +160,19 @@ while :; do
   sleep ${pollIntervalSeconds}
 done
 
-if ! "$curl" --fail --silent --show-error --max-time 1 \\
-  "http://127.0.0.1:$cdp_port/json/version" >/dev/null; then
-  fail "managed Chrome CDP endpoint is not ready"
-fi
+while :; do
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    fail "managed Chrome exited before CDP became ready"
+  fi
+  if "$curl" --fail --silent --show-error --max-time 1 \\
+    "http://127.0.0.1:$cdp_port/json/version" >/dev/null; then
+    break
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    fail "managed Chrome CDP endpoint did not become ready"
+  fi
+  sleep ${pollIntervalSeconds}
+done
 
 "$ssh" -N \\
   -o ExitOnForwardFailure=yes \\
