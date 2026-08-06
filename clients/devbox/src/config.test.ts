@@ -147,7 +147,7 @@ developers:
     projects: []
 `))!;
     expect(profiles.find((profile) => profile.user === "work")!.browserFailover)
-      .toEqual({ cdpPort: 9222, clientTunnelPort: 9322 });
+      .toEqual({ cdpPort: 9222, clientTunnelPort: 9322, autoBind: false });
     expect(profiles.find((profile) => profile.user === "other")!.browserFailover).toBeUndefined();
   });
 
@@ -161,7 +161,24 @@ developers:
   - user: work
     projects: []
 `))!;
-    expect(profiles[0]!.browserFailover).toEqual({ cdpPort: 9222, clientTunnelPort: 9322 });
+    expect(profiles[0]!.browserFailover).toEqual({ cdpPort: 9222, clientTunnelPort: 9322, autoBind: false });
+  });
+
+  test("carries declared project ports and browser failover autobind", () => {
+    const profiles = profilesFromYaml(tmpRepo(`
+browser:
+  failover:
+    enabled: true
+    chrome_user: work
+    autobind: true
+developers:
+  - user: work
+    projects:
+      - name: app
+        ports: [5173, 3000]
+`))!;
+    expect(profiles[0]!.projects[0]!.ports).toEqual([5173, 3000]);
+    expect(profiles[0]!.browserFailover).toMatchObject({ autoBind: true });
   });
 
   test("devbox.yml wins over a legacy file that is still lying around", () => {

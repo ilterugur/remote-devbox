@@ -284,7 +284,7 @@ failover = box.get("browser_failover") or {}
 
 profile = {
     "user": user,
-    "projects": [{"name": p["name"], "repo": p.get("repo", "")} for p in projects],
+    "projects": [{"name": p["name"], "repo": p.get("repo", ""), "ports": p.get("ports") or []} for p in projects],
 }
 if bridge.get("sync_disk"):
     profile["syncDisk"] = True
@@ -323,6 +323,7 @@ if (
     profile["browserFailover"] = {
         "cdpPort": cdp_port,
         "clientTunnelPort": client_tunnel_port,
+        "autoBind": failover.get("autobind") is True,
     }
 
 json.dump(

@@ -40,7 +40,7 @@ export const cfgDir = (): string => resolveCfgDir();
 export const configPath = (): string => join(cfgDir(), "config.json");
 export const statePath = (): string => join(cfgDir(), "active-profile");
 
-export type Project = { name: string; repo?: string };
+export type Project = { name: string; repo?: string; ports?: number[] };
 export type LazyMount = { label: string; path: string };
 export type EngineId = "mutagen" | "syncthing";
 /**
@@ -50,7 +50,7 @@ export type EngineId = "mutagen" | "syncthing";
  * "unknown" — never "not allowed".
  */
 export type ProfileDesktop = { clientPort: number; access?: DesktopAccess[] };
-export type ProfileBrowserFailover = { cdpPort: number; clientTunnelPort: number };
+export type ProfileBrowserFailover = { cdpPort: number; clientTunnelPort: number; autoBind?: boolean };
 export type Profile = {
   user: string;
   projects: Project[];
@@ -155,7 +155,11 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       const profile: Profile = {
         user: String(d.user),
         projects: Array.isArray(d.projects)
-          ? d.projects.map((pr: any) => ({ name: String(pr.name), repo: pr.repo ? String(pr.repo) : "" }))
+          ? d.projects.map((pr: any) => ({
+              name: String(pr.name),
+              repo: pr.repo ? String(pr.repo) : "",
+              ...(Array.isArray(pr.ports) ? { ports: pr.ports.filter((port: unknown) => positivePort(port) !== null) } : {}),
+            }))
           : [],
       };
       if (d.file_bridge?.sync_disk) profile.syncDisk = true;
@@ -178,7 +182,7 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       const cdpPort = failover?.cdp_port === undefined ? 9222 : positivePort(failover.cdp_port);
       const clientTunnelPort = failover?.client_tunnel_port === undefined ? 9322 : positivePort(failover.client_tunnel_port);
       if (failover?.enabled === true && failover?.chrome_user === profile.user && cdpPort && clientTunnelPort)
-        profile.browserFailover = { cdpPort, clientTunnelPort };
+        profile.browserFailover = { cdpPort, clientTunnelPort, autoBind: failover?.autobind === true };
       out.push(profile);
     }
     return out;
@@ -203,7 +207,11 @@ function profilesFromLegacyYaml(repoPath: string): Profile[] | null {
       const profile: Profile = {
         user: String(p.user),
         projects: Array.isArray(p.projects)
-          ? p.projects.map((pr: any) => ({ name: String(pr.name), repo: pr.repo ? String(pr.repo) : "" }))
+          ? p.projects.map((pr: any) => ({
+              name: String(pr.name),
+              repo: pr.repo ? String(pr.repo) : "",
+              ...(Array.isArray(pr.ports) ? { ports: pr.ports.filter((port: unknown) => positivePort(port) !== null) } : {}),
+            }))
           : [],
       };
       if (Array.isArray(p.lazy_mounts) && p.lazy_mounts.length)
