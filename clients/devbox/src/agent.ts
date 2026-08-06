@@ -92,7 +92,7 @@ function browserPortAgentWithLabel(profile: string, port: number, host: string, 
   };
 }
 
-type PortForwardSupervisorOptions = { readyFile: string; port: number; host: string; sshPath?: string };
+type PortForwardSupervisorOptions = { readyFile: string; port: number; host: string; sshPath?: string; lsofPath?: string };
 
 /**
  * A foreign process can win a check-then-bind race.  This supervisor writes its marker
@@ -103,9 +103,11 @@ export function renderPortForwardSupervisor(opts: PortForwardSupervisorOptions):
   if (!opts.readyFile.startsWith("/")) throw new Error("browser port ready file must be absolute");
   if (!validPort(opts.port)) throw new Error("browser port must be an integer in 1..65535");
   const sshPath = absoluteExecutable(opts.sshPath ?? SSH, "SSH path");
+  const lsofPath = absoluteExecutable(opts.lsofPath ?? "/usr/sbin/lsof", "lsof path");
   return `set -eu
 ready_file=${shQuote(opts.readyFile)}
 ssh=${shQuote(sshPath)}
+lsof=${shQuote(lsofPath)}
 ssh_host=${shQuote(opts.host)}
 rm -f "$ready_file"
 ssh_pid=
@@ -121,12 +123,16 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 "$ssh" -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L ${shQuote(`127.0.0.1:${opts.port}:127.0.0.1:${opts.port}`)} "$ssh_host" &
 ssh_pid=$!
-for _ in 1 2 3; do
+for _ in $(seq 1 ${PORT_FORWARD_READY_ATTEMPTS}); do
   sleep 0.1
   kill -0 "$ssh_pid" 2>/dev/null || exit 1
+  if "$lsof" -nP -a -p "$ssh_pid" -iTCP:${opts.port} -sTCP:LISTEN >/dev/null 2>&1; then
+    printf "ready\\n" > "$ready_file"
+    wait "$ssh_pid"
+    exit $?
+  fi
 done
-printf "ready\\n" > "$ready_file"
-wait "$ssh_pid"
+exit 1
 `;
 }
 

@@ -274,6 +274,7 @@ describe("agentsFor", () => {
     expect(agent.argv.slice(0, 2)).toEqual(["sh", "-c"]);
     expect(agent.argv[2]).toContain("ExitOnForwardFailure=yes");
     expect(agent.argv[2]).toContain("127.0.0.1:5173:127.0.0.1:5173");
+    expect(agent.argv[2]).toContain('-p "$ssh_pid" -iTCP:5173 -sTCP:LISTEN');
     expect(agent.argv[2]).toContain('printf "ready\\n" > "$ready_file"');
   });
 
