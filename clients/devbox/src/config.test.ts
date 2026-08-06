@@ -151,6 +151,19 @@ developers:
     expect(profiles.find((profile) => profile.user === "other")!.browserFailover).toBeUndefined();
   });
 
+  test("defaults enabled matching browser failover ports from the canonical normalization", () => {
+    const profiles = profilesFromYaml(tmpRepo(`
+browser:
+  failover:
+    enabled: true
+    chrome_user: work
+developers:
+  - user: work
+    projects: []
+`))!;
+    expect(profiles[0]!.browserFailover).toEqual({ cdpPort: 9222, clientTunnelPort: 9322 });
+  });
+
   test("devbox.yml wins over a legacy file that is still lying around", () => {
     const out = profilesFromYaml(
       repo({ "devbox.yml": DEVBOX_YML, "ansible/group_vars/all.yml": LEGACY_YML }),

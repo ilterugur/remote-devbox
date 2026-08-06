@@ -175,8 +175,8 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       const port = clientPorts.get(profile.user);
       if (port) profile.desktop = { clientPort: port, access: desktopAccess(d, doc) };
       const failover = doc?.browser?.failover;
-      const cdpPort = positivePort(failover?.cdp_port);
-      const clientTunnelPort = positivePort(failover?.client_tunnel_port);
+      const cdpPort = failover?.cdp_port === undefined ? 9222 : positivePort(failover.cdp_port);
+      const clientTunnelPort = failover?.client_tunnel_port === undefined ? 9322 : positivePort(failover.client_tunnel_port);
       if (failover?.enabled === true && failover?.chrome_user === profile.user && cdpPort && clientTunnelPort)
         profile.browserFailover = { cdpPort, clientTunnelPort };
       out.push(profile);
