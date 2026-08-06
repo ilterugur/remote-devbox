@@ -155,8 +155,10 @@ client binary:
 
 ```bash
 devbox apply browser
-devbox apply cli
 ```
+
+This also publishes the current client CLI: the `box_cli` Ansible role is tagged
+`always`, so it runs with the browser phase.
 
 On that named client's machine, start and inspect the profile-scoped lifecycle:
 
