@@ -488,6 +488,16 @@ export function runAgentDown(cfg: Config, profile: string): void {
   for (const label of labels) removeAgent(label, "");
 }
 
+/** The client-side listener of an SSH `-L` agent, if this spec has one. Browser CDP
+ * failover deliberately uses a dynamic reverse forward, so it has no static local port
+ * that `agent status` can probe. */
+export function localForwardPort(spec: AgentSpec): string | null {
+  const index = spec.argv.indexOf("-L");
+  const forward = index >= 0 ? spec.argv[index + 1] : undefined;
+  const match = forward?.match(/^127\.0\.0\.1:([1-9][0-9]*):/);
+  return match?.[1] ?? null;
+}
+
 /** What is described, what launchd has, and — for the desktop — what the local end of the
  *  tunnel is actually doing. */
 export function runAgentStatus(cfg: Config, profile: string): void {
@@ -498,9 +508,8 @@ export function runAgentStatus(cfg: Config, profile: string): void {
     const loaded = process.platform === "darwin" && isLoaded(spec.label);
     out(`  ${loaded ? "●" : "○"} ${spec.label} — ${spec.description}`);
     if (spec.warning) out(`      ! ${spec.warning}`);
-    const forward = spec.argv[spec.argv.indexOf("-L") + 1];
-    if (spec.mode === "daemon" && forward) {
-      const port = forward.split(":")[1]!;
+    const port = localForwardPort(spec);
+    if (spec.mode === "daemon" && port) {
       const listening = spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0;
       // Say only what this proves. The listener is ssh's OWN: it accepts the TCP
       // connection first and only then tries to open the channel to the box, so a

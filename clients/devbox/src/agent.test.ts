@@ -8,6 +8,7 @@ import {
   agentsFor,
   bootoutIfLoaded,
   installedAgentLabels,
+  localForwardPort,
   plistPath,
   renderPlist,
   resolveArgv,
@@ -241,6 +242,17 @@ describe("agentsFor", () => {
     expect(script).toContain("trap cleanup EXIT");
     expect(script).toContain('kill "$tunnel_pid"');
     expect(script).toContain('kill "$chrome_pid"');
+  });
+
+  test("reports a local listener only for an SSH local-forward agent", () => {
+    const desktop = agentsFor(cfg({ desktop: { clientPort: 3390 } }), "ilterugur")[0]!;
+    const browser = agentsFor(
+      cfg({ browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } }),
+      "ilterugur",
+    )[0]!;
+
+    expect(localForwardPort(desktop)).toBe("3390");
+    expect(localForwardPort(browser)).toBeNull();
   });
 
   test("the behavioral fixture budget outlives the supervisor ready window", () => {
