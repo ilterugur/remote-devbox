@@ -50,6 +50,7 @@ export type EngineId = "mutagen" | "syncthing";
  * "unknown" — never "not allowed".
  */
 export type ProfileDesktop = { clientPort: number; access?: DesktopAccess[] };
+export type ProfileBrowserFailover = { cdpPort: number; clientTunnelPort: number };
 export type Profile = {
   user: string;
   projects: Project[];
@@ -59,6 +60,7 @@ export type Profile = {
   lazyMountOnConnect?: boolean;
   appConfigs?: ResolvedEntry[];
   desktop?: ProfileDesktop;
+  browserFailover?: ProfileBrowserFailover;
 };
 // `host` is for reference only — the CLI resolves the box via the ssh alias
 // `${prefix}-${profile}` (HostName lives in ~/.ssh/config).
@@ -125,6 +127,12 @@ function desktopAccess(dev: any, doc: any): DesktopAccess[] {
   return raw.filter((a: unknown): a is DesktopAccess => typeof a === "string" && KNOWN_DESKTOP_ACCESS.includes(a));
 }
 
+function positivePort(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 65_535
+    ? value
+    : null;
+}
+
 /** Canonical layout: `<repoPath>/devbox.yml`, `developers:`. */
 function developersFromDevboxYaml(repoPath: string): Profile[] | null {
   try {
@@ -166,6 +174,11 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       if (entries.length) profile.appConfigs = entries;
       const port = clientPorts.get(profile.user);
       if (port) profile.desktop = { clientPort: port, access: desktopAccess(d, doc) };
+      const failover = doc?.browser?.failover;
+      const cdpPort = positivePort(failover?.cdp_port);
+      const clientTunnelPort = positivePort(failover?.client_tunnel_port);
+      if (failover?.enabled === true && failover?.chrome_user === profile.user && cdpPort && clientTunnelPort)
+        profile.browserFailover = { cdpPort, clientTunnelPort };
       out.push(profile);
     }
     return out;

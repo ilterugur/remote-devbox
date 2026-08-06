@@ -132,6 +132,25 @@ describe("profilesFromYaml — which config file wins", () => {
     expect(out?.[0]!.syncEngine).toBe("syncthing");
   });
 
+  test("carries enabled browser failover only onto its named developer", () => {
+    const profiles = profilesFromYaml(tmpRepo(`
+browser:
+  failover:
+    enabled: true
+    chrome_user: work
+    cdp_port: 9222
+    client_tunnel_port: 9322
+developers:
+  - user: work
+    projects: []
+  - user: other
+    projects: []
+`))!;
+    expect(profiles.find((profile) => profile.user === "work")!.browserFailover)
+      .toEqual({ cdpPort: 9222, clientTunnelPort: 9322 });
+    expect(profiles.find((profile) => profile.user === "other")!.browserFailover).toBeUndefined();
+  });
+
   test("devbox.yml wins over a legacy file that is still lying around", () => {
     const out = profilesFromYaml(
       repo({ "devbox.yml": DEVBOX_YML, "ansible/group_vars/all.yml": LEGACY_YML }),
