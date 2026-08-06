@@ -581,7 +581,8 @@ export function runBrowserUnbind(cfg: Config, profile: string, target: BrowserPo
 export function runBrowserMode(cfg: Config, profile: string, mode: BrowserMode): void {
   requireMac();
   browserProfile(cfg, profile);
-  writeBrowserMode(profile, mode);
+  if (isDry()) out(`  ── would set browser mode for ${profile} -> ${mode}`);
+  else writeBrowserMode(profile, mode);
   if (mode === "server") {
     removeAgent(`com.devbox.${profile}.browser`, " (server browser mode)");
     for (const label of installedBrowserPortAgentLabels(profile)) removeAgent(label, " (server browser mode)");
