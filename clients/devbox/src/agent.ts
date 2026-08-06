@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { die, hostFor, lazyMountsFor, type Config } from "./config";
+import { die, hostFor, lazyMountsFor, shQuote, type Config } from "./config";
 
 export type AgentMode = "daemon" | "interval";
 
@@ -31,6 +31,168 @@ export type AgentSpec = {
 
 /** The box always listens here; only the client side of the forward is configurable. */
 const BOX_RDP_PORT = 3389;
+const LEGACY_BROWSER_AGENT_LABELS = ["com.devbox.agent-chrome", "com.devbox.cdp-tunnel"] as const;
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CURL = "/usr/bin/curl";
+const SSH = "/usr/bin/ssh";
+const BROWSER_READY_TIMEOUT_SECONDS = 15;
+
+/**
+ * The original browser failover agents were global and could retain a reverse tunnel
+ * owned by a different local account. Reconcile them only for the profile that is
+ * explicitly configured to own browser failover.
+ */
+export function legacyBrowserAgentLabelsFor(cfg: Config, profile: string): string[] {
+  return cfg.profiles.find((p) => p.user === profile)?.browserFailover
+    ? [...LEGACY_BROWSER_AGENT_LABELS]
+    : [];
+}
+
+/**
+ * Chrome selects an unused local CDP port itself and writes it into DevToolsActivePort.
+ * Keep the reverse tunnel in this same supervisor: otherwise a surviving SSH process
+ * could forward some unrelated Chrome that happened to bind the old fixed port. The
+ * executable/timing options are intentionally narrow test seams; production callers
+ * use the absolute system paths and conservative defaults below.
+ */
+export type BrowserSupervisorOptions = {
+  dataDir: string;
+  clientTunnelPort: number;
+  host: string;
+  chromePath?: string;
+  curlPath?: string;
+  sshPath?: string;
+  readyTimeoutSeconds?: number;
+  pollIntervalSeconds?: number;
+  monitorIntervalSeconds?: number;
+};
+
+function absoluteExecutable(path: string, name: string): string {
+  if (!path.startsWith("/")) throw new Error(`${name} must be an absolute path`);
+  return path;
+}
+
+function boundedSeconds(value: number | undefined, fallback: number, name: string): string {
+  const seconds = value ?? fallback;
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 60)
+    throw new Error(`${name} must be a number in (0, 60]`);
+  return String(seconds);
+}
+
+export function renderBrowserSupervisor(opts: BrowserSupervisorOptions): string {
+  if (!opts.dataDir.startsWith("/")) throw new Error("browser data directory must be absolute");
+  if (!Number.isInteger(opts.clientTunnelPort) || opts.clientTunnelPort < 1 || opts.clientTunnelPort > 65_535)
+    throw new Error("browser client tunnel port must be an integer in 1..65535");
+  const chromePath = absoluteExecutable(opts.chromePath ?? CHROME, "Chrome path");
+  const curlPath = absoluteExecutable(opts.curlPath ?? CURL, "curl path");
+  const sshPath = absoluteExecutable(opts.sshPath ?? SSH, "ssh path");
+  const readyTimeoutSeconds = boundedSeconds(
+    opts.readyTimeoutSeconds,
+    BROWSER_READY_TIMEOUT_SECONDS,
+    "browser ready timeout",
+  );
+  const pollIntervalSeconds = boundedSeconds(opts.pollIntervalSeconds, 0.1, "browser marker poll interval");
+  const monitorIntervalSeconds = boundedSeconds(opts.monitorIntervalSeconds, 1, "browser monitor interval");
+
+  return `set -eu
+umask 077
+data_dir=${shQuote(opts.dataDir)}
+marker="$data_dir/DevToolsActivePort"
+chrome=${shQuote(chromePath)}
+curl=${shQuote(curlPath)}
+ssh=${shQuote(sshPath)}
+ssh_host=${shQuote(opts.host)}
+tunnel_port=${shQuote(String(opts.clientTunnelPort))}
+chrome_pid=
+tunnel_pid=
+
+cleanup() {
+  trap - EXIT HUP INT TERM
+  if [ -n "$tunnel_pid" ]; then
+    kill "$tunnel_pid" 2>/dev/null || true
+    wait "$tunnel_pid" 2>/dev/null || true
+  fi
+  if [ -n "$chrome_pid" ]; then
+    kill "$chrome_pid" 2>/dev/null || true
+    wait "$chrome_pid" 2>/dev/null || true
+  fi
+}
+
+fail() {
+  printf '%s\\n' "$1" >&2
+  exit 1
+}
+
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+mkdir -p "$data_dir"
+chmod 700 "$data_dir"
+rm -f "$marker"
+
+"$chrome" \\
+  "--user-data-dir=$data_dir" \\
+  --remote-debugging-address=127.0.0.1 \\
+  --remote-debugging-port=0 \\
+  --no-first-run \\
+  --no-default-browser-check &
+chrome_pid=$!
+
+deadline=$(( $(date +%s) + ${readyTimeoutSeconds} ))
+cdp_port=
+while :; do
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    fail "managed Chrome exited before CDP became ready"
+  fi
+  if [ -s "$marker" ]; then
+    cdp_port=$(sed -n '1p' "$marker")
+    case "$cdp_port" in
+      ''|*[!0-9]*) fail "invalid DevToolsActivePort" ;;
+    esac
+    if [ "$cdp_port" -lt 1 ] || [ "$cdp_port" -gt 65535 ]; then
+      fail "invalid DevToolsActivePort"
+    fi
+    break
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    fail "timed out waiting for DevToolsActivePort"
+  fi
+  sleep ${pollIntervalSeconds}
+done
+
+while :; do
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    fail "managed Chrome exited before CDP became ready"
+  fi
+  if "$curl" --fail --silent --show-error --max-time 1 \\
+    "http://127.0.0.1:$cdp_port/json/version" >/dev/null; then
+    break
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    fail "managed Chrome CDP endpoint did not become ready"
+  fi
+  sleep ${pollIntervalSeconds}
+done
+
+"$ssh" -N \\
+  -o ExitOnForwardFailure=yes \\
+  -o ServerAliveInterval=15 \\
+  -o ServerAliveCountMax=3 \\
+  -R "127.0.0.1:$tunnel_port:127.0.0.1:$cdp_port" \\
+  "$ssh_host" &
+tunnel_pid=$!
+
+while :; do
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    fail "managed Chrome exited"
+  fi
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    fail "CDP reverse tunnel exited"
+  fi
+  sleep ${monitorIntervalSeconds}
+done
+`;
+}
 
 export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
   const p = cfg.profiles.find((x) => x.user === profile);
@@ -66,6 +228,24 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
         "-o", "ServerAliveCountMax=3",
         "-L", `127.0.0.1:${port}:127.0.0.1:${BOX_RDP_PORT}`,
         host,
+      ],
+    });
+  }
+
+  if (p.browserFailover) {
+    const { clientTunnelPort } = p.browserFailover;
+    out.push({
+      label: `com.devbox.${profile}.browser`,
+      mode: "daemon",
+      description: `isolated Chrome with CDP reverse tunnel to ${host}:127.0.0.1:${clientTunnelPort}`,
+      argv: [
+        "sh",
+        "-c",
+        renderBrowserSupervisor({
+          dataDir: join(homedir(), ".local", "share", "devbox", "browser", profile),
+          clientTunnelPort,
+          host,
+        }),
       ],
     });
   }
@@ -251,6 +431,11 @@ function removeAgent(label: string, why: string): void {
  *  it should not. Idempotent. */
 export function runAgentUp(cfg: Config, profile: string): void {
   requireMac();
+  // Do this before the new reverse tunnel is bootstrapped: the stale global tunnel may
+  // still own the remote port and would make ExitOnForwardFailure reject the new agent.
+  for (const label of legacyBrowserAgentLabelsFor(cfg, profile))
+    removeAgent(label, " (replaced by profile-scoped browser failover)");
+
   const specs = agentsFor(cfg, profile);
   const logDir = logDirFor();
   if (specs.length && !isDry()) mkdirSync(logDir, { recursive: true });
@@ -293,11 +478,33 @@ export function runAgentUp(cfg: Config, profile: string): void {
 
 /** Remove this profile's agents — the described ones and any left over from a config
  *  that has since changed. */
+export function agentLabelsForDown(
+  cfg: Config,
+  profile: string,
+  installed: string[] = installedAgentLabels(profile),
+): string[] {
+  return [...new Set([
+    ...agentsFor(cfg, profile).map((spec) => spec.label),
+    ...installed,
+    ...legacyBrowserAgentLabelsFor(cfg, profile),
+  ])];
+}
+
 export function runAgentDown(cfg: Config, profile: string): void {
   requireMac();
-  const labels = new Set([...agentsFor(cfg, profile).map((s) => s.label), ...installedAgentLabels(profile)]);
+  const labels = new Set(agentLabelsForDown(cfg, profile));
   if (!labels.size) return void out(`devbox: no client agents installed for "${profile}"`);
   for (const label of labels) removeAgent(label, "");
+}
+
+/** The client-side listener of an SSH `-L` agent, if this spec has one. Browser CDP
+ * failover deliberately uses a dynamic reverse forward, so it has no static local port
+ * that `agent status` can probe. */
+export function localForwardPort(spec: AgentSpec): string | null {
+  const index = spec.argv.indexOf("-L");
+  const forward = index >= 0 ? spec.argv[index + 1] : undefined;
+  const match = forward?.match(/^127\.0\.0\.1:([1-9][0-9]*):/);
+  return match?.[1] ?? null;
 }
 
 /** What is described, what launchd has, and — for the desktop — what the local end of the
@@ -310,9 +517,8 @@ export function runAgentStatus(cfg: Config, profile: string): void {
     const loaded = process.platform === "darwin" && isLoaded(spec.label);
     out(`  ${loaded ? "●" : "○"} ${spec.label} — ${spec.description}`);
     if (spec.warning) out(`      ! ${spec.warning}`);
-    const forward = spec.argv[spec.argv.indexOf("-L") + 1];
-    if (spec.mode === "daemon" && forward) {
-      const port = forward.split(":")[1]!;
+    const port = localForwardPort(spec);
+    if (spec.mode === "daemon" && port) {
       const listening = spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0;
       // Say only what this proves. The listener is ssh's OWN: it accepts the TCP
       // connection first and only then tries to open the channel to the box, so a

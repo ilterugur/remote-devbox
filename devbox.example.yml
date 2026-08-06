@@ -88,6 +88,15 @@ shared_services:
 # online, and a box-local Chrome when it is not. chrome_user names the account that
 # box-local Chrome runs as; it is required, because "whichever developer came first"
 # is not something anyone should have to read the generated config to discover.
+# It also selects the only client profile allowed to start the local Chrome and reverse
+# tunnel. Use a dedicated, low-risk account: CDP can control that browser profile.
+# After enabling it, the operator runs `devbox apply browser`; that provisions the box
+# endpoint and also publishes the current client CLI because the box_cli role has
+# Ansible's `always` tag. On the named client, fetch the generated installer through
+# `ssh devbox-<chrome_user> 'devbox client-config --installer' > "$installer"` into a
+# local temporary file, inspect it, and run it to refresh both the binary and client
+# config. Only then run `devbox agent up -p <chrome_user>` to start the ownership-coupled
+# browser supervisor.
 # browser:
 #   enabled: true
 #   failover:

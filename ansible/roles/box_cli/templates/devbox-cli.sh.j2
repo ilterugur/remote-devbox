@@ -280,6 +280,7 @@ if projects is None:
 bridge = (box.get("file_bridges") or {}).get(user) or {}
 apps = (box.get("app_configs") or {}).get(user) or {}
 desktop = (box.get("desktops") or {}).get(user) or {}
+failover = box.get("browser_failover") or {}
 
 profile = {
     "user": user,
@@ -309,6 +310,20 @@ if desktop.get("enabled") and desktop.get("client_port"):
     # repo checkout has no other way to learn that before it dials.
     if desktop.get("access"):
         profile["desktop"]["access"] = list(desktop["access"])
+# Failover stays opt-in and scoped to the account whose browser is forwarded. Both
+# endpoints are loopback listeners on the box; clients receive port numbers only.
+cdp_port = failover.get("cdp_port")
+client_tunnel_port = failover.get("client_tunnel_port")
+if (
+    failover.get("enabled") is True
+    and failover.get("chrome_user") == user
+    and all(isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535
+            for port in (cdp_port, client_tunnel_port))
+):
+    profile["browserFailover"] = {
+        "cdpPort": cdp_port,
+        "clientTunnelPort": client_tunnel_port,
+    }
 
 json.dump(
     {

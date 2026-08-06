@@ -50,6 +50,7 @@ export type EngineId = "mutagen" | "syncthing";
  * "unknown" — never "not allowed".
  */
 export type ProfileDesktop = { clientPort: number; access?: DesktopAccess[] };
+export type ProfileBrowserFailover = { cdpPort: number; clientTunnelPort: number };
 export type Profile = {
   user: string;
   projects: Project[];
@@ -59,6 +60,7 @@ export type Profile = {
   lazyMountOnConnect?: boolean;
   appConfigs?: ResolvedEntry[];
   desktop?: ProfileDesktop;
+  browserFailover?: ProfileBrowserFailover;
 };
 // `host` is for reference only — the CLI resolves the box via the ssh alias
 // `${prefix}-${profile}` (HostName lives in ~/.ssh/config).
@@ -125,6 +127,12 @@ function desktopAccess(dev: any, doc: any): DesktopAccess[] {
   return raw.filter((a: unknown): a is DesktopAccess => typeof a === "string" && KNOWN_DESKTOP_ACCESS.includes(a));
 }
 
+function positivePort(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 65_535
+    ? value
+    : null;
+}
+
 /** Canonical layout: `<repoPath>/devbox.yml`, `developers:`. */
 function developersFromDevboxYaml(repoPath: string): Profile[] | null {
   try {
@@ -166,6 +174,11 @@ function developersFromDevboxYaml(repoPath: string): Profile[] | null {
       if (entries.length) profile.appConfigs = entries;
       const port = clientPorts.get(profile.user);
       if (port) profile.desktop = { clientPort: port, access: desktopAccess(d, doc) };
+      const failover = doc?.browser?.failover;
+      const cdpPort = failover?.cdp_port === undefined ? 9222 : positivePort(failover.cdp_port);
+      const clientTunnelPort = failover?.client_tunnel_port === undefined ? 9322 : positivePort(failover.client_tunnel_port);
+      if (failover?.enabled === true && failover?.chrome_user === profile.user && cdpPort && clientTunnelPort)
+        profile.browserFailover = { cdpPort, clientTunnelPort };
       out.push(profile);
     }
     return out;
@@ -271,8 +284,9 @@ export function isWorktree(cwd: string): boolean {
 /** POSIX single-quote a value for safe embedding in a remote command string. */
 export const shQuote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
-/** The ssh/mosh host alias for a profile (e.g. `devbox-work`). */
-export const hostFor = (cfg: Config, prof: string) => `${cfg.prefix}-${prof}`;
+/** The ssh/mosh host alias for a profile, matching the box installer's alias_for rule. */
+export const hostFor = (cfg: Config, prof: string) =>
+  prof === cfg.prefix || prof.startsWith(`${cfg.prefix}-`) ? prof : `${cfg.prefix}-${prof}`;
 
 /** Connection transport into the box-side tmux session. "auto" = et > mosh > ssh. */
 export type Transport = "auto" | "et" | "mosh" | "ssh";

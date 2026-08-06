@@ -146,15 +146,56 @@ PAM password whose hash is in `devbox.secrets.yml`.
   would exit a second after it starts. The session script reaps those abandoned sessions
   at login, so the recovery is simply to connect again.
 
+## Browser failover — isolated client browser
+
+Browser failover gives the box's browser MCP endpoint a client-browser primary and a
+box-local Chrome fallback. Enable `browser.failover` with a `chrome_user` that names
+one real developer, then have the operator provision both the endpoint and the current
+client binary:
+
+```bash
+devbox apply browser
+```
+
+This also publishes the current client CLI: the `box_cli` Ansible role is tagged
+`always`, so it runs with the browser phase.
+
+On that named client's machine, fetch the generated installer through the profile SSH
+alias into a local temporary file. Inspect it before running it; do **not** pipe a remote
+command directly to a shell. The installer refreshes both the client binary and the
+client configuration that carries the browser-failover owner slice.
+
+```bash
+installer=$(mktemp "${TMPDIR:-/tmp}/devbox-installer.XXXXXX")
+ssh devbox-<chrome_user> 'devbox client-config --installer' > "$installer"
+less "$installer"                         # inspect before execution
+sh "$installer"                           # refresh the binary and client config
+```
+
+Only after that refresh, start and inspect the profile-scoped lifecycle:
+
+```bash
+devbox agent up -p <chrome_user>       # isolated local Chrome plus reverse CDP tunnel
+devbox agent status -p <chrome_user>   # local agents and their state
+devbox agent down -p <chrome_user>     # stop and remove them
+```
+
+Use only a dedicated, low-risk account as `chrome_user`. CDP has browser-control
+authority, so the local Chrome uses its own Devbox data directory and the reverse tunnel
+binds at `127.0.0.1` on both the client and box; it is not a LAN or public browser
+endpoint. The CLI exposes this lifecycle only to the configured owner, not every local
+profile.
+
 ## What runs on your own machine
 
-Two things on the client are long-lived, and both are launchd agents written by
+Client-side services are launchd agents written by
 `devbox agent up` (macOS; on Linux the command prints the systemd --user equivalent):
 
 | Agent | What it does |
 | --- | --- |
 | `com.devbox.<user>.desktop` | holds the RDP tunnel open — `127.0.0.1:<client_port>` → the box's 3389 |
 | `com.devbox.<user>.mount` | re-runs `devbox mount up` every 60s, so the `mnt` bridge survives sleep and wake |
+| `com.devbox.<user>.browser` | ownership-coupled browser supervisor: starts the isolated Chrome, validates its loopback CDP, and holds the reverse tunnel only while that Chrome runs |
 
 ```bash
 devbox agent status   # what is described, what launchd has loaded, what the local port does
@@ -163,9 +204,9 @@ devbox agent down     # remove them
 ```
 
 Each agent appears only when its profile asks for it: the desktop one for a developer with
-`desktop.enabled`, the mount one for a developer with `file_bridge.lazy_mounts`. A profile
-with neither gets nothing, and `devbox agent up` says so rather than writing an empty
-agent.
+`desktop.enabled`, the mount one for a developer with `file_bridge.lazy_mounts`, and the
+browser supervisor only for the named `browser.failover.chrome_user`. A profile with none
+gets nothing, and `devbox agent up` says so rather than writing an empty agent.
 
 Logs are in `~/.local/state/devbox/<label>.log`. Neither agent is required — they are
 what makes a saved RDP entry and a mounted path keep working without you thinking about

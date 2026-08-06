@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { appConfigsFor, pickTransport, profilesFromYaml, resolveCfgDir, transportPort, type Config } from "./config";
+import { appConfigsFor, hostFor, pickTransport, profilesFromYaml, resolveCfgDir, transportPort, type Config } from "./config";
 
 /** Make a throwaway claude-devbox checkout with the given all.yml body; return its root. */
 function repoWithYaml(body: string): string {
@@ -130,6 +130,38 @@ describe("profilesFromYaml — which config file wins", () => {
     );
     expect(out?.[0]!.syncDisk).toBe(true);
     expect(out?.[0]!.syncEngine).toBe("syncthing");
+  });
+
+  test("carries enabled browser failover only onto its named developer", () => {
+    const profiles = profilesFromYaml(tmpRepo(`
+browser:
+  failover:
+    enabled: true
+    chrome_user: work
+    cdp_port: 9222
+    client_tunnel_port: 9322
+developers:
+  - user: work
+    projects: []
+  - user: other
+    projects: []
+`))!;
+    expect(profiles.find((profile) => profile.user === "work")!.browserFailover)
+      .toEqual({ cdpPort: 9222, clientTunnelPort: 9322 });
+    expect(profiles.find((profile) => profile.user === "other")!.browserFailover).toBeUndefined();
+  });
+
+  test("defaults enabled matching browser failover ports from the canonical normalization", () => {
+    const profiles = profilesFromYaml(tmpRepo(`
+browser:
+  failover:
+    enabled: true
+    chrome_user: work
+developers:
+  - user: work
+    projects: []
+`))!;
+    expect(profiles[0]!.browserFailover).toEqual({ cdpPort: 9222, clientTunnelPort: 9322 });
   });
 
   test("devbox.yml wins over a legacy file that is still lying around", () => {
@@ -271,6 +303,21 @@ describe("transportPort", () => {
     expect(transportPort("et", 22)).toBe(2022);
     expect(transportPort("ssh", 2222)).toBe(2222);
     expect(transportPort("mosh", 22)).toBeNull();
+  });
+});
+
+describe("hostFor", () => {
+  test("preserves profile names that already satisfy the installer alias contract", () => {
+    const cfg: Config = {
+      prefix: "devbox",
+      default: "work",
+      locale: "en_US.UTF-8",
+      launch: "claude",
+      profiles: [],
+    };
+    expect(hostFor(cfg, "work")).toBe("devbox-work");
+    expect(hostFor(cfg, "devbox-work")).toBe("devbox-work");
+    expect(hostFor(cfg, "devbox")).toBe("devbox");
   });
 });
 
