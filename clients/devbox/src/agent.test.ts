@@ -9,6 +9,8 @@ import {
   browserPortAgent,
   browserPortsFor,
   browserAutoBindPorts,
+  browserAutoBindAgent,
+  browserModeServerAgentLabelsFor,
   browserModeHint,
   readBrowserMode,
   bootoutIfLoaded,
@@ -275,6 +277,22 @@ describe("agentsFor", () => {
       "-o", "ServerAliveCountMax=3",
       "-L", "127.0.0.1:5173:127.0.0.1:5173",
       "devbox-ilterugur",
+    ]);
+  });
+
+  test("autobind ports have a separate owned label and server mode includes legacy tunnels", () => {
+    const browserCfg = cfg({ browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } });
+    expect(browserAutoBindAgent("ilterugur", 5173, "devbox-ilterugur").label)
+      .toBe("com.devbox.ilterugur.browser-autobind-port-5173");
+    expect(browserModeServerAgentLabelsFor(browserCfg, "ilterugur", [
+      "com.devbox.ilterugur.browser-port-5173",
+      "com.devbox.ilterugur.browser-autobind-port-3000",
+    ])).toEqual([
+      "com.devbox.ilterugur.browser",
+      "com.devbox.agent-chrome",
+      "com.devbox.cdp-tunnel",
+      "com.devbox.ilterugur.browser-port-5173",
+      "com.devbox.ilterugur.browser-autobind-port-3000",
     ]);
   });
 

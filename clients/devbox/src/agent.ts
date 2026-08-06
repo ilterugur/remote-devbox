@@ -70,14 +70,16 @@ function browserProfile(cfg: Config, profile: string) {
 
 export const browserPortLabel = (profile: string, port: number): string =>
   `com.devbox.${profile}.browser-port-${port}`;
+export const browserAutoBindPortLabel = (profile: string, port: number): string =>
+  `com.devbox.${profile}.browser-autobind-port-${port}`;
 
 /** One loopback-only forward per port keeps collision handling inside SSH's checked bind. */
-export function browserPortAgent(profile: string, port: number, host: string): AgentSpec {
+function browserPortAgentWithLabel(profile: string, port: number, host: string, label: string, source: string): AgentSpec {
   if (!validPort(port)) throw new Error("browser port must be an integer in 1..65535");
   return {
-    label: browserPortLabel(profile, port),
+    label,
     mode: "daemon",
-    description: `Devbox port: 127.0.0.1:${port} -> ${host}:127.0.0.1:${port}`,
+    description: `${source} Devbox port: 127.0.0.1:${port} -> ${host}:127.0.0.1:${port}`,
     argv: [
       "ssh", "-N",
       "-o", "ExitOnForwardFailure=yes",
@@ -87,6 +89,14 @@ export function browserPortAgent(profile: string, port: number, host: string): A
       host,
     ],
   };
+}
+
+export function browserPortAgent(profile: string, port: number, host: string): AgentSpec {
+  return browserPortAgentWithLabel(profile, port, host, browserPortLabel(profile, port), "manual");
+}
+
+export function browserAutoBindAgent(profile: string, port: number, host: string): AgentSpec {
+  return browserPortAgentWithLabel(profile, port, host, browserAutoBindPortLabel(profile, port), "autobind");
 }
 
 /** Resolve exactly one binding target and collapse duplicated declarations to one port. */
@@ -122,6 +132,16 @@ export function browserModeHint(cfg: Config, profile: string): string | null {
   const selected = browserProfile(cfg, profile);
   if (selected.browserFailover?.autoBind === true) return null;
   return `bind Devbox project ports when needed: devbox browser bind --all -p ${profile}`;
+}
+
+/** Everything server mode must stop to let HAProxy fall back to Devbox Chrome. */
+export function browserModeServerAgentLabelsFor(cfg: Config, profile: string, installedPorts: string[]): string[] {
+  browserProfile(cfg, profile);
+  return [
+    `com.devbox.${profile}.browser`,
+    ...legacyBrowserAgentLabelsFor(cfg, profile),
+    ...installedPorts,
+  ];
 }
 
 /**
@@ -506,8 +526,7 @@ export function installedAgentLabels(profile: string, home: string = homedir()):
     .sort();
 }
 
-export function installedBrowserPortAgentLabels(profile: string, home: string = homedir()): string[] {
-  const prefix = `com.devbox.${profile}.browser-port-`;
+function installedBrowserPortLabelsWithPrefix(profile: string, prefix: string, home: string): string[] {
   let names: string[];
   try {
     names = readdirSync(join(home, "Library", "LaunchAgents"));
@@ -518,6 +537,21 @@ export function installedBrowserPortAgentLabels(profile: string, home: string = 
     .filter((name) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([1-9][0-9]*)\\.plist$`).test(name))
     .map((name) => name.slice(0, -6))
     .sort();
+}
+
+export function installedBrowserPortAgentLabels(profile: string, home: string = homedir()): string[] {
+  return installedBrowserPortLabelsWithPrefix(profile, `com.devbox.${profile}.browser-port-`, home);
+}
+
+export function installedBrowserAutoBindPortAgentLabels(profile: string, home: string = homedir()): string[] {
+  return installedBrowserPortLabelsWithPrefix(profile, `com.devbox.${profile}.browser-autobind-port-`, home);
+}
+
+export function installedAnyBrowserPortAgentLabels(profile: string, home: string = homedir()): string[] {
+  return [...new Set([
+    ...installedBrowserPortAgentLabels(profile, home),
+    ...installedBrowserAutoBindPortAgentLabels(profile, home),
+  ])].sort();
 }
 
 /** Unload and delete one agent. Aborts (via bootoutIfLoaded) rather than deleting a
@@ -550,12 +584,41 @@ function installAgents(specs: AgentSpec[]): void {
       continue;
     }
     bootoutIfLoaded(spec.label);
+    const port = localForwardPort(spec);
+    if (port && spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0)
+      die(`127.0.0.1:${port} is already in use — refusing to replace or hijack it`);
     mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(path, wanted);
     const result = launchctl("bootstrap", domain(), path);
     if (result.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(result.stderr || "").trim()}`);
+    if (port) {
+      let ready = false;
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0) {
+          ready = true;
+          break;
+        }
+        spawnSync("/bin/sleep", ["0.1"]);
+      }
+      if (!ready) {
+        bootoutIfLoaded(spec.label);
+        rmSync(path, { force: true });
+        die(`${spec.label} did not open 127.0.0.1:${port}; binding was not kept`);
+      }
+    }
     out(`  ✓ ${spec.label} — ${spec.description}`);
   }
+}
+
+/** Reconcile only the dedicated autobind namespace; manual binds must survive it. */
+function reconcileAutoBindPorts(cfg: Config, profile: string): void {
+  const specs = browserAutoBindPorts(cfg, profile)
+    .map((port) => browserAutoBindAgent(profile, port, hostFor(cfg, profile)));
+  const wanted = new Set(specs.map((spec) => spec.label));
+  for (const label of installedBrowserAutoBindPortAgentLabels(profile)) {
+    if (!wanted.has(label)) removeAgent(label, " (no longer configured for autobind)");
+  }
+  installAgents(specs);
 }
 
 function browserSupervisor(cfg: Config, profile: string): AgentSpec {
@@ -582,18 +645,18 @@ export function runBrowserMode(cfg: Config, profile: string, mode: BrowserMode):
   requireMac();
   browserProfile(cfg, profile);
   if (isDry()) out(`  ── would set browser mode for ${profile} -> ${mode}`);
-  else writeBrowserMode(profile, mode);
   if (mode === "server") {
-    removeAgent(`com.devbox.${profile}.browser`, " (server browser mode)");
-    for (const label of installedBrowserPortAgentLabels(profile)) removeAgent(label, " (server browser mode)");
+    for (const label of browserModeServerAgentLabelsFor(cfg, profile, installedAnyBrowserPortAgentLabels(profile)))
+      removeAgent(label, " (server browser mode)");
+    if (!isDry()) writeBrowserMode(profile, mode);
     out(`browser mode -> server — browser localhost now resolves on the Devbox`);
     return;
   }
   for (const label of legacyBrowserAgentLabelsFor(cfg, profile))
     removeAgent(label, " (replaced by profile-scoped browser failover)");
   installAgents([browserSupervisor(cfg, profile)]);
-  const ports = browserAutoBindPorts(cfg, profile);
-  if (ports.length) installAgents(ports.map((port) => browserPortAgent(profile, port, hostFor(cfg, profile))));
+  reconcileAutoBindPorts(cfg, profile);
+  if (!isDry()) writeBrowserMode(profile, mode);
   out(`browser mode -> client — browser localhost now resolves on this machine`);
   const hint = browserModeHint(cfg, profile);
   if (hint) out(`  ${hint}`);
@@ -609,13 +672,11 @@ export function runAgentUp(cfg: Config, profile: string): void {
     removeAgent(label, " (replaced by profile-scoped browser failover)");
 
   const mode = readBrowserMode(profile);
+  const browserEnabled = cfg.profiles.find((item) => item.user === profile)?.browserFailover !== undefined;
   const specs = agentsFor(cfg, profile)
     .filter((spec) => spec.label !== `com.devbox.${profile}.browser` || mode === "client");
-  if (mode === "client") {
-    for (const port of browserAutoBindPorts(cfg, profile))
-      specs.push(browserPortAgent(profile, port, hostFor(cfg, profile)));
-  }
   installAgents(specs);
+  if (browserEnabled && mode === "client") reconcileAutoBindPorts(cfg, profile);
 
   const wantedLabels = new Set(specs.map((s) => s.label));
   for (const label of installedAgentLabels(profile)) {
@@ -634,7 +695,7 @@ export function agentLabelsForDown(
   return [...new Set([
     ...agentsFor(cfg, profile).map((spec) => spec.label),
     ...installed,
-    ...installedBrowserPortAgentLabels(profile),
+    ...installedAnyBrowserPortAgentLabels(profile),
     ...legacyBrowserAgentLabelsFor(cfg, profile),
   ])];
 }
@@ -660,14 +721,15 @@ export function localForwardPort(spec: AgentSpec): string | null {
  *  tunnel is actually doing. */
 export function runAgentStatus(cfg: Config, profile: string): void {
   const mode = readBrowserMode(profile);
+  const browserEnabled = cfg.profiles.find((item) => item.user === profile)?.browserFailover !== undefined;
   const specs = agentsFor(cfg, profile)
     .filter((spec) => spec.label !== `com.devbox.${profile}.browser` || mode === "client");
-  if (mode === "client") {
+  if (browserEnabled && mode === "client") {
     for (const port of browserAutoBindPorts(cfg, profile))
-      specs.push(browserPortAgent(profile, port, hostFor(cfg, profile)));
+      specs.push(browserAutoBindAgent(profile, port, hostFor(cfg, profile)));
   }
   const installed = installedAgentLabels(profile);
-  const browserPorts = installedBrowserPortAgentLabels(profile);
+  const browserPorts = installedAnyBrowserPortAgentLabels(profile);
   if (!specs.length && !installed.length && !browserPorts.length) return void out(`devbox: no client agents configured for "${profile}"`);
   if (cfg.profiles.find((item) => item.user === profile)?.browserFailover) out(`browser mode: ${mode}`);
   for (const spec of specs) {
