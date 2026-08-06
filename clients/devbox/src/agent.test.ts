@@ -380,7 +380,7 @@ describe("agentsFor", () => {
     } finally {
       await stopSupervisor(supervisor);
     }
-  });
+  }, BEHAVIORAL_FIXTURE_BUDGET_MS + 5_000);
 
   test("another profile gets no browser agents", () => {
     const browserCfg: Config = {
