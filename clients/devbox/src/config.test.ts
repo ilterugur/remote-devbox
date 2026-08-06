@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { appConfigsFor, pickTransport, profilesFromYaml, resolveCfgDir, transportPort, type Config } from "./config";
+import { appConfigsFor, hostFor, pickTransport, profilesFromYaml, resolveCfgDir, transportPort, type Config } from "./config";
 
 /** Make a throwaway claude-devbox checkout with the given all.yml body; return its root. */
 function repoWithYaml(body: string): string {
@@ -290,6 +290,21 @@ describe("transportPort", () => {
     expect(transportPort("et", 22)).toBe(2022);
     expect(transportPort("ssh", 2222)).toBe(2222);
     expect(transportPort("mosh", 22)).toBeNull();
+  });
+});
+
+describe("hostFor", () => {
+  test("preserves profile names that already satisfy the installer alias contract", () => {
+    const cfg: Config = {
+      prefix: "devbox",
+      default: "work",
+      locale: "en_US.UTF-8",
+      launch: "claude",
+      profiles: [],
+    };
+    expect(hostFor(cfg, "work")).toBe("devbox-work");
+    expect(hostFor(cfg, "devbox-work")).toBe("devbox-work");
+    expect(hostFor(cfg, "devbox")).toBe("devbox");
   });
 });
 

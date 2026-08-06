@@ -284,8 +284,9 @@ export function isWorktree(cwd: string): boolean {
 /** POSIX single-quote a value for safe embedding in a remote command string. */
 export const shQuote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
-/** The ssh/mosh host alias for a profile (e.g. `devbox-work`). */
-export const hostFor = (cfg: Config, prof: string) => `${cfg.prefix}-${prof}`;
+/** The ssh/mosh host alias for a profile, matching the box installer's alias_for rule. */
+export const hostFor = (cfg: Config, prof: string) =>
+  prof === cfg.prefix || prof.startsWith(`${cfg.prefix}-`) ? prof : `${cfg.prefix}-${prof}`;
 
 /** Connection transport into the box-side tmux session. "auto" = et > mosh > ssh. */
 export type Transport = "auto" | "et" | "mosh" | "ssh";
