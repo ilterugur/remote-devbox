@@ -26,6 +26,10 @@ export type AgentSpec = {
   argv: string[];
   intervalSeconds?: number;
   description: string;
+  /** A supervisor-created proof that its SSH local forward survived startup. */
+  readyFile?: string;
+  /** The loopback listener the agent itself owns, when it is a local forward. */
+  forwardPort?: number;
   /** Named at description time, not at connect time: something about this agent cannot
    *  work as configured, and the plist itself is not where that shows up. */
   warning?: string;
@@ -38,6 +42,7 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const CURL = "/usr/bin/curl";
 const SSH = "/usr/bin/ssh";
 const BROWSER_READY_TIMEOUT_SECONDS = 15;
+const PORT_FORWARD_READY_ATTEMPTS = 30;
 
 export const browserModePath = (profile: string, home: string = homedir()): string =>
   join(resolveCfgDir(home), `browser-mode-${profile}`);
@@ -76,19 +81,53 @@ export const browserAutoBindPortLabel = (profile: string, port: number): string 
 /** One loopback-only forward per port keeps collision handling inside SSH's checked bind. */
 function browserPortAgentWithLabel(profile: string, port: number, host: string, label: string, source: string): AgentSpec {
   if (!validPort(port)) throw new Error("browser port must be an integer in 1..65535");
+  const readyFile = join(logDirFor(), `${label}.ready`);
   return {
     label,
     mode: "daemon",
     description: `${source} Devbox port: 127.0.0.1:${port} -> ${host}:127.0.0.1:${port}`,
-    argv: [
-      "ssh", "-N",
-      "-o", "ExitOnForwardFailure=yes",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=3",
-      "-L", `127.0.0.1:${port}:127.0.0.1:${port}`,
-      host,
-    ],
+    readyFile,
+    forwardPort: port,
+    argv: ["sh", "-c", renderPortForwardSupervisor({ readyFile, port, host })],
   };
+}
+
+type PortForwardSupervisorOptions = { readyFile: string; port: number; host: string; sshPath?: string };
+
+/**
+ * A foreign process can win a check-then-bind race.  This supervisor writes its marker
+ * only after *its own* ExitOnForwardFailure SSH child remains alive, then removes it on
+ * every exit path.  The parent CLI never uses a generic TCP listener as readiness proof.
+ */
+export function renderPortForwardSupervisor(opts: PortForwardSupervisorOptions): string {
+  if (!opts.readyFile.startsWith("/")) throw new Error("browser port ready file must be absolute");
+  if (!validPort(opts.port)) throw new Error("browser port must be an integer in 1..65535");
+  const sshPath = absoluteExecutable(opts.sshPath ?? SSH, "SSH path");
+  return `set -eu
+ready_file=${shQuote(opts.readyFile)}
+ssh=${shQuote(sshPath)}
+ssh_host=${shQuote(opts.host)}
+rm -f "$ready_file"
+ssh_pid=
+cleanup() {
+  trap - EXIT HUP INT TERM
+  rm -f "$ready_file"
+  if [ -n "$ssh_pid" ]; then
+    kill "$ssh_pid" 2>/dev/null || true
+    wait "$ssh_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+"$ssh" -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L ${shQuote(`127.0.0.1:${opts.port}:127.0.0.1:${opts.port}`)} "$ssh_host" &
+ssh_pid=$!
+for _ in 1 2 3; do
+  sleep 0.1
+  kill -0 "$ssh_pid" 2>/dev/null || exit 1
+done
+printf "ready\\n" > "$ready_file"
+wait "$ssh_pid"
+`;
 }
 
 export function browserPortAgent(profile: string, port: number, host: string): AgentSpec {
@@ -561,6 +600,7 @@ function removeAgent(label: string, why: string): void {
   if (isDry()) return void out(`  ── would remove ${path}${why}`);
   bootoutIfLoaded(label);
   rmSync(path, { force: true });
+  rmSync(join(logDirFor(), `${label}.ready`), { force: true });
   out(`  ✓ ${label} removed${why}`);
 }
 
@@ -579,22 +619,20 @@ function installAgents(specs: AgentSpec[]): void {
       continue;
     }
     const current = existsSync(path) ? readFileSync(path, "utf8") : null;
-    if (current === wanted && isLoaded(spec.label)) {
+    if (current === wanted && isLoaded(spec.label) && (!spec.readyFile || existsSync(spec.readyFile))) {
       out(`  ✓ ${spec.label} already current`);
       continue;
     }
     bootoutIfLoaded(spec.label);
-    const port = localForwardPort(spec);
-    if (port && spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0)
-      die(`127.0.0.1:${port} is already in use — refusing to replace or hijack it`);
+    if (spec.readyFile) rmSync(spec.readyFile, { force: true });
     mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(path, wanted);
     const result = launchctl("bootstrap", domain(), path);
     if (result.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(result.stderr || "").trim()}`);
-    if (port) {
+    if (spec.readyFile) {
       let ready = false;
-      for (let attempt = 0; attempt < 30; attempt++) {
-        if (spawnSync("nc", ["-z", "-G", "1", "127.0.0.1", port]).status === 0) {
+      for (let attempt = 0; attempt < PORT_FORWARD_READY_ATTEMPTS; attempt++) {
+        if (existsSync(spec.readyFile)) {
           ready = true;
           break;
         }
@@ -603,7 +641,8 @@ function installAgents(specs: AgentSpec[]): void {
       if (!ready) {
         bootoutIfLoaded(spec.label);
         rmSync(path, { force: true });
-        die(`${spec.label} did not open 127.0.0.1:${port}; binding was not kept`);
+        rmSync(spec.readyFile, { force: true });
+        die(`${spec.label} did not prove its SSH local forward was ready; binding was not kept`);
       }
     }
     out(`  ✓ ${spec.label} — ${spec.description}`);
@@ -711,6 +750,7 @@ export function runAgentDown(cfg: Config, profile: string): void {
  * failover deliberately uses a dynamic reverse forward, so it has no static local port
  * that `agent status` can probe. */
 export function localForwardPort(spec: AgentSpec): string | null {
+  if (spec.forwardPort) return String(spec.forwardPort);
   const index = spec.argv.indexOf("-L");
   const forward = index >= 0 ? spec.argv[index + 1] : undefined;
   const match = forward?.match(/^127\.0\.0\.1:([1-9][0-9]*):/);

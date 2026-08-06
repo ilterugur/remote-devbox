@@ -270,14 +270,11 @@ describe("agentsFor", () => {
     const agent = browserPortAgent("ilterugur", 5173, "devbox-ilterugur");
     expect(agent.label).toBe("com.devbox.ilterugur.browser-port-5173");
     expect(agent.mode).toBe("daemon");
-    expect(agent.argv).toEqual([
-      "ssh", "-N",
-      "-o", "ExitOnForwardFailure=yes",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=3",
-      "-L", "127.0.0.1:5173:127.0.0.1:5173",
-      "devbox-ilterugur",
-    ]);
+    expect(agent.readyFile).toContain("com.devbox.ilterugur.browser-port-5173.ready");
+    expect(agent.argv.slice(0, 2)).toEqual(["sh", "-c"]);
+    expect(agent.argv[2]).toContain("ExitOnForwardFailure=yes");
+    expect(agent.argv[2]).toContain("127.0.0.1:5173:127.0.0.1:5173");
+    expect(agent.argv[2]).toContain('printf "ready\\n" > "$ready_file"');
   });
 
   test("autobind ports have a separate owned label and server mode includes legacy tunnels", () => {
