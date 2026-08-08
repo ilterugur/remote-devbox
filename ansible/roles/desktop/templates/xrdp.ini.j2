@@ -22,8 +22,10 @@ tcp_nodelay=true
 tcp_keepalive=true
 security_layer=negotiate
 crypt_level=high
-; Certificate pinning is not possible here, but requiring TLS keeps credentials off the
-; wire in cleartext.
+; Use the packaged host key pair explicitly. Certificate pinning is not possible here,
+; but a TLS-capable client must not fall back merely because xrdp cannot read its key.
+certificate=/etc/xrdp/cert.pem
+key_file=/etc/xrdp/key.pem
 ssl_protocols=TLSv1.2, TLSv1.3
 max_bpp=32
 new_cursors=true

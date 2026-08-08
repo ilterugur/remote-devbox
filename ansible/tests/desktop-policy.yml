@@ -29,6 +29,31 @@
           vars:
             _devbox_desktop_access: [tunnel, tailnet]
 
+        - name: Render xrdp configuration
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/desktop/templates/xrdp.ini.j2"
+            dest: "{{ render_dir.path }}/xrdp.ini"
+            mode: "0600"
+          vars:
+            _devbox_desktop_access: [tunnel]
+            devbox_desktop_port: 3389
+            ansible_facts:
+              tailscale0:
+                ipv4:
+                  address: 100.64.0.10
+
+        - name: Render sesman configuration
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/desktop/templates/sesman.ini.j2"
+            dest: "{{ render_dir.path }}/sesman.ini"
+            mode: "0600"
+          vars:
+            _devbox_desktop_group: devbox-rdp
+            _devbox_desktop_users:
+              - user: dev-a
+                desktop:
+                  idle_logout_minutes: 60
+
         - name: Read the tunnel-only policy
           ansible.builtin.slurp:
             src: "{{ render_dir.path }}/tunnel.conf"
@@ -38,6 +63,16 @@
           ansible.builtin.slurp:
             src: "{{ render_dir.path }}/tailnet.conf"
           register: tailnet_dropin
+
+        - name: Read the xrdp configuration
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/xrdp.ini"
+          register: xrdp_config
+
+        - name: Read the sesman configuration
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/sesman.ini"
+          register: sesman_config
 
         - name: Assert dependency and retry boundaries
           ansible.builtin.assert:
@@ -50,6 +85,10 @@
               - "'Restart=on-failure' in tailnet_dropin.content | b64decode"
               - "'After=tailscale-online.target' in tailnet_dropin.content | b64decode"
               - "'Wants=tailscale-online.target' in tailnet_dropin.content | b64decode"
+              - "'certificate=/etc/xrdp/cert.pem' in xrdp_config.content | b64decode"
+              - "'key_file=/etc/xrdp/key.pem' in xrdp_config.content | b64decode"
+              - "'ListenAddress=' not in sesman_config.content | b64decode"
+              - "'ListenPort=' not in sesman_config.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

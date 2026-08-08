@@ -21,6 +21,19 @@
     _devbox_desktop_access: >-
       {{ _devbox_desktop_users | map(attribute='desktop.access') | flatten | unique | list }}
 
+# Keep this role fail-closed even when somebody bypasses the client-side `devbox plan`
+# validation and invokes Ansible directly. Check before installing or starting anything.
+- name: Require a managed RDP password hash for every desktop developer
+  ansible.builtin.assert:
+    that:
+      - "('RDP_PASSWORD_HASH_' ~ (item.user | upper | replace('-', '_'))) in devbox_secrets"
+    fail_msg: >-
+      {{ item.user }} has desktop.enabled but no
+      RDP_PASSWORD_HASH_{{ item.user | upper | replace('-', '_') }} in devbox.secrets.yml.
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+
 - name: Install XFCE and xRDP
   ansible.builtin.apt:
     name:
@@ -29,6 +42,7 @@
       - xrdp
       - dbus-x11
       - xorgxrdp
+      - ssl-cert
     state: present
     update_cache: true
   when: _devbox_desktop_users | length > 0
@@ -37,6 +51,15 @@
   ansible.builtin.group:
     name: "{{ _devbox_desktop_group }}"
     state: present
+  when: _devbox_desktop_users | length > 0
+
+# Ubuntu's packaged xrdp certificate points at the ssl-cert-managed private key. Give
+# only the xrdp service account read access; developers remain outside that group.
+- name: Let only the xrdp service account read the packaged TLS key
+  ansible.builtin.user:
+    name: xrdp
+    groups: ssl-cert
+    append: true
   when: _devbox_desktop_users | length > 0
 
 - name: Let the desktop developers open an RDP session
@@ -222,22 +245,7 @@
   loop: "{{ _devbox_desktop_users }}"
   loop_control:
     label: "{{ item.user }}"
-  when: >-
-    ('RDP_PASSWORD_HASH_' ~ (item.user | upper | replace('-', '_'))) in devbox_secrets
   no_log: true
-
-- name: Warn about desktop developers with no RDP password
-  ansible.builtin.debug:
-    msg: >-
-      {{ item.user }} has desktop.enabled but no
-      RDP_PASSWORD_HASH_{{ item.user | upper | replace('-', '_') }} in devbox.secrets.yml —
-      they cannot log in over RDP. Generate one with:
-      openssl passwd -6
-  loop: "{{ _devbox_desktop_users }}"
-  loop_control:
-    label: "{{ item.user }}"
-  when: >-
-    ('RDP_PASSWORD_HASH_' ~ (item.user | upper | replace('-', '_'))) not in devbox_secrets
 
 # Password login over SSH stays off regardless: the RDP password is for the RDP PAM
 # stack only, and sshd must not start accepting it.
@@ -339,6 +347,147 @@
       bantime  = 3600
   when: _devbox_desktop_users | length > 0
   notify: Restart fail2ban
+
+# Assertions below inspect the final state, not the task graph. They run after every
+# relevant handler and make a live apply fail when the declared desktop is still not
+# usable. Check mode skips them because it deliberately has not created that future
+# state yet.
+- name: Apply all desktop handlers before checking postconditions
+  ansible.builtin.meta: flush_handlers
+
+- name: Prove xrdp can read its TLS certificate and key
+  ansible.builtin.command:
+    argv: [test, -r, "{{ item }}"]
+  become: true
+  become_user: xrdp
+  changed_when: false
+  loop:
+    - /etc/xrdp/cert.pem
+    - /etc/xrdp/key.pem
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Read final desktop service state
+  ansible.builtin.service_facts:
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Read final xrdp listeners with process ownership
+  ansible.builtin.command:
+    argv: [ss, -Hlnpt, "sport = :3389"]
+  changed_when: false
+  register: _devbox_xrdp_listeners
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Read final sesman Unix listener with process ownership
+  ansible.builtin.command:
+    argv: [ss, -Hxlpn]
+  changed_when: false
+  register: _devbox_sesman_listeners
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Read final RDP group membership
+  ansible.builtin.getent:
+    database: group
+    key: "{{ _devbox_desktop_group }}"
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Read managed desktop password hashes without logging them
+  ansible.builtin.getent:
+    database: shadow
+    key: "{{ item.user }}"
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: _devbox_desktop_shadow
+  no_log: true
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Read final effective SSH policy
+  ansible.builtin.command: sshd -T
+  changed_when: false
+  register: _devbox_sshd_final
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Work out the exact declared RDP listener addresses
+  ansible.builtin.set_fact:
+    _devbox_expected_rdp_addresses: >-
+      {{ (['127.0.0.1'] if 'tunnel' in _devbox_desktop_access else [])
+         + ([ansible_facts.tailscale0.ipv4.address] if 'tailnet' in _devbox_desktop_access else [])
+         + (['0.0.0.0'] if 'unsafe-public' in _devbox_desktop_access else []) }}
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Assert desktop services and security policy are live
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services['xrdp.service'].state == 'running'
+      - ansible_facts.services['xrdp-sesman.service'].state == 'running'
+      - "'passwordauthentication no' in (_devbox_sshd_final.stdout | lower)"
+      - >-
+        ('unsafe-public' in _devbox_desktop_access)
+        or ('0.0.0.0:3389' not in _devbox_xrdp_listeners.stdout)
+      - "'xrdp-sesman' in _devbox_sesman_listeners.stdout"
+    fail_msg: >-
+      Desktop postconditions failed: inspect systemctl status xrdp xrdp-sesman and
+      PID-owned listeners with ss -Hlnpt / ss -Hxlpn.
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Assert xrdp owns every declared listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        _devbox_xrdp_listeners.stdout_lines
+        | select('search', (item | regex_escape) ~ ':3389')
+        | select('search', 'users:\\(\\("xrdp"')
+        | list | length > 0
+    fail_msg: "xrdp does not own the declared {{ item }}:3389 listener"
+  loop: "{{ _devbox_expected_rdp_addresses | default([]) }}"
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Assert every desktop developer remains in the RDP gate group
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.user in
+        (ansible_facts.getent_group[_devbox_desktop_group][2] | default('')).split(',')
+    fail_msg: "{{ item.user }} is missing from {{ _devbox_desktop_group }}"
+  loop: "{{ _devbox_desktop_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
+
+- name: Assert every live desktop hash matches its managed secret
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.ansible_facts.getent_shadow[item.item.user][0]
+        == devbox_secrets['RDP_PASSWORD_HASH_' ~ (item.item.user | upper | replace('-', '_'))]
+    fail_msg: "managed desktop password hash does not match the live account"
+  loop: "{{ _devbox_desktop_shadow.results | default([]) }}"
+  no_log: true
+  when:
+    - _devbox_desktop_users | length > 0
+    - not ansible_check_mode
 
 - name: Report how the desktop is reachable
   ansible.builtin.debug:
