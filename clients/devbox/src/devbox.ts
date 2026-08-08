@@ -54,6 +54,7 @@ import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
 import { detectClientKeyboard } from "./keyboard";
 import { renderPlan } from "./spec/plan";
 import { describePhases, tagsFor } from "./spec/phases";
+import { runDoctor } from "./health";
 
 function newHelp(prof: string) {
   const lines = [
@@ -193,6 +194,15 @@ cli
       case "status": return runAgentStatus(cfg(), prof);
       default: return die(`unknown agent action "${action}" (up|down|status)`);
     }
+  });
+
+cli
+  .command("doctor", "verify client agent ownership and downstream box health")
+  .option("-p, --profile <profile>", "target profile")
+  .option("--json", "emit the versioned health document as JSON")
+  .action((opts: { profile?: string; json?: boolean }) => {
+    const prof = resolveProfile(cfg(), opts.profile);
+    process.exitCode = runDoctor(cfg(), prof, { json: opts.json === true });
   });
 
 cli

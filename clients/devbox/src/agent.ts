@@ -127,7 +127,7 @@ for _ in $(seq 1 ${PORT_FORWARD_READY_ATTEMPTS}); do
   sleep 0.1
   kill -0 "$ssh_pid" 2>/dev/null || exit 1
   if "$lsof" -nP -a -p "$ssh_pid" -iTCP:${opts.port} -sTCP:LISTEN >/dev/null 2>&1; then
-    printf "ready\\n" > "$ready_file"
+    printf "%s\\n" "$ssh_pid" > "$ready_file"
     wait "$ssh_pid"
     exit $?
   fi
