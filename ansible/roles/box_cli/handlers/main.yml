@@ -1,0 +1,15 @@
+---
+- name: Reload systemd for box health
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart box health snapshot timer
+  ansible.builtin.systemd_service:
+    name: devbox-health-snapshot.timer
+    enabled: true
+    state: restarted
+
+- name: Refresh box health snapshot
+  ansible.builtin.systemd_service:
+    name: devbox-health-snapshot.service
+    state: started
