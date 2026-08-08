@@ -1,0 +1,15 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+[Unit]
+{% if 'tailnet' in _devbox_desktop_access %}
+# xrdp binds the configured Tailscale address during startup. The daemon being active
+# does not prove that tailscale0 has an address; this target does.
+Wants=tailscale-online.target
+After=tailscale-online.target
+{% endif %}
+# Keep a persistent bind/configuration failure bounded instead of spinning forever.
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Service]
+Restart=on-failure
+RestartSec=5s

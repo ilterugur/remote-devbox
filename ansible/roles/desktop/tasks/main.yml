@@ -159,6 +159,49 @@
   # every open desktop its session. Everything else reloads xrdp alone.
   notify: Restart xrdp-sesman
 
+# xrdp resolves every configured bind address while it starts. `tailscaled.service`
+# being active does not mean tailscale0 has an address yet, so the unit must depend on
+# Tailscale's readiness target whenever it binds the tailnet. The restart policy is a
+# second, bounded safety net for readiness changing between the target and the bind.
+- name: Ensure the xrdp drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/xrdp.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: _devbox_desktop_users | length > 0
+
+- name: Configure xrdp dependency readiness and failed-start recovery
+  ansible.builtin.template:
+    src: xrdp-recovery.conf.j2
+    dest: /etc/systemd/system/xrdp.service.d/10-devbox-recovery.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: _devbox_desktop_users | length > 0
+  notify:
+    - Reload systemd
+    - Restart xrdp
+
+- name: Remove the obsolete tailscaled-service-only xrdp dependency
+  ansible.builtin.file:
+    path: /etc/systemd/system/xrdp.service.d/10-devbox-after-tailscaled.conf
+    state: absent
+  notify: Reload systemd
+
+- name: Remove xrdp recovery policy when no desktop is declared
+  ansible.builtin.file:
+    path: /etc/systemd/system/xrdp.service.d/10-devbox-recovery.conf
+    state: absent
+  when: _devbox_desktop_users | length == 0
+  notify: Reload systemd
+
+# A first install can otherwise try to start xrdp before systemd has loaded the new
+# dependency. Handler order guarantees daemon-reload runs before the xrdp restart.
+- name: Apply xrdp unit policy before enabling the service
+  ansible.builtin.meta: flush_handlers
+
 - name: Enable xRDP
   ansible.builtin.systemd_service:
     name: "{{ item }}"
@@ -258,34 +301,6 @@
     delete: true
   when: "'tailnet' not in _devbox_desktop_access"
   failed_when: false
-
-# xrdp binds interfaces by name at startup, so a tailnet listener needs tailscale0 to
-# already exist — otherwise the bind fails and the service comes up reachable only on
-# whatever else was listed.
-- name: Ensure the xrdp drop-in directory exists
-  ansible.builtin.file:
-    path: /etc/systemd/system/xrdp.service.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: "'tailnet' in _devbox_desktop_access"
-
-- name: Start xrdp after the tailnet is up
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/xrdp.service.d/10-devbox-after-tailscaled.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      # Managed by Ansible (remote-devbox).
-      [Unit]
-      After=tailscaled.service
-      Wants=tailscaled.service
-  when: "'tailnet' in _devbox_desktop_access"
-  notify:
-    - Reload systemd
-    - Restart xrdp
 
 - name: Teach fail2ban what an xrdp login failure looks like
   # fail2ban ships no xrdp filter on Ubuntu, so a jail alone would silently not exist.

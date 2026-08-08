@@ -1,0 +1,58 @@
+---
+- name: Verify rendered desktop service policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Render and verify policies in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-desktop-policy-
+          register: render_dir
+
+        - name: Render tunnel-only xrdp policy
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/desktop/templates/xrdp-recovery.conf.j2"
+            dest: "{{ render_dir.path }}/tunnel.conf"
+            mode: "0600"
+          vars:
+            _devbox_desktop_access: [tunnel]
+
+        - name: Render tailnet xrdp policy
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/desktop/templates/xrdp-recovery.conf.j2"
+            dest: "{{ render_dir.path }}/tailnet.conf"
+            mode: "0600"
+          vars:
+            _devbox_desktop_access: [tunnel, tailnet]
+
+        - name: Read the tunnel-only policy
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/tunnel.conf"
+          register: tunnel_dropin
+
+        - name: Read the tailnet policy
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/tailnet.conf"
+          register: tailnet_dropin
+
+        - name: Assert dependency and retry boundaries
+          ansible.builtin.assert:
+            that:
+              - "'Restart=on-failure' in tunnel_dropin.content | b64decode"
+              - "'RestartSec=5s' in tunnel_dropin.content | b64decode"
+              - "'StartLimitIntervalSec=60' in tunnel_dropin.content | b64decode"
+              - "'StartLimitBurst=6' in tunnel_dropin.content | b64decode"
+              - "'tailscale-online.target' not in tunnel_dropin.content | b64decode"
+              - "'Restart=on-failure' in tailnet_dropin.content | b64decode"
+              - "'After=tailscale-online.target' in tailnet_dropin.content | b64decode"
+              - "'Wants=tailscale-online.target' in tailnet_dropin.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined
