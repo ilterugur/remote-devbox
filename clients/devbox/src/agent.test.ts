@@ -19,6 +19,8 @@ import {
   plistPath,
   renderPlist,
   resolveArgv,
+  recoverOwnedAgent,
+  type OwnedAgentRecoveryState,
 } from "./agent";
 import type { Config } from "./config";
 
@@ -516,6 +518,67 @@ describe("agentsFor", () => {
     expect(mount.mode).toBe("interval");
     expect(mount.intervalSeconds).toBe(60);
     expect(mount.argv.slice(-3)).toEqual(["devbox", "mount", "up"]);
+  });
+});
+
+describe("recoverOwnedAgent", () => {
+  const spec = agentsFor(cfg({ desktop: { clientPort: 3390 } }), "ilterugur")[0]!;
+  const desiredPlist = "exact managed plist";
+  const base: OwnedAgentRecoveryState = {
+    healthStatus: "failed",
+    reason: "agent_not_loaded",
+    installedPlist: desiredPlist,
+    desiredPlist,
+    loaded: false,
+    foreignListener: false,
+  };
+
+  function run(state: Partial<OwnedAgentRecoveryState> = {}) {
+    const actions: string[] = [];
+    const result = recoverOwnedAgent(spec, { ...base, ...state }, {
+      writePlist: (label) => actions.push(`write:${label}`),
+      bootout: (label) => actions.push(`bootout:${label}`),
+      bootstrap: (label) => actions.push(`bootstrap:${label}`),
+    });
+    return { result, actions };
+  }
+
+  test("writes and bootstraps only the exact missing owned plist", () => {
+    const { result, actions } = run({ installedPlist: null });
+    expect(result).toEqual({ status: "recovered", reason: "agent_bootstrapped" });
+    expect(actions).toEqual([
+      "write:com.devbox.ilterugur.desktop",
+      "bootstrap:com.devbox.ilterugur.desktop",
+    ]);
+  });
+
+  test("bootstraps an unloaded exact plist without rewriting it", () => {
+    expect(run().actions).toEqual(["bootstrap:com.devbox.ilterugur.desktop"]);
+  });
+
+  test("restarts only the exact loaded owned label", () => {
+    const { actions } = run({ loaded: true, reason: "agent_not_running" });
+    expect(actions).toEqual([
+      "bootout:com.devbox.ilterugur.desktop",
+      "bootstrap:com.devbox.ilterugur.desktop",
+    ]);
+  });
+
+  test("blocks config drift and a foreign listener without mutating either", () => {
+    expect(run({ installedPlist: "user-edited plist" })).toEqual({
+      result: { status: "blocked", reason: "config_drift" },
+      actions: [],
+    });
+    expect(run({ foreignListener: true, reason: "listener_owner_mismatch" })).toEqual({
+      result: { status: "blocked", reason: "foreign_listener" },
+      actions: [],
+    });
+  });
+
+  test("skips a healthy agent and never selects an alternative label or port", () => {
+    const { result, actions } = run({ healthStatus: "healthy", reason: undefined, loaded: true });
+    expect(result).toEqual({ status: "skipped", reason: "already_healthy" });
+    expect(actions).toEqual([]);
   });
 });
 

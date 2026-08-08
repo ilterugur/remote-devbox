@@ -35,6 +35,63 @@ export type AgentSpec = {
   warning?: string;
 };
 
+export interface OwnedAgentRecoveryState {
+  healthStatus: "healthy" | "degraded" | "recovering" | "blocked" | "failed" | "unknown";
+  reason?: string;
+  installedPlist: string | null;
+  desiredPlist: string;
+  loaded: boolean;
+  foreignListener: boolean;
+}
+
+export interface OwnedAgentRecoveryActions {
+  writePlist: (label: string, contents: string) => void;
+  bootout: (label: string) => void;
+  bootstrap: (label: string) => void;
+}
+
+export type OwnedAgentRecoveryResult = {
+  status: "recovered" | "skipped" | "blocked" | "failed";
+  reason: string;
+};
+
+/**
+ * Reconcile one already-resolved AgentSpec. The caller supplies evidence gathered just
+ * before this call and actions that are scoped to the exact label. A different plist or
+ * a foreign listener is an ownership boundary, never permission to replace or kill it.
+ */
+export function recoverOwnedAgent(
+  spec: AgentSpec,
+  state: OwnedAgentRecoveryState,
+  actions: OwnedAgentRecoveryActions,
+): OwnedAgentRecoveryResult {
+  if (state.healthStatus === "healthy") return { status: "skipped", reason: "already_healthy" };
+  if (state.healthStatus === "recovering") return { status: "skipped", reason: "recovery_in_progress" };
+  if (state.healthStatus === "unknown") return { status: "blocked", reason: "evidence_unknown" };
+  if (state.healthStatus === "blocked") return { status: "blocked", reason: "component_blocked" };
+  if (state.installedPlist !== null && state.installedPlist !== state.desiredPlist) {
+    return { status: "blocked", reason: "config_drift" };
+  }
+  if (state.foreignListener) return { status: "blocked", reason: "foreign_listener" };
+
+  try {
+    if (state.installedPlist === null) {
+      actions.writePlist(spec.label, state.desiredPlist);
+      actions.bootstrap(spec.label);
+      return { status: "recovered", reason: "agent_bootstrapped" };
+    }
+    if (!state.loaded) {
+      actions.bootstrap(spec.label);
+      return { status: "recovered", reason: "agent_bootstrapped" };
+    }
+    actions.bootout(spec.label);
+    actions.bootstrap(spec.label);
+    return { status: "recovered", reason: "agent_restarted" };
+  } catch {
+    return { status: "failed", reason: "agent_action_failed" };
+  }
+}
+
 /** The box always listens here; only the client side of the forward is configurable. */
 const BOX_RDP_PORT = 3389;
 const LEGACY_BROWSER_AGENT_LABELS = ["com.devbox.agent-chrome", "com.devbox.cdp-tunnel"] as const;
