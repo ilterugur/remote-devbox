@@ -1,5 +1,5 @@
 import { collect } from "./collect";
-import { formatHuman, formatJson } from "./report";
+import { formatHuman, formatJson, healthDocumentFromEvidence } from "./report";
 
 async function main() {
   const [cmd, ...rest] = Bun.argv.slice(2);
@@ -14,7 +14,8 @@ async function main() {
       activityWindowSec: 10 * 60,
       idleAfterSec: 30 * 60,
     });
-    console.log(json ? formatJson(health) : formatHuman(health));
+    const document = healthDocumentFromEvidence(health);
+    console.log(json ? formatJson(document) : formatHuman(document));
   } catch (err) {
     console.error(
       `doctor: failed to collect health: ${err instanceof Error ? err.message : String(err)}`,

@@ -5,6 +5,6 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "build": "bun build ./src/cli.ts --compile --outfile remote-devbox-doctor"
+    "build": "bun build ./src/cli.ts --compile --outfile dist/remote-devbox-doctor"
   }
 }

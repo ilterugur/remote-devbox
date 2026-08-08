@@ -33,7 +33,7 @@ export async function collect(opts: CollectOpts): Promise<Health> {
     sh(["free", "-b"]),
     sh(["swapon", "--show=NAME,TYPE,SIZE,USED,PRIO", "--bytes", "--noheadings"]),
     sh(["sh", "-c", "dmesg -T 2>/dev/null | grep -i 'killed process' || true"]),
-    sh(["systemctl", "list-units", "claude-rc*", "--all", "--no-legend", "--plain"]),
+    sh(["systemctl", "list-units", "agent-rc-*", "--all", "--no-legend", "--plain"]),
     sh(["ps", "-eo", "pid,cmd", "--no-headers"]),
   ]);
 
