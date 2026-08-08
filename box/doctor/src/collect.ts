@@ -175,6 +175,7 @@ async function collectComponent(
 
   return {
     id: fact.id,
+    ...(fact.profile ? { profile: fact.profile } : {}),
     status,
     expected,
     observed,

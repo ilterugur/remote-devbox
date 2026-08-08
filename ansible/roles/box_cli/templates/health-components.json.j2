@@ -53,6 +53,7 @@
 {%   for name, instance in dev.memory.instances.items() %}
 {%     set _ = components.append({
          'id': 'memory.' ~ dev.user ~ '.' ~ name,
+         'profile': dev.user,
          'listeners': [{
            'protocol': 'tcp',
            'address': '127.0.0.1',
@@ -67,6 +68,7 @@
 {%   set unit = 'agent-rc-' ~ row.agent ~ '-' ~ row.user ~ '-' ~ row.project ~ '.service' %}
 {%   set _ = components.append({
        'id': 'remote-control.' ~ unit,
+       'profile': row.user,
        'unit': unit,
        'recovery': 'automatic'}) %}
 {% endfor %}

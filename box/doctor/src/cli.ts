@@ -1,7 +1,9 @@
-import { collect } from "./collect";
 import { runCommand } from "./collect";
-import { formatHuman, formatJson, healthDocumentFromEvidence } from "./report";
+import { formatHuman, formatJson, createHealthDocument } from "./report";
 import { createSnapshot } from "./snapshot";
+import { readHealthSnapshot } from "./document";
+import { collectProfileComponents, systemProfileProbe } from "./profile";
+import { userInfo } from "node:os";
 
 const HEALTH_FACTS_PATH = "/etc/remote-devbox/health-components.json";
 const HEALTH_SNAPSHOT_PATH = "/run/remote-devbox/health.json";
@@ -33,15 +35,35 @@ async function main() {
     console.error(`unknown command: ${cmd} (this build supports: report, snapshot)`);
     process.exit(2);
   }
-  const json = rest.includes("--json");
+  let json = false;
+  let profile = userInfo().username;
+  for (let index = 0; index < rest.length; index++) {
+    const arg = rest[index];
+    if (arg === "--json") {
+      json = true;
+    } else if (arg === "--profile") {
+      const value = rest[++index];
+      if (!value) {
+        console.error("doctor: --profile requires a value");
+        process.exit(2);
+      }
+      profile = value;
+    } else {
+      console.error(`doctor: unknown report argument '${arg}'`);
+      process.exit(2);
+    }
+  }
+  if (profile !== userInfo().username) {
+    console.error("doctor: --profile must name the invoking account");
+    process.exit(2);
+  }
   try {
-    const health = await collect({
-      profileHome: process.env.HOME ?? "/root",
-      activityWindowSec: 10 * 60,
-      idleAfterSec: 30 * 60,
-    });
-    const document = healthDocumentFromEvidence(health);
+    const now = new Date();
+    const snapshot = readHealthSnapshot(HEALTH_SNAPSHOT_PATH, { profile, now });
+    const local = await collectProfileComponents(profile, systemProfileProbe(profile));
+    const document = createHealthDocument(now.toISOString(), [...snapshot.components, ...local]);
     console.log(json ? formatJson(document) : formatHuman(document));
+    if (document.status === "failed" || document.status === "blocked") process.exitCode = 1;
   } catch (err) {
     console.error(
       `doctor: failed to collect health: ${err instanceof Error ? err.message : String(err)}`,

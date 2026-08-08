@@ -31,6 +31,7 @@ const facts: HealthFacts = {
     },
     {
       id: "memory.dev-a.primary",
+      profile: "dev-a",
       listeners: [{
         protocol: "tcp",
         address: "127.0.0.1",
@@ -83,6 +84,8 @@ test("collectHostDocument proves configured host components from unit and owned-
   ]);
   expect(doc.components.find((component) => component.id === "desktop.xrdp")?.observed)
     .toContain("xrdp owns 127.0.0.1:3389");
+  expect(doc.components.find((component) => component.id === "memory.dev-a.primary")?.profile)
+    .toBe("dev-a");
 });
 
 test("a failed unit and a foreign listener owner never become healthy", async () => {

@@ -70,6 +70,11 @@
                 | map(attribute='listeners') | first
                 | map(attribute='address') | list
                 == ['127.0.0.1', '100.64.0.10']
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'memory.dev-a.primary')
+                | map(attribute='profile') | first
+                == 'dev-a'
               - marker not in (rendered.content | b64decode)
           vars:
             expected_ids:

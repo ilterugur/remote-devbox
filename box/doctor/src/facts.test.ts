@@ -8,6 +8,7 @@ test("parseHealthFacts accepts schema 1 and drops undeclared fields", () => {
     environment: marker,
     components: [{
       id: "desktop.xrdp",
+      profile: "dev-a",
       unit: "xrdp.service",
       recovery: "automatic",
       secret: marker,
@@ -23,6 +24,7 @@ test("parseHealthFacts accepts schema 1 and drops undeclared fields", () => {
   });
 
   expect(parsed.components[0]?.id).toBe("desktop.xrdp");
+  expect(parsed.components[0]?.profile).toBe("dev-a");
   expect(parsed.components[0]?.listeners?.[0]?.processMatch).toBe("exact");
   expect(JSON.stringify(parsed)).not.toContain(marker);
 });

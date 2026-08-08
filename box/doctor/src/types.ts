@@ -88,6 +88,8 @@ export type RecoveryPolicy = "automatic" | "manual" | "confirmation-required" | 
 
 export interface HealthResult {
   id: string;
+  /** Omitted for host-wide components; explicit for per-developer services. */
+  profile?: string;
   status: HealthStatus;
   expected: string[];
   observed: string[];

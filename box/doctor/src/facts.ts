@@ -17,6 +17,7 @@ export interface UnixListenerFact {
 
 export interface HealthComponentFact {
   id: string;
+  profile?: string;
   unit?: string;
   listeners?: (TcpListenerFact | UnixListenerFact)[];
   recovery: RecoveryPolicy;
@@ -81,6 +82,10 @@ export function parseHealthFacts(value: unknown): HealthFacts {
     }
     if (seen.has(component.id)) throw new Error(`duplicate component id '${component.id}'`);
     seen.add(component.id);
+    if (
+      component.profile !== undefined
+      && (typeof component.profile !== "string" || !/^[a-z_][a-z0-9_-]{0,31}$/.test(component.profile))
+    ) throw new Error(`invalid profile for '${component.id}'`);
     if (!RECOVERY_POLICIES.has(component.recovery as RecoveryPolicy)) {
       throw new Error(`invalid recovery policy for '${component.id}'`);
     }
@@ -93,6 +98,7 @@ export function parseHealthFacts(value: unknown): HealthFacts {
     }
     return {
       id: component.id,
+      ...(component.profile === undefined ? {} : { profile: component.profile as string }),
       ...(component.unit === undefined ? {} : { unit: component.unit as string }),
       ...(component.listeners === undefined ? {} : { listeners: component.listeners.map(parseListener) }),
       recovery: component.recovery as RecoveryPolicy,
