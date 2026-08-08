@@ -58,6 +58,67 @@ test("a satisfied reference produces nothing", () => {
   expect(validateSecretRefs(spec(undefined), {})).toEqual([]);
 });
 
+test("every enabled desktop requires its normalized managed password hash", () => {
+  const resolved = spec(undefined);
+  resolved.developers = [
+    {
+      ...resolved.developers[0]!,
+      user: "dev-a",
+      desktop: { enabled: true, environment: "xfce", transport: "xrdp", access: ["tunnel"] },
+    },
+    {
+      ...resolved.developers[0]!,
+      user: "dev-b-test",
+      desktop: { enabled: true, environment: "xfce", transport: "xrdp", access: ["tailnet"] },
+    },
+  ];
+
+  const issues = validateSecretRefs(resolved, {});
+
+  expect(issues.map((issue) => [issue.severity, issue.path])).toEqual([
+    ["error", "developers[0].desktop"],
+    ["error", "developers[1].desktop"],
+  ]);
+  expect(issues.map((issue) => issue.message)).toEqual([
+    "'RDP_PASSWORD_HASH_DEV_A' is required when desktop.enabled is true",
+    "'RDP_PASSWORD_HASH_DEV_B_TEST' is required when desktop.enabled is true",
+  ]);
+});
+
+test("desktop secret validation never exposes secret values", () => {
+  const resolved = spec(undefined);
+  resolved.developers[0]!.desktop = {
+    enabled: true,
+    environment: "xfce",
+    transport: "xrdp",
+    access: ["tunnel"],
+  };
+
+  const marker = "SECRET_HASH_MUST_NOT_APPEAR";
+  const issues = validateSecretRefs(resolved, { UNRELATED_SECRET: marker });
+
+  expect(JSON.stringify(issues)).not.toContain(marker);
+});
+
+test("disabled desktops do not require a password hash", () => {
+  const resolved = spec(undefined);
+  resolved.developers[0]!.desktop = { enabled: false, environment: "xfce", transport: "xrdp" };
+
+  expect(validateSecretRefs(resolved, {})).toEqual([]);
+});
+
+test("a present desktop password hash satisfies the requirement", () => {
+  const resolved = spec(undefined);
+  resolved.developers[0]!.desktop = {
+    enabled: true,
+    environment: "xfce",
+    transport: "xrdp",
+    access: ["tunnel"],
+  };
+
+  expect(validateSecretRefs(resolved, { RDP_PASSWORD_HASH_DEV_A: "$6$hash" })).toEqual([]);
+});
+
 test("describeSecrets exposes names only, sorted", () => {
   expect(describeSecrets({ B: "2", A: "1" })).toEqual(["A", "B"]);
 });

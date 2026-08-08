@@ -40,14 +40,24 @@ export function loadSecrets(path: string): { secrets: Secrets; issues: Issue[] }
   return { secrets, issues };
 }
 
-/**
- * Check every name devbox.yml points at is actually present. A missing secret is a
- * warning, not an error: `devbox plan` must stay useful on a machine that holds the
- * config but not the credentials.
- */
+/** Check every secret required by the resolved configuration is actually present.
+ * Optional integrations stay warnings so a checkout without their credentials can
+ * still produce a useful plan. A desktop password is different: without it the
+ * declared login path cannot work reproducibly, so that requirement fails closed. */
 export function validateSecretRefs(resolved: ResolvedSpec, secrets: Secrets): Issue[] {
   const issues: Issue[] = [];
   resolved.developers.forEach((dev, i) => {
+    if (dev.desktop?.enabled) {
+      const name = `RDP_PASSWORD_HASH_${dev.user.toUpperCase().replaceAll("-", "_")}`;
+      if (!(name in secrets)) {
+        issues.push(
+          err(
+            `developers[${i}].desktop`,
+            `'${name}' is required when desktop.enabled is true`,
+          ),
+        );
+      }
+    }
     for (const [key, instance] of Object.entries(dev.memory?.instances ?? {})) {
       const name = instance.api_key_env;
       if (name && !(name in secrets)) {
