@@ -52,6 +52,7 @@ import { loadSpec, secretsPathFor, writeGeneratedVars } from "./spec/load";
 import { describeSecrets, loadSecrets, validateSecretRefs, writeGeneratedSecrets } from "./spec/secrets";
 import { isLegacyConfig, migrateLegacy, renderMigration } from "./spec/migrate";
 import { detectClientKeyboard } from "./keyboard";
+import { childProcessEnv } from "./locale";
 import { renderPlan } from "./spec/plan";
 import { describePhases, tagsFor } from "./spec/phases";
 import { runDoctor } from "./health";
@@ -451,6 +452,7 @@ cli
       stdio: piped ? ["ignore", "pipe", "pipe"] : "inherit",
       encoding: piped ? "utf8" : undefined,
       maxBuffer: 64 * 1024 * 1024,
+      env: childProcessEnv(),
     });
     if (piped) {
       if (r.stdout) process.stdout.write(r.stdout);

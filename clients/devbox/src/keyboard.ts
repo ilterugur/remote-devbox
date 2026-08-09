@@ -18,6 +18,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { childProcessEnv } from "./locale";
 import type { XkbKeyboard } from "./spec/types";
 
 /**
@@ -104,7 +105,7 @@ export function keyboardFromDefaultKeyboard(raw: string): XkbKeyboard | null {
 }
 
 const run = (cmd: string, args: string[]): string | null => {
-  const out = spawnSync(cmd, args, { encoding: "utf8" });
+  const out = spawnSync(cmd, args, { encoding: "utf8", env: childProcessEnv() });
   return out.status === 0 && out.stdout ? out.stdout : null;
 };
 
