@@ -9,15 +9,15 @@ test("parseRcUnits reads unit/load/active/sub", () => {
   const units = parseRcUnits(fixture);
   expect(units).toHaveLength(2);
   expect(units[0]).toEqual({
-    unit: "claude-rc-dev-a-example-app.service",
+    unit: "agent-rc-claude-dev-a-example-app.service",
     loaded: true,
     active: "active",
-    sub: "exited",
+    sub: "running",
   });
   expect(units[1].active).toBe("failed");
   expect(units[1].sub).toBe("failed");
 });
 
-test("parseRcUnits skips malformed claude-rc lines with too few fields", () => {
-  expect(parseRcUnits("claude-rc-x.service loaded active")).toEqual([]);
+test("parseRcUnits skips malformed agent-rc lines with too few fields", () => {
+  expect(parseRcUnits("agent-rc-x.service loaded active")).toEqual([]);
 });

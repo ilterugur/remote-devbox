@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { die, hostFor, lazyMountsFor, resolveCfgDir, shQuote, type Config } from "./config";
+import type { HealthResult } from "./health";
 
 export type AgentMode = "daemon" | "interval";
 export type BrowserMode = "client" | "server";
@@ -34,6 +35,102 @@ export type AgentSpec = {
    *  work as configured, and the plist itself is not where that shows up. */
   warning?: string;
 };
+
+export interface OwnedAgentRecoveryState {
+  healthStatus: "healthy" | "degraded" | "recovering" | "blocked" | "failed" | "unknown";
+  reason?: string;
+  installedPlist: string | null;
+  desiredPlist: string;
+  loaded: boolean;
+  foreignListener: boolean;
+}
+
+export interface OwnedAgentRecoveryActions {
+  writePlist: (label: string, contents: string) => void;
+  bootout: (label: string) => void;
+  bootstrap: (label: string) => void;
+}
+
+export type OwnedAgentRecoveryResult = {
+  status: "recovered" | "skipped" | "blocked" | "failed";
+  reason: string;
+};
+
+/**
+ * Reconcile one already-resolved AgentSpec. The caller supplies evidence gathered just
+ * before this call and actions that are scoped to the exact label. A different plist or
+ * a foreign listener is an ownership boundary, never permission to replace or kill it.
+ */
+export function recoverOwnedAgent(
+  spec: AgentSpec,
+  state: OwnedAgentRecoveryState,
+  actions: OwnedAgentRecoveryActions,
+): OwnedAgentRecoveryResult {
+  if (state.healthStatus === "healthy") return { status: "skipped", reason: "already_healthy" };
+  if (state.healthStatus === "recovering") return { status: "skipped", reason: "recovery_in_progress" };
+  if (state.healthStatus === "unknown") return { status: "blocked", reason: "evidence_unknown" };
+  if (state.healthStatus === "blocked") return { status: "blocked", reason: "component_blocked" };
+  if (state.installedPlist !== null && state.installedPlist !== state.desiredPlist) {
+    return { status: "blocked", reason: "config_drift" };
+  }
+  if (state.foreignListener) return { status: "blocked", reason: "foreign_listener" };
+
+  try {
+    if (state.installedPlist === null) {
+      actions.writePlist(spec.label, state.desiredPlist);
+      actions.bootstrap(spec.label);
+      return { status: "recovered", reason: "agent_bootstrapped" };
+    }
+    if (!state.loaded) {
+      actions.bootstrap(spec.label);
+      return { status: "recovered", reason: "agent_bootstrapped" };
+    }
+    actions.bootout(spec.label);
+    actions.bootstrap(spec.label);
+    return { status: "recovered", reason: "agent_restarted" };
+  } catch {
+    return { status: "failed", reason: "agent_action_failed" };
+  }
+}
+
+/** Live adapter for the pure ownership decision above. It touches one exact plist label. */
+export function recoverOwnedAgentLive(spec: AgentSpec, health: HealthResult): OwnedAgentRecoveryResult {
+  try {
+    const resolved = { ...spec, argv: resolveArgv(spec.argv) };
+    const desiredPlist = renderPlist(resolved, logDirFor());
+    const path = plistPath(spec.label);
+    const installedPlist = existsSync(path) ? readFileSync(path, "utf8") : null;
+    const loaded = isLoaded(spec.label);
+    const port = localForwardPort(spec);
+    const foreignListener = !!port && health.status !== "healthy"
+      && spawnSync("/usr/sbin/lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).status === 0;
+
+    return recoverOwnedAgent(spec, {
+      healthStatus: health.status,
+      reason: health.reason,
+      installedPlist,
+      desiredPlist,
+      loaded,
+      foreignListener,
+    }, {
+      writePlist: (_label, contents) => {
+        mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+        writeFileSync(path, contents);
+      },
+      bootout: (label) => {
+        bootoutIfLoaded(label);
+        if (spec.readyFile) rmSync(spec.readyFile, { force: true });
+      },
+      bootstrap: () => {
+        if (spec.readyFile) rmSync(spec.readyFile, { force: true });
+        const result = launchctl("bootstrap", domain(), path);
+        if (result.status !== 0) throw new Error("launchctl bootstrap failed");
+      },
+    });
+  } catch {
+    return { status: "failed", reason: "agent_action_failed" };
+  }
+}
 
 /** The box always listens here; only the client side of the forward is configurable. */
 const BOX_RDP_PORT = 3389;
@@ -127,7 +224,7 @@ for _ in $(seq 1 ${PORT_FORWARD_READY_ATTEMPTS}); do
   sleep 0.1
   kill -0 "$ssh_pid" 2>/dev/null || exit 1
   if "$lsof" -nP -a -p "$ssh_pid" -iTCP:${opts.port} -sTCP:LISTEN >/dev/null 2>&1; then
-    printf "ready\\n" > "$ready_file"
+    printf "%s\\n" "$ssh_pid" > "$ready_file"
     wait "$ssh_pid"
     exit $?
   fi
@@ -412,7 +509,7 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
       mode: "interval",
       intervalSeconds: 60,
       description: "lazy mounts: re-establish after sleep, wake or a dropped link",
-      argv: ["devbox", "mount", "up"],
+      argv: ["devbox", "mount", "up", "-p", profile],
     });
   }
 

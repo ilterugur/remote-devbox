@@ -1,27 +1,59 @@
 import { expect, test } from "bun:test";
-import { formatHuman, formatJson } from "./report";
-import type { Health } from "./types";
+import { aggregateStatus, createHealthDocument, formatHuman, formatJson } from "./report";
+import type { HealthResult, HealthStatus } from "./types";
 
-const health: Health = {
-  now: Math.floor(Date.parse("2026-06-18T09:34:00Z") / 1000),
-  mem: { totalBytes: 8131299328, usedBytes: 6979321856, freeBytes: 811597824, availableBytes: 1073741824 },
-  swap: [{ name: "/swapfile", type: "file", sizeBytes: 8589934592, usedBytes: 0, priority: -1 }],
-  oom: [{ at: 1, atText: "Thu Jun 18 07:53:25 2026", process: "bun", pid: 273394, uid: 1001 }],
-  units: [{ unit: "claude-rc-x-example.service", loaded: true, active: "failed", sub: "failed" }],
-  sessions: [],
-  worktrees: [],
-  conditions: [
-    { id: "rc-x-failed", severity: "high", facts: { unit: "claude-rc-x-example.service" }, candidateAction: "restart-failed-rc", guard: "pass" },
-  ],
-};
+const components: HealthResult[] = [
+  {
+    id: "remote-control.agent-rc-dev-a-example.service",
+    status: "failed",
+    expected: ["agent-rc-dev-a-example.service active"],
+    observed: ["failed/failed"],
+    reason: "unit_failed",
+    recovery: "automatic",
+  },
+  {
+    id: "desktop.xrdp",
+    status: "healthy",
+    expected: ["xrdp.service active", "127.0.0.1:3389 owned by xrdp"],
+    observed: ["active/running", "xrdp pid 481 owns 127.0.0.1:3389"],
+    recovery: "confirmation-required",
+  },
+];
 
-test("formatJson round-trips the Health object", () => {
-  expect(JSON.parse(formatJson(health))).toEqual(health);
+test("aggregateStatus uses the fail-closed severity order", () => {
+  const statuses: HealthStatus[] = ["healthy", "recovering", "degraded", "unknown", "blocked", "failed"];
+  expect(aggregateStatus(statuses)).toBe("failed");
+  expect(aggregateStatus(statuses.slice(0, -1))).toBe("blocked");
+  expect(aggregateStatus(statuses.slice(0, -2))).toBe("unknown");
+  expect(aggregateStatus([])).toBe("healthy");
 });
 
-test("formatHuman includes a conditions section naming the candidate action", () => {
-  const out = formatHuman(health);
-  expect(out).toContain("restart-failed-rc");
-  expect(out).toContain("claude-rc-x-example.service");
-  expect(out).toContain("OOM");
+test("createHealthDocument sorts components and derives aggregate status", () => {
+  const doc = createHealthDocument("2026-08-09T00:00:00.000Z", components);
+  expect(doc.schemaVersion).toBe(1);
+  expect(doc.status).toBe("failed");
+  expect(doc.components.map((component) => component.id)).toEqual([
+    "desktop.xrdp",
+    "remote-control.agent-rc-dev-a-example.service",
+  ]);
+});
+
+test("formatJson emits only the versioned health document", () => {
+  const doc = createHealthDocument("2026-08-09T00:00:00.000Z", components);
+  expect(JSON.parse(formatJson(doc))).toEqual(doc);
+  expect(Object.keys(JSON.parse(formatJson(doc)))).toEqual([
+    "schemaVersion",
+    "status",
+    "observedAt",
+    "components",
+  ]);
+});
+
+test("formatHuman renders expected, observed, reason, and recovery from the same results", () => {
+  const out = formatHuman(createHealthDocument("2026-08-09T00:00:00.000Z", components));
+  expect(out).toContain("remote-control.agent-rc-dev-a-example.service  failed");
+  expect(out).toContain("expected: agent-rc-dev-a-example.service active");
+  expect(out).toContain("observed: failed/failed");
+  expect(out).toContain("reason: unit_failed");
+  expect(out).toContain("recovery: automatic");
 });

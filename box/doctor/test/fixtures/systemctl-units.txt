@@ -1,2 +1,2 @@
-claude-rc-dev-a-example-app.service      loaded active exited Claude remote-control (dev-a-example-app)
-claude-rc-dev-a-example-monorepo.service loaded failed failed Claude remote-control (dev-a-example-monorepo)
+agent-rc-claude-dev-a-example-app.service      loaded active running Claude remote-control (dev-a-example-app)
+agent-rc-claude-dev-a-example-monorepo.service loaded failed failed Claude remote-control (dev-a-example-monorepo)

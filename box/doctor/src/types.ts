@@ -24,7 +24,7 @@ export interface OomEvent {
 }
 
 export interface RcUnit {
-  unit: string; // e.g. "claude-rc-dev-a-example-monorepo.service"
+  unit: string; // e.g. "agent-rc-claude-dev-a-example-monorepo.service"
   loaded: boolean;
   active: string; // "active" | "failed" | "inactive" | ...
   sub: string; // "exited" | "failed" | "running" | ...
@@ -74,4 +74,32 @@ export interface Health {
   sessions: Session[];
   worktrees: Worktree[];
   conditions: Condition[];
+}
+
+export type HealthStatus =
+  | "healthy"
+  | "degraded"
+  | "recovering"
+  | "blocked"
+  | "failed"
+  | "unknown";
+
+export type RecoveryPolicy = "automatic" | "manual" | "confirmation-required" | "none";
+
+export interface HealthResult {
+  id: string;
+  /** Omitted for host-wide components; explicit for per-developer services. */
+  profile?: string;
+  status: HealthStatus;
+  expected: string[];
+  observed: string[];
+  reason?: string;
+  recovery: RecoveryPolicy;
+}
+
+export interface HealthDocument {
+  schemaVersion: 1;
+  status: HealthStatus;
+  observedAt: string;
+  components: HealthResult[];
 }

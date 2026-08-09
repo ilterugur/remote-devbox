@@ -112,94 +112,14 @@ cmd_container() {
 }
 
 # ── doctor ────────────────────────────────────────────────────────────────────
-# Checks the properties that are supposed to be TRUE, not the ones that are easy to
-# print. Each one has been an actual failure mode: a home that reverted to 0755, a
-# developer quietly added to the docker group, a bank shared between two people.
-PASS=0; FAIL=0; WARN=0
-ok()   { printf '  \033[32m✔\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
-bad()  { printf '  \033[31m✘\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
-meh()  { printf '  \033[33m!\033[0m %s\n' "$1"; WARN=$((WARN+1)); }
-check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
-
 cmd_doctor() {
-  local uid; uid="$(id -u)"
+  # The compiled reporter reads the root-owned snapshot and adds only evidence that
+  # belongs to this invoking profile. Human and JSON output therefore share one model.
+  exec /usr/local/libexec/remote-devbox-doctor report --profile "$ME" "$@"
+}
 
-  echo "platform"
-  . /etc/os-release
-  check "$PRETTY_NAME $(uname -m)" "true"
-  check "root filesystem has >10G free" "[ \"$(df -BG --output=avail / | tail -1 | tr -dc 0-9)\" -gt 10 ]"
-
-  echo "isolation"
-  local home_mode; home_mode="$(stat -c %a "$HOME")"
-  if [ "$home_mode" = 700 ]; then ok "my home is private (0700)"; else bad "my home is $home_mode, not 0700"; fi
-  if [ "$(umask)" = 0077 ]; then ok "umask is private"; else bad "umask is $(umask), not 0077"; fi
-  check "I have no sudo" "! sudo -n true"
-  # A rootful docker group is root-equivalent: it can bind-mount any home as root.
-  if id -nG | tr ' ' '\n' | grep -qx docker; then bad "I am in the docker group (root-equivalent)"; else ok "I am not in the docker group"; fi
-  check "other users' processes are hidden" "grep -qE '(^|,)hidepid=(2|invisible)([,[:space:]]|$)' /proc/mounts"
-  local other
-  for other in $(awk -F: '$3>=1000 && $3<65534 {print $1}' /etc/passwd); do
-    [ "$other" = "$ME" ] && continue
-    [ -d "/home/$other" ] || continue
-    if ls "/home/$other" >/dev/null 2>&1; then bad "I can read /home/$other"; else ok "/home/$other is closed to me"; fi
-  done
-
-  echo "resources"
-  local slice="/sys/fs/cgroup/user.slice/user-$uid.slice"
-  if [ -r "$slice/memory.max" ]; then
-    ok "slice memory.max=$(cat "$slice/memory.max") memory.high=$(cat "$slice/memory.high" 2>/dev/null || echo -)"
-  else
-    meh "no cgroup limits on my user slice"
-  fi
-  check "cgroup controllers are delegated" "grep -qw memory \"$slice/cgroup.controllers\""
-
-  echo "containers"
-  local engine; engine="$(resolve_engine "$(current_project)")"
-  if [ "$engine" = none ]; then
-    ok "containers disabled here"
-  else
-    local bin; bin="$(engine_cmd "$engine")"
-    [ "$engine" = docker-rootless ] && export_docker_host
-    check "$engine responds" "$bin info"
-    if [ "$bin" = podman ]; then
-      if [ "$(podman info --format '{{"{{"}}.Host.Security.Rootless{{"}}"}}')" = true ]; then
-        ok "podman is rootless"
-      else
-        bad "podman is NOT rootless — one developer could read every other developer's files"
-      fi
-    else
-      check "docker is rootless" "docker info --format '{{"{{"}}.SecurityOptions{{"}}"}}' | grep -q rootless"
-    fi
-  fi
-
-  echo "memory"
-  local bank="${HINDSIGHT_BANK_ID:-}" port="${HINDSIGHT_API_PORT:-}"
-  if [ -z "$port" ]; then
-    meh "no memory wired into this shell (run an agent launcher, or memory is off)"
-  else
-    check "memory daemon on 127.0.0.1:$port" "ss -Hltn | grep -q \"127.0.0.1:$port\""
-    # A bank belonging to another developer is the one memory failure that leaks data.
-    if [ -n "$bank" ] && [ "${bank#"$ME"}" = "$bank" ]; then
-      meh "bank '$bank' is not namespaced to $ME — confirm it is not another developer's"
-    elif [ -n "$bank" ]; then
-      ok "bank $bank"
-    fi
-  fi
-
-  echo "network"
-  # Anything bound to a wildcard address is reachable from the internet unless ufw says
-  # otherwise. sshd is excluded: its exposure is a deliberate policy setting.
-  local public
-  public="$(ss -Hltn | awk '{print $4}' | grep -E '^(0[.]0[.]0[.]0|\[::\]):' | grep -vE ':(22|2022)$' || true)"
-  if [ -n "$public" ]; then
-    meh "listening on every interface: $(echo "$public" | tr '\n' ' ')"
-  else
-    ok "nothing but sshd is bound to every interface"
-  fi
-
-  echo
-  printf '%d passed, %d warnings, %d failed\n' "$PASS" "$WARN" "$FAIL"
-  [ "$FAIL" -eq 0 ]
+cmd_recover() {
+  exec /usr/local/libexec/remote-devbox-doctor recover "$@"
 }
 
 cmd_compose() {
@@ -605,9 +525,10 @@ case "${1:-}" in
   container) shift; cmd_container "$@" ;;
   compose) shift; cmd_compose "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
+  recover) shift; cmd_recover "$@" ;;
   client-config) shift; cmd_client_config "$@" ;;
   ""|-h|--help|help)
     sed -n '5,16p' "$0" | sed 's/^# \{0,1\}//'
     ;;
-  *) die "unknown command '$1' (engine|container|compose|doctor|client-config)" ;;
+  *) die "unknown command '$1' (engine|container|compose|doctor|recover|client-config)" ;;
 esac

@@ -92,6 +92,9 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       // operator who has such a laptop on the team is the one who knows it.
       cli_targets: [...(resolved.clients?.cli_targets ?? DEFAULT_CLI_TARGETS)],
     },
+    // One generated value feeds both the memory role and the sanitized health facts.
+    // Keeping two role-local defaults would let the daemon and doctor disagree.
+    devbox_memory_base_port: 9077,
     devbox_browser: {
       enabled: resolved.browser?.enabled ?? true,
       failover: {

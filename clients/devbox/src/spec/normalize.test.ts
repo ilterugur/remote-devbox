@@ -142,6 +142,10 @@ test("shared_services defaults to disabled", () => {
   expect(normalize(resolved).devbox_shared_services).toEqual({ enabled: false, engine: "system-docker" });
 });
 
+test("memory listener allocation has one generated base port shared with health facts", () => {
+  expect(normalize(resolved).devbox_memory_base_port).toBe(9077);
+});
+
 test("declared resources survive normalization", () => {
   const withLimits: ResolvedSpec = {
     ...resolved,

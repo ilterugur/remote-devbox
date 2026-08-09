@@ -14,6 +14,79 @@
     - /etc/remote-devbox
     - /usr/local/share/remote-devbox
 
+- name: Select the box doctor build target
+  ansible.builtin.set_fact:
+    _devbox_doctor_target: >-
+      {{ {'amd64': 'linux-x64', 'arm64': 'linux-arm64'}[devbox_platform.architecture] }}
+
+- name: Build the box doctor for the declared host architecture
+  ansible.builtin.command:
+    argv:
+      - /bin/sh
+      - "{{ playbook_dir }}/../scripts/build-box-doctor.sh"
+      - "{{ _devbox_doctor_target }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: _devbox_doctor_build
+  changed_when: "'built' in _devbox_doctor_build.stdout"
+
+- name: Ensure the private executable directory exists
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the box health collector
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../box/doctor/dist/remote-devbox-doctor-{{ _devbox_doctor_target }}"
+    dest: /usr/local/libexec/remote-devbox-doctor
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Refresh box health snapshot
+
+- name: Publish sanitized desired health components
+  ansible.builtin.template:
+    src: health-components.json.j2
+    dest: /etc/remote-devbox/health-components.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Refresh box health snapshot
+
+- name: Install the root health snapshot service
+  ansible.builtin.template:
+    src: devbox-health-snapshot.service.j2
+    dest: /etc/systemd/system/devbox-health-snapshot.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd for box health
+    - Refresh box health snapshot
+
+- name: Install the root health snapshot timer
+  ansible.builtin.template:
+    src: devbox-health-snapshot.timer.j2
+    dest: /etc/systemd/system/devbox-health-snapshot.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd for box health
+    - Restart box health snapshot timer
+    - Refresh box health snapshot
+
+- name: Enable the bounded health snapshot timer
+  ansible.builtin.systemd_service:
+    name: devbox-health-snapshot.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
 - name: Install the box CLI
   ansible.builtin.template:
     src: devbox-cli.sh.j2

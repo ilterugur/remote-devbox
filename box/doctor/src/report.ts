@@ -1,33 +1,73 @@
-import type { Health } from "./types";
+import type { Health, HealthDocument, HealthResult, HealthStatus } from "./types";
 
-export function formatJson(h: Health): string {
-  return JSON.stringify(h, null, 2);
+const STATUS_PRIORITY: Record<HealthStatus, number> = {
+  healthy: 0,
+  recovering: 1,
+  degraded: 2,
+  unknown: 3,
+  blocked: 4,
+  failed: 5,
+};
+
+export function aggregateStatus(statuses: HealthStatus[]): HealthStatus {
+  return statuses.reduce<HealthStatus>(
+    (worst, status) => STATUS_PRIORITY[status] > STATUS_PRIORITY[worst] ? status : worst,
+    "healthy",
+  );
 }
 
-const gib = (b: number) => (b / 1024 ** 3).toFixed(1) + "G";
+export function createHealthDocument(observedAt: string, components: HealthResult[]): HealthDocument {
+  const sorted = [...components].sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    schemaVersion: 1,
+    status: aggregateStatus(sorted.map((component) => component.status)),
+    observedAt,
+    components: sorted,
+  };
+}
 
-export function formatHuman(h: Health): string {
-  const lines: string[] = [];
-  lines.push(
-    `MEM  used ${gib(h.mem.usedBytes)}/${gib(h.mem.totalBytes)}  avail ${gib(h.mem.availableBytes)}`,
-  );
-  for (const s of h.swap) {
-    lines.push(`SWAP ${s.name} used ${gib(s.usedBytes)}/${gib(s.sizeBytes)} prio ${s.priority}`);
+/** Temporary adapter while the collector is migrated from its raw evidence model. */
+export function healthDocumentFromEvidence(health: Health): HealthDocument {
+  const components: HealthResult[] = health.units.map((unit) => {
+    const healthy = unit.loaded && unit.active === "active";
+    return {
+      id: `remote-control.${unit.unit}`,
+      status: healthy ? "healthy" : unit.active === "failed" ? "failed" : "degraded",
+      expected: [`${unit.unit} active`],
+      observed: [`${unit.active}/${unit.sub}`],
+      ...(healthy ? {} : { reason: unit.active === "failed" ? "unit_failed" : "unit_inactive" }),
+      recovery: healthy ? "confirmation-required" : "automatic",
+    };
+  });
+
+  for (const condition of health.conditions) {
+    if (!condition.id.startsWith("worktree-")) continue;
+    components.push({
+      id: `worktree.${condition.id.slice("worktree-".length)}`,
+      status: condition.guard === "pass" ? "degraded" : "blocked",
+      expected: ["worktree referenced by a live session or explicitly retained"],
+      observed: [String(condition.facts.path ?? condition.id)],
+      reason: "orphan_worktree",
+      recovery: "confirmation-required",
+    });
   }
-  if (h.oom.length) {
-    lines.push(`OOM  ${h.oom.length} event(s); last: ${h.oom.at(-1)!.atText} (${h.oom.at(-1)!.process})`);
-  }
-  for (const u of h.units) {
-    lines.push(`RC   ${u.unit} ${u.active}/${u.sub}`);
-  }
-  for (const s of h.sessions) {
-    lines.push(`SESS ${s.cse} ${s.state}${s.pid !== null ? ` (pid ${s.pid})` : ""}`);
-  }
-  lines.push("");
-  lines.push("CONDITIONS:");
-  if (!h.conditions.length) lines.push("  (none)");
-  for (const c of h.conditions) {
-    lines.push(`  [${c.severity}] ${c.id} -> ${c.candidateAction} (guard: ${c.guard})`);
+
+  return createHealthDocument(new Date(health.now * 1_000).toISOString(), components);
+}
+
+export function formatJson(document: HealthDocument): string {
+  return JSON.stringify(document, null, 2);
+}
+
+export function formatHuman(document: HealthDocument): string {
+  const lines = [`health ${document.status}  observed ${document.observedAt}`];
+  if (!document.components.length) lines.push("  (no configured components)");
+  for (const component of document.components) {
+    lines.push("", `${component.id}  ${component.status}`);
+    lines.push(`  expected: ${component.expected.join("; ") || "-"}`);
+    lines.push(`  observed: ${component.observed.join("; ") || "-"}`);
+    if (component.reason) lines.push(`  reason: ${component.reason}`);
+    lines.push(`  recovery: ${component.recovery}`);
   }
   return lines.join("\n");
 }

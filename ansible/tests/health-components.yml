@@ -1,0 +1,102 @@
+---
+- name: Verify sanitized health component facts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    marker: AUTHKEY_SECRET_MUST_NOT_APPEAR
+    devbox_memory_base_port: 9077
+    devbox_browser:
+      enabled: true
+      failover:
+        enabled: true
+        chrome_user: dev-a
+        cdp_port: 9222
+        fallback_chrome_port: 9422
+        client_tunnel_port: 9322
+        autobind: false
+    devbox_rc_units:
+      - {agent: claude, user: dev-a, project: app}
+    devbox_developers:
+      - user: dev-a
+        desktop:
+          enabled: true
+          access: [tunnel, tailnet]
+        memory:
+          enabled: true
+          instances:
+            primary:
+              engine: hindsight
+              llm_provider: openrouter
+              api_key_env: "{{ marker }}"
+    ansible_facts:
+      tailscale0:
+        ipv4:
+          address: 100.64.0.10
+
+  tasks:
+    - name: Render and verify facts in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-health-facts-
+          register: render_dir
+
+        - name: Render health component facts
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/box_cli/templates/health-components.json.j2"
+            dest: "{{ render_dir.path }}/health-components.json"
+            mode: "0600"
+
+        - name: Read rendered health component facts
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/health-components.json"
+          register: rendered
+
+        - name: Parse rendered health component facts
+          ansible.builtin.set_fact:
+            health: "{{ rendered.content | b64decode | from_json }}"
+
+        - name: Assert configured components and secret boundary
+          ansible.builtin.assert:
+            that:
+              - health.schemaVersion == 1
+              - health.components | map(attribute='id') | list == expected_ids
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'desktop.xrdp')
+                | map(attribute='listeners') | first
+                | map(attribute='address') | list
+                == ['127.0.0.1', '100.64.0.10']
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'memory.dev-a.primary')
+                | map(attribute='profile') | first
+                == 'dev-a'
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'memory.dev-a.primary')
+                | map(attribute='unit') | first
+                == 'hindsight-primary.service'
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'memory.dev-a.primary')
+                | map(attribute='unitScope') | first
+                == 'user'
+              - marker not in (rendered.content | b64decode)
+          vars:
+            expected_ids:
+              - desktop.xrdp
+              - desktop.xrdp-sesman
+              - browser.proxy
+              - browser.fallback
+              - memory.dev-a.primary
+              - remote-control.agent-rc-claude-dev-a-app.service
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

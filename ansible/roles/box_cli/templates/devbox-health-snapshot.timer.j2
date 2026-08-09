@@ -1,0 +1,14 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+[Unit]
+Description=Refresh remote-devbox health evidence
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=15s
+AccuracySec=1s
+RandomizedDelaySec=2s
+Persistent=yes
+Unit=devbox-health-snapshot.service
+
+[Install]
+WantedBy=timers.target

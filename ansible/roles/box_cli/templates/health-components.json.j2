@@ -1,0 +1,77 @@
+{# Managed by Ansible (remote-devbox). Sanitized desired-state facts only: no secret
+   values, provider credentials, environment dumps, or user-controlled commands. #}
+{% set components = [] %}
+{% set desktop_users = devbox_developers | selectattr('desktop.enabled') | list %}
+{% set desktop_access = desktop_users | map(attribute='desktop.access') | flatten | unique | list %}
+{% if desktop_users | length > 0 %}
+{%   set listeners = [] %}
+{%   if 'tunnel' in desktop_access %}
+{%     set _ = listeners.append({'protocol': 'tcp', 'address': '127.0.0.1', 'port': 3389, 'process': 'xrdp'}) %}
+{%   endif %}
+{%   if 'tailnet' in desktop_access %}
+{%     set _ = listeners.append({'protocol': 'tcp', 'address': ansible_facts.tailscale0.ipv4.address, 'port': 3389, 'process': 'xrdp'}) %}
+{%   endif %}
+{%   if 'unsafe-public' in desktop_access %}
+{%     set _ = listeners.append({'protocol': 'tcp', 'address': '0.0.0.0', 'port': 3389, 'process': 'xrdp'}) %}
+{%   endif %}
+{%   set _ = components.append({
+       'id': 'desktop.xrdp',
+       'unit': 'xrdp.service',
+       'listeners': listeners,
+       'recovery': 'automatic'}) %}
+{%   set _ = components.append({
+       'id': 'desktop.xrdp-sesman',
+       'unit': 'xrdp-sesman.service',
+       'listeners': [{
+         'protocol': 'unix',
+         'path': 'xrdp-sesman.socket',
+         'process': 'xrdp-sesman'}],
+       'recovery': 'confirmation-required'}) %}
+{% endif %}
+{% if devbox_browser.failover.enabled %}
+{%   set _ = components.append({
+       'id': 'browser.proxy',
+       'unit': 'haproxy.service',
+       'listeners': [{
+         'protocol': 'tcp',
+         'address': '127.0.0.1',
+         'port': devbox_browser.failover.cdp_port,
+         'process': 'haproxy'}],
+       'recovery': 'automatic'}) %}
+{%   set _ = components.append({
+       'id': 'browser.fallback',
+       'unit': 'devbox-fallback-chrome.service',
+       'listeners': [{
+         'protocol': 'tcp',
+         'address': '127.0.0.1',
+         'port': devbox_browser.failover.fallback_chrome_port,
+         'process': 'chrome'}],
+       'recovery': 'automatic'}) %}
+{% endif %}
+{% set memory = namespace(port=devbox_memory_base_port) %}
+{% for dev in devbox_developers if dev.memory.enabled %}
+{%   for name, instance in dev.memory.instances.items() %}
+{%     set _ = components.append({
+         'id': 'memory.' ~ dev.user ~ '.' ~ name,
+         'profile': dev.user,
+         'unit': 'hindsight-' ~ name ~ '.service',
+         'unitScope': 'user',
+         'listeners': [{
+           'protocol': 'tcp',
+           'address': '127.0.0.1',
+           'port': memory.port,
+           'process': 'hindsight',
+           'processMatch': 'prefix'}],
+         'recovery': 'manual'}) %}
+{%     set memory.port = memory.port + 1 %}
+{%   endfor %}
+{% endfor %}
+{% for row in devbox_rc_units %}
+{%   set unit = 'agent-rc-' ~ row.agent ~ '-' ~ row.user ~ '-' ~ row.project ~ '.service' %}
+{%   set _ = components.append({
+       'id': 'remote-control.' ~ unit,
+       'profile': row.user,
+       'unit': unit,
+       'recovery': 'automatic'}) %}
+{% endfor %}
+{{ {'schemaVersion': 1, 'components': components} | to_nice_json }}

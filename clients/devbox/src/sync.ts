@@ -10,9 +10,143 @@ import {
 } from "./config";
 import { normalizePath, pathsOverlap, syncDiskRoot } from "./bridge";
 import { STORE_ROOT } from "./app-configs/registry";
-import { DEFAULT_IGNORES, engineFor } from "./sync/engine";
+import { DEFAULT_IGNORES, engineFor, type SyncEngine, type SyncStatus } from "./sync/engine";
+import type { LocalHealthResult } from "./health";
 
 export type SyncPlan = { localRoot: string; remoteRoot: string; host: string; engine: EngineId; ignores: string[] };
+
+export function syncHealthFromStatus(profile: string, evidence: SyncStatus): LocalHealthResult {
+  const observed = [
+    `session ${evidence.name}`,
+    `state ${evidence.state || "unknown"}`,
+    evidence.conflicts === null ? "conflicts unknown" : `conflicts ${evidence.conflicts}`,
+  ];
+  const base = {
+    id: `client.sync.${profile}`,
+    expected: ["sync session active with exactly zero conflicts"],
+    observed,
+    recovery: "automatic" as const,
+  };
+  if (evidence.conflicts === null) {
+    return { ...base, status: "unknown", reason: "sync_conflicts_unknown" };
+  }
+  if (evidence.conflicts > 0) {
+    return { ...base, status: "blocked", reason: "sync_conflicts" };
+  }
+  if (/paused/i.test(evidence.state)) return { ...base, status: "degraded", reason: "sync_paused" };
+  if (/disconnected|offline|error|halted/i.test(evidence.state)) {
+    return { ...base, status: "failed", reason: "sync_disconnected" };
+  }
+  return { ...base, status: "healthy" };
+}
+
+async function syncStatusWithTimeout(engine: SyncEngine, timeoutMs = 8_000): Promise<SyncStatus[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      engine.status(),
+      new Promise<SyncStatus[]>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("sync status timed out")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function collectSyncHealth(
+  cfg: Config,
+  profile: string,
+  injectedEngine?: SyncEngine,
+): Promise<LocalHealthResult | null> {
+  if (!syncDiskEnabled(cfg, profile)) return null;
+  const engine = injectedEngine ?? engineFor(syncEngineFor(cfg, profile));
+  let statuses: SyncStatus[];
+  try {
+    statuses = await syncStatusWithTimeout(engine);
+  } catch {
+    statuses = [];
+  }
+  const name = `devbox-${profile}`;
+  const evidence = statuses.find((candidate) => candidate.name === name);
+  if (!evidence) {
+    return {
+      id: `client.sync.${profile}`,
+      status: "unknown",
+      expected: [`sync session ${name} with exactly zero conflicts`],
+      observed: [`session ${name} not present in engine evidence`, "conflicts unknown"],
+      reason: "sync_session_missing",
+      recovery: "automatic",
+    };
+  }
+  return syncHealthFromStatus(profile, evidence);
+}
+
+export type SyncRecoveryDecision =
+  | { action: "up" | "resume" | "skip"; reason: string }
+  | { action: "refuse"; reason: string };
+
+export function decideSyncRecovery(evidence: SyncStatus): SyncRecoveryDecision {
+  if (evidence.conflicts === null) return { action: "refuse", reason: "sync_conflicts_unknown" };
+  if (evidence.conflicts > 0) return { action: "refuse", reason: "sync_conflicts" };
+  if (/paused/i.test(evidence.state)) return { action: "resume", reason: "sync_paused" };
+  if (/disconnected|offline|error|halted/i.test(evidence.state)) {
+    return { action: "up", reason: "sync_disconnected" };
+  }
+  return { action: "skip", reason: "already_healthy" };
+}
+
+export interface SyncRecoveryActions {
+  up: (session: string) => Promise<void>;
+  resume: (session: string) => Promise<void>;
+}
+
+export async function recoverSync(
+  evidence: SyncStatus,
+  actions: SyncRecoveryActions,
+): Promise<{ status: "recovered" | "skipped" | "blocked" | "failed"; reason: string }> {
+  const decision = decideSyncRecovery(evidence);
+  if (decision.action === "refuse") return { status: "blocked", reason: decision.reason };
+  if (decision.action === "skip") return { status: "skipped", reason: decision.reason };
+  try {
+    await actions[decision.action](evidence.name);
+    return {
+      status: "recovered",
+      reason: decision.action === "resume" ? "sync_resumed" : "sync_started",
+    };
+  } catch {
+    return { status: "failed", reason: "sync_action_failed" };
+  }
+}
+
+export async function recoverSyncLive(
+  cfg: Config,
+  profile: string,
+  expectedReason: string,
+  engine: SyncEngine = engineFor(syncEngineFor(cfg, profile)),
+): Promise<{ status: "acted" | "blocked" | "failed"; reason: string }> {
+  let statuses: SyncStatus[];
+  try {
+    statuses = await syncStatusWithTimeout(engine);
+  } catch {
+    return { status: "blocked", reason: "sync_evidence_unknown" };
+  }
+  const evidence = statuses.find((candidate) => candidate.name === `devbox-${profile}`);
+  if (!evidence) return { status: "blocked", reason: "sync_session_missing" };
+  const health = syncHealthFromStatus(profile, evidence);
+  if (health.reason !== expectedReason || (health.status !== "failed" && health.status !== "degraded")) {
+    return { status: "blocked", reason: "sync_evidence_changed" };
+  }
+  const result = await recoverSync(evidence, {
+    // A disconnected named session already exists; resume asks the engine to reconnect
+    // without deleting or recreating it. The "up" decision is semantic, not a recreate.
+    up: async () => engine.resume(profile),
+    resume: async () => engine.resume(profile),
+  });
+  if (result.status === "recovered") return { status: "acted", reason: result.reason };
+  if (result.status === "failed") return { status: "failed", reason: result.reason };
+  return { status: "blocked", reason: result.reason };
+}
 
 /**
  * Root-anchored ignore patterns for the app configs that live inside the disk.
@@ -92,7 +226,10 @@ export async function runSyncStatus(cfg: Config): Promise<void> {
     seen.add(id);
     for (const s of await engineFor(id).status()) {
       any = true;
-      out(`  [${id}] ${s.name}  ${s.state}${s.conflicts ? `  ⚠ ${s.conflicts} conflict(s)` : ""}`);
+      const conflicts = s.conflicts === null
+        ? "  ? conflict count unavailable"
+        : s.conflicts > 0 ? `  ⚠ ${s.conflicts} conflict(s)` : "";
+      out(`  [${id}] ${s.name}  ${s.state}${conflicts}`);
     }
   }
   if (!any) out("devbox: no active sync sessions");

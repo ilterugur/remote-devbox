@@ -40,20 +40,21 @@ devbox apply containers --check             # one phase, dry run
 choice is an **error**, not a silent pick — that ambiguity is exactly how a commit ends
 up on the wrong GitHub account. Run `devbox phases` to see the phases `apply` accepts.
 
-On the box itself, `devbox doctor` checks the properties the roles exist to guarantee:
+On the box itself, `devbox doctor` emits the same versioned health model as
+`devbox doctor --json`. On a configured client, the command also joins launchd/PID
+ownership, mounts, sync, and the downstream box report:
 
 ```text
-isolation
-  ✔ my home is private (0700)
-  ✔ I have no sudo
-  ✔ I am not in the docker group
-  ✔ other users' processes are hidden
-  ✔ /home/other-dev is closed to me
-containers
-  ✔ podman is rootless
-memory
-  ✔ bank dev-a-shared
+desktop.xrdp  healthy
+client.rdp-tunnel.dev-a  healthy
+profile.dev-a.isolation  healthy
 ```
+
+Diagnosis is read-only. `devbox recover [component|all]` acts only on declared,
+policy-eligible client failures and immediately re-probes them. It never resolves sync
+conflicts, lazy/force-unmounts a busy mount, replaces a drifted launchd plist, or kills a
+foreign port owner. Failed box services print an exact operator command; the client does
+not gain root or accept raw systemd unit names.
 
 > **Migrating from the profile-based layout?** `ansible/group_vars/all.yml` is the legacy
 > format. `devbox migrate-config` converts it, warns about everything it cannot represent,
@@ -246,13 +247,15 @@ docs/
 
 | Symptom | Fix |
 | --- | --- |
+| RDP or another forwarded service will not connect | Run `devbox doctor -p <user>`; a healthy local listener alone is not downstream proof. |
+| A policy-eligible client component failed | Run `devbox recover <component> -p <user>`; inspect any refusal instead of forcing it. |
 | Profile clone failed | Add that profile's printed SSH key to its GitHub account, re-run. |
-| Server not on phone | `systemctl status 'claude-rc-*'`; did you run `sudo remote-devbox-login`? Switch to that account in the app. |
+| Server not on phone | `systemctl status 'agent-rc-*'`; did you run `sudo remote-devbox-login`? Switch to that account in the app. |
 | `not logged in` in logs | Run `sudo remote-devbox-login`. |
 | `node`/`python` missing for the agent | `mise activate --shims` runs in the wrapper; check the service env and `mise ls` for that user. |
 | Re-run fails as root | Set `ansible_user` to your operator in `inventory.ini` (root login is off). |
-| Attach a service's tmux | `sudo -u <user> tmux -L claude-rc-<user>-<project> attach`. |
-| A server died / unresponsive | `sudo systemctl restart claude-rc-<user>-<project>` (recreates its tmux). |
+| Attach a service's tmux | `sudo -u <user> tmux -L agent-rc-<agent>-<user>-<project> attach`. |
+| A failed box service needs recovery | Use only the exact command printed by `devbox recover`; healthy/session-bearing services refuse automatic restart. |
 
 ## License
 
