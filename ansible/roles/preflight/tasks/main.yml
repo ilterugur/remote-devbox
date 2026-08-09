@@ -39,6 +39,18 @@
       {{ ((ansible_facts.mounts | selectattr('mount', 'equalto', '/') | first).size_available
           / 1024 / 1024 / 1024) | round(1) }}
 
+- name: Assert weighted memory leaves allocatable host capacity
+  ansible.builtin.assert:
+    that:
+      - >-
+        (devbox_memory_high_weight_total | default(0) | int == 0)
+        or
+        ((ansible_facts.memtotal_mb | int * 1024 * 1024)
+         > (devbox_host.memory_reserve | human_to_bytes))
+    fail_msg: >-
+      Weighted developer memory limits require physical RAM to exceed the declared
+      host memory reserve of {{ devbox_host.memory_reserve }}.
+
 - name: Assert the box has room for the declared developers
   ansible.builtin.assert:
     that:

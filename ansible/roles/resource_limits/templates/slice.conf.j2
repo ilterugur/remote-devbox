@@ -2,8 +2,8 @@
 # Covers every process {{ item.user }} runs: shells, editors, rootless containers,
 # agent services and builds. Empty knobs are omitted so the host default applies.
 [Slice]
-{% if item.resources.memory_high | default('') %}
-MemoryHigh={{ item.resources.memory_high }}
+{% if _devbox_memory_high_by_user[item.user] %}
+MemoryHigh={{ _devbox_memory_high_by_user[item.user] }}
 {% endif %}
 {% if item.resources.memory_max | default('') %}
 MemoryMax={{ item.resources.memory_max }}
