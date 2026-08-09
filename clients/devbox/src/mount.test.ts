@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { buildRcloneServeArgs, buildSshfsRemoteCmd, buildSshRArgs, planMounts } from "./mount";
+import {
+  buildMountRecoveryRemoteCmd,
+  buildRcloneServeArgs,
+  buildSshfsRemoteCmd,
+  buildSshRArgs,
+  decideMountRecovery,
+  planMounts,
+} from "./mount";
 import type { Config } from "./config";
 
 describe("buildRcloneServeArgs", () => {
@@ -17,15 +24,52 @@ describe("buildRcloneServeArgs", () => {
 });
 
 describe("buildSshfsRemoteCmd", () => {
-  test("makes the mountpoint, clears a stale mount, execs sshfs -f read-only", () => {
+  test("makes the mountpoint, refuses an existing mount, and execs sshfs read-only", () => {
     const cmd = buildSshfsRemoteCmd(5301, "/home/work/mnt/desktop", "/home/work/.cache/devbox-bridge/desktop.key");
     expect(cmd).toContain("mkdir -p '/home/work/mnt/desktop'");
-    expect(cmd).toContain("fusermount -uz '/home/work/mnt/desktop'");
+    expect(cmd).toContain("mountpoint -q '/home/work/mnt/desktop'");
+    expect(cmd).not.toContain("fusermount");
     expect(cmd).toContain("exec sshfs -p 5301 mount@127.0.0.1:/ '/home/work/mnt/desktop'");
     expect(cmd).toContain("-o ro,");
     expect(cmd).toContain("IdentityFile='/home/work/.cache/devbox-bridge/desktop.key'");
     expect(cmd).toContain("reconnect");
     expect(cmd).toContain("StrictHostKeyChecking=no");
+  });
+
+  test("a clean disconnected recovery uses a normal unmount, never lazy/forced unmount", () => {
+    const cmd = buildMountRecoveryRemoteCmd(
+      5301,
+      "/home/work/mnt/desktop",
+      "/home/work/.cache/devbox-bridge/desktop.key",
+    );
+    expect(cmd).toContain("fusermount -u '/home/work/mnt/desktop'");
+    expect(cmd).not.toContain("-uz");
+    expect(cmd).not.toContain("-z");
+  });
+});
+
+describe("decideMountRecovery", () => {
+  test("recovers an absent mount and skips a reachable mount", () => {
+    expect(decideMountRecovery({ mounted: false, reachable: false, openHandles: 0, ownedBridge: true }))
+      .toEqual({ action: "run", reason: "mount_absent", unmountFirst: false });
+    expect(decideMountRecovery({ mounted: true, reachable: true, openHandles: 0, ownedBridge: true }))
+      .toEqual({ action: "skip", reason: "already_healthy" });
+  });
+
+  test("recovers only a provably clean, owned disconnected mount", () => {
+    expect(decideMountRecovery({ mounted: true, reachable: false, openHandles: 0, ownedBridge: true }))
+      .toEqual({ action: "run", reason: "mount_disconnected_clean", unmountFirst: true });
+    expect(decideMountRecovery({ mounted: true, reachable: false, openHandles: 2, ownedBridge: true }))
+      .toEqual({ action: "refuse", reason: "mount_busy" });
+    expect(decideMountRecovery({ mounted: true, reachable: false, openHandles: null, ownedBridge: true }))
+      .toEqual({ action: "refuse", reason: "mount_busy_or_unknown" });
+  });
+
+  test("refuses unknown reachability and foreign bridge ownership", () => {
+    expect(decideMountRecovery({ mounted: true, reachable: null, openHandles: 0, ownedBridge: true }))
+      .toEqual({ action: "refuse", reason: "mount_evidence_unknown" });
+    expect(decideMountRecovery({ mounted: false, reachable: false, openHandles: 0, ownedBridge: false }))
+      .toEqual({ action: "refuse", reason: "foreign_mount_process" });
   });
 });
 

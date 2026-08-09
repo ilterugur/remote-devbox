@@ -38,9 +38,36 @@ export function buildSshfsRemoteCmd(boxPort: number, mountpoint: string, keyFile
   const opts = [...SSHFS_OPTS, `IdentityFile=${shQuote(keyFile)}`].join(",");
   return [
     `mkdir -p ${mp}`,
-    `fusermount -uz ${mp} 2>/dev/null || true`,
+    `if mountpoint -q ${mp}; then echo 'devbox: mountpoint already mounted; refusing replacement' >&2; exit 73; fi`,
     `exec sshfs -p ${boxPort} mount@127.0.0.1:/ ${mp} -o ${opts}`,
   ].join("; ");
+}
+
+export function buildMountRecoveryRemoteCmd(boxPort: number, mountpoint: string, keyFile: string): string {
+  const mp = shQuote(mountpoint);
+  return `fusermount -u ${mp} && ${buildSshfsRemoteCmd(boxPort, mountpoint, keyFile)}`;
+}
+
+export interface MountRecoveryEvidence {
+  mounted: boolean;
+  reachable: boolean | null;
+  openHandles: number | null;
+  ownedBridge: boolean;
+}
+
+export type MountRecoveryDecision =
+  | { action: "run"; reason: "mount_absent" | "mount_disconnected_clean"; unmountFirst: boolean }
+  | { action: "skip" | "refuse"; reason: string };
+
+/** A stale mount is mutable only when ownership, disconnection and zero open handles are all proven. */
+export function decideMountRecovery(evidence: MountRecoveryEvidence): MountRecoveryDecision {
+  if (!evidence.ownedBridge) return { action: "refuse", reason: "foreign_mount_process" };
+  if (!evidence.mounted) return { action: "run", reason: "mount_absent", unmountFirst: false };
+  if (evidence.reachable === true) return { action: "skip", reason: "already_healthy" };
+  if (evidence.reachable === null) return { action: "refuse", reason: "mount_evidence_unknown" };
+  if (evidence.openHandles === null) return { action: "refuse", reason: "mount_busy_or_unknown" };
+  if (evidence.openHandles > 0) return { action: "refuse", reason: "mount_busy" };
+  return { action: "run", reason: "mount_disconnected_clean", unmountFirst: true };
 }
 
 export function buildSshRArgs(host: string, boxPort: number, localPort: number, remoteCmd: string): string[] {
@@ -135,10 +162,13 @@ export function runMountDown(cfg: Config, profile: string, label?: string): void
   if (!victims.length) return void out(`devbox: no live mounts to remove for "${profile}"${label ? ` (${label})` : ""}`);
   for (const m of victims) {
     if (isDry()) { out(`  ── would unmount ${host}:${m.remotePath} (kill ${m.sshPid}, ${m.rclonePid})`); continue; }
+    const unmount = spawnSync("ssh", ["-o", "BatchMode=yes", host,
+      `fusermount -u ${shQuote(m.remotePath)} && rm -f /home/${profile}/.cache/devbox-bridge/${m.label}.key`]);
+    if (unmount.status !== 0) {
+      die(`could not safely unmount ${m.label}; it may be busy, so its processes were left running`);
+    }
     killPid(m.sshPid);
     killPid(m.rclonePid);
-    spawnSync("ssh", ["-o", "BatchMode=yes", host,
-      `fusermount -uz ${shQuote(m.remotePath)} 2>/dev/null; rm -f /home/${profile}/.cache/devbox-bridge/${m.label}.key`]);
     out(`  ✓ unmounted ${m.label}`);
   }
   writeBridges(all.filter((m) => !victims.includes(m)));
