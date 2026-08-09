@@ -23,6 +23,7 @@ import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { rdpLayoutId } from "./rdp-layouts";
 import { toYaml } from "./yaml";
 import { payloadBasename, resolveEntry } from "../app-configs/registry";
+import { canonicalMemorySize, isMemoryWeight } from "./memory-limit";
 
 const GENERATED_HEADER = [
   "---",
@@ -36,6 +37,10 @@ const NO_CLIENT_FACTS: ClientFacts = { keyboard: null };
 
 export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIENT_FACTS): Record<string, unknown> {
   const tailscale = resolved.network.tailscale.enabled;
+  const memoryHighWeightTotal = resolved.developers.reduce((total, developer) => {
+    const memoryHigh = developer.resources?.memory_high;
+    return total + (isMemoryWeight(memoryHigh) ? memoryHigh.weight : 0);
+  }, 0);
   const clientPorts = assignClientPorts(
     resolved.developers.map((d) => ({
       user: d.user,
@@ -53,6 +58,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_runtimes: { ...(resolved.runtimes ?? {}) },
     devbox_host: {
       swap_size: resolved.host?.swap_size ?? "4G",
+      memory_reserve: canonicalMemorySize(resolved.host?.memory_reserve ?? "4G")!,
       zram: {
         enabled: resolved.host?.zram?.enabled ?? false,
         percent: resolved.host?.zram?.percent ?? 50,
@@ -95,6 +101,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     // One generated value feeds both the memory role and the sanitized health facts.
     // Keeping two role-local defaults would let the daemon and doctor disagree.
     devbox_memory_base_port: 9077,
+    devbox_memory_high_weight_total: memoryHighWeightTotal,
     devbox_browser: {
       enabled: resolved.browser?.enabled ?? true,
       failover: {
@@ -174,12 +181,17 @@ function normalizeDeveloper(
   client: ClientFacts,
   clientPorts: Map<string, number>,
 ): Record<string, unknown> {
+  const memoryHigh = dev.resources?.memory_high;
   return {
     user: dev.user,
     adopt_existing: dev.adopt_existing ?? false,
     login_ssh_keys: [...dev.login_ssh_keys],
     resources: {
-      ...(dev.resources?.memory_high !== undefined ? { memory_high: dev.resources.memory_high } : {}),
+      ...(typeof memoryHigh === "string"
+        ? { memory_high: canonicalMemorySize(memoryHigh) ?? memoryHigh }
+        : isMemoryWeight(memoryHigh)
+          ? { memory_high_weight: memoryHigh.weight }
+          : {}),
       ...(dev.resources?.memory_max !== undefined ? { memory_max: dev.resources.memory_max } : {}),
       ...(dev.resources?.memory_swap_max !== undefined ? { memory_swap_max: dev.resources.memory_swap_max } : {}),
       ...(dev.resources?.cpu_weight !== undefined ? { cpu_weight: dev.resources.cpu_weight } : {}),

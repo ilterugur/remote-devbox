@@ -155,6 +155,36 @@ test("declared resources survive normalization", () => {
   expect(dev.resources).toEqual({ memory_high: "10G", cpu_weight: 100 });
 });
 
+test("host memory reserve is emitted in canonical systemd form", () => {
+  const out = normalize({ ...resolved, host: { memory_reserve: "4GB" } });
+  expect(out.devbox_host).toMatchObject({ memory_reserve: "4G" });
+});
+
+test("weighted memory_high becomes an Ansible weight and box-wide total", () => {
+  const weighted: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, resources: { memory_high: { weight: 5 } } }],
+  };
+
+  const out = normalize(weighted);
+  expect((out.devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({ memory_high_weight: 5 });
+  expect(out.devbox_memory_high_weight_total).toBe(5);
+});
+
+test("direct memory_high values keep percentages and canonicalize byte aliases", () => {
+  const percent: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, resources: { memory_high: "50%" } }],
+  };
+  const gigabytes: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, resources: { memory_high: "32GB" } }],
+  };
+
+  expect((normalize(percent).devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({ memory_high: "50%" });
+  expect((normalize(gigabytes).devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({ memory_high: "32G" });
+});
+
 test("file_bridge defaults to off with the mutagen engine", () => {
   const dev = dev0();
   expect(dev.file_bridge).toEqual({

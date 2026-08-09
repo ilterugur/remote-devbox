@@ -8,6 +8,7 @@
 import type { Issue } from "./issues";
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { assignClientPorts } from "./client-ports";
+import { formatMemoryLimit, isMemoryWeight } from "./memory-limit";
 import { resolveEntry } from "../app-configs/registry";
 import { DEFAULT_CLI_TARGETS } from "./types";
 import type { ClientFacts, ResolvedDeveloper, ResolvedSpec } from "./types";
@@ -90,7 +91,15 @@ function developerLines(
 
   lines.push(row("login keys", String(dev.login_ssh_keys.length), indent));
 
-  const limits = Object.entries(dev.resources ?? {}).map(([k, v]) => `${k} ${v}`);
+  const memoryHigh = dev.resources?.memory_high;
+  const limits = [
+    ...(memoryHigh !== undefined
+      ? [`memory_high ${isMemoryWeight(memoryHigh) ? "weight " : ""}${formatMemoryLimit(memoryHigh)}`]
+      : []),
+    ...Object.entries(dev.resources ?? {})
+      .filter(([key]) => key !== "memory_high")
+      .map(([key, value]) => `${key} ${value}`),
+  ];
   lines.push(row("resources", limits.length ? limits.join(" · ") : "unlimited (host defaults)", indent));
 
   lines.push(row("git", named(Object.keys(dev.git_identities ?? {}), dev.default_git_identity), indent));
