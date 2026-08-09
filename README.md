@@ -80,6 +80,13 @@ not gain root or accept raw systemd unit names.
 - Your portable Claude config (skills, subagents, commands, `CLAUDE.md`, MCP defs)
   synced into **every profile**, identity kept separate.
 
+`developers[].resources.memory_high` sets systemd `MemoryHigh`, a soft-backpressure
+threshold that makes a developer's workloads reclaim memory before the host is exhausted.
+It accepts a direct size or percentage, or `{ weight: N }` for proportional distribution.
+In weight mode, the declared weights divide physical RAM minus the fixed
+`host.memory_reserve`; every declared developer `memory_high` must use a weight because
+direct and weight modes cannot be mixed. See [`devbox.example.yml`](devbox.example.yml).
+
 ## Architecture
 
 ```
