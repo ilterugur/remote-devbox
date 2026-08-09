@@ -18,6 +18,7 @@ import type {
   ResolvedDeveloper,
   ResolvedKeyboard,
   ResolvedSpec,
+  ResourceSpec,
 } from "./types";
 import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
 import { rdpLayoutId } from "./rdp-layouts";
@@ -167,7 +168,7 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
           spawn: rc.spawn,
           capacity: rc.capacity,
           project_dir: `/home/${dev.user}/projects/${p.name}`,
-          resources: { ...rc.resources },
+          resources: normalizeDirectMemoryResources(rc.resources),
           build_env: { ...rc.build_env },
         },
       ];
@@ -182,21 +183,18 @@ function normalizeDeveloper(
   clientPorts: Map<string, number>,
 ): Record<string, unknown> {
   const memoryHigh = dev.resources?.memory_high;
+  const { memory_high: _memoryHigh, ...directResources } = normalizeDirectMemoryResources(dev.resources ?? {});
   return {
     user: dev.user,
     adopt_existing: dev.adopt_existing ?? false,
     login_ssh_keys: [...dev.login_ssh_keys],
     resources: {
+      ...directResources,
       ...(typeof memoryHigh === "string"
         ? { memory_high: canonicalMemorySize(memoryHigh) ?? memoryHigh }
         : isMemoryWeight(memoryHigh)
           ? { memory_high_weight: memoryHigh.weight }
           : {}),
-      ...(dev.resources?.memory_max !== undefined ? { memory_max: dev.resources.memory_max } : {}),
-      ...(dev.resources?.memory_swap_max !== undefined ? { memory_swap_max: dev.resources.memory_swap_max } : {}),
-      ...(dev.resources?.cpu_weight !== undefined ? { cpu_weight: dev.resources.cpu_weight } : {}),
-      ...(dev.resources?.io_weight !== undefined ? { io_weight: dev.resources.io_weight } : {}),
-      ...(dev.resources?.tasks_max !== undefined ? { tasks_max: dev.resources.tasks_max } : {}),
     },
     container_engine: dev.container_engine ?? null,
     git_identities: mapValues(dev.git_identities, normalizeIdentity),
@@ -257,6 +255,15 @@ function normalizeDeveloper(
       update: p.update,
     })),
   };
+}
+
+function normalizeDirectMemoryResources(resources: ResourceSpec): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...resources };
+  for (const key of ["memory_high", "memory_max", "memory_swap_max"] as const) {
+    const value = resources[key];
+    if (typeof value === "string") normalized[key] = canonicalMemorySize(value) ?? value;
+  }
+  return normalized;
 }
 
 const normalizeIdentity = (id: GitIdentity) => ({
