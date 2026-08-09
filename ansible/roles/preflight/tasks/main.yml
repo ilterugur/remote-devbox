@@ -50,6 +50,7 @@
     fail_msg: >-
       Weighted developer memory limits require physical RAM to exceed the declared
       host memory reserve of {{ devbox_host.memory_reserve }}.
+  tags: [developers, resources]
 
 - name: Assert the box has room for the declared developers
   ansible.builtin.assert:

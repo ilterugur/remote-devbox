@@ -1,0 +1,40 @@
+---
+- name: Verify tagged resource reconciliation runs the reserve guard first
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_facts:
+      memtotal_mb: 4096
+    devbox_host:
+      memory_reserve: 4G
+    devbox_memory_high_weight_total: 1
+    _resource_mutated: false
+    _reserve_guard_failed: false
+
+  tasks:
+    - name: Exercise the production preflight task selection before resource mutation
+      block:
+        - name: Load preflight tasks with their production role tag
+          ansible.builtin.import_tasks: >-
+            {{ playbook_dir }}/../roles/preflight/tasks/main.yml
+          tags: [preflight]
+
+        - name: Simulate the first resource mutation
+          ansible.builtin.set_fact:
+            _resource_mutated: true
+          tags: [developers, resources]
+      rescue:
+        - name: Record the expected reserve guard failure
+          ansible.builtin.set_fact:
+            _reserve_guard_failed: >-
+              {{ ansible_failed_task.name == 'Assert weighted memory leaves allocatable host capacity' }}
+          tags: [developers, resources]
+
+    - name: Assert tag selection fails before resource mutation
+      ansible.builtin.assert:
+        that:
+          - _reserve_guard_failed
+          - not _resource_mutated
+      tags: [developers, resources]
