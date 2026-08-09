@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { loadSpec } from "./load";
 import { EXAMPLE_CONFIG } from "./load.test";
 import { renderPlan } from "./plan";
+import type { MemoryLimitSpec, ResolvedSpec } from "./types";
 
 const rendered = () => {
   const { resolved, issues } = loadSpec(EXAMPLE_CONFIG);
@@ -63,4 +64,18 @@ test("the desktop line names the address the client dials, counting up per devel
   const text = renderPlan(spec, issues);
   expect(text).toContain("client dials 127.0.0.1:3389");
   expect(text).toContain("client dials 127.0.0.1:3390");
+});
+
+const withMemoryHigh = (memoryHigh: MemoryLimitSpec): ResolvedSpec => {
+  const { resolved } = loadSpec(EXAMPLE_CONFIG);
+  const spec = resolved!;
+  return {
+    ...spec,
+    developers: [{ ...spec.developers[0]!, resources: { memory_high: memoryHigh } }],
+  };
+};
+
+test("the plan distinguishes a proportional memory_high weight from a direct limit", () => {
+  expect(renderPlan(withMemoryHigh({ weight: 5 }), [])).toContain("memory_high weight 5");
+  expect(renderPlan(withMemoryHigh("32GB"), [])).toContain("memory_high 32G");
 });

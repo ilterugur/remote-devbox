@@ -23,6 +23,9 @@ platform:
 
 # Host tuning — nothing here is part of the developer model.
 host:
+  # Weight-mode arithmetic subtracts this from physical RAM before dividing the pool.
+  # It does not enforce an OS/systemd/cgroup reservation by itself.
+  memory_reserve: 4G
   swap_size: 8G
   zram:
     enabled: true
@@ -151,8 +154,8 @@ developers:
     # Applied to the developer's whole systemd user slice — shells, editors,
     # rootless containers, agents and builds all count against these.
     resources:
-      memory_high: 10G
-      memory_max: 14G
+      memory_high: 32GB
+      memory_max: 40G
       cpu_weight: 100
       io_weight: 100
 
@@ -307,8 +310,8 @@ developers:
     login_ssh_keys:
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5REPLACEME dev-b@client"
     resources:
-      memory_high: 8G
-      memory_max: 12G
+      memory_high: 50%
+      memory_max: 75%
     # Sole identity and sole profile are selected automatically — no defaults needed.
     git_identities:
       work:
@@ -321,3 +324,17 @@ developers:
       - name: main-app
         repo: "git@github.com:example/main-app.git"
         ports: [4000]
+
+# ── Weight-mode alternative ───────────────────────────────────────────────────
+# Use this as a replacement for the direct `memory_high` values on every developer
+# above; do not combine the two modes. The complete proportional allocation is:
+#
+# host:
+#   memory_reserve: 4G
+# developers:
+#   - user: dev-a
+#     resources:
+#       memory_high: { weight: 1 }
+#   - user: dev-b
+#     resources:
+#       memory_high: { weight: 5 }

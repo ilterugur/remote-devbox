@@ -1,0 +1,30 @@
+---
+- name: Initialize effective developer memory limits
+  ansible.builtin.set_fact:
+    _devbox_memory_high_by_user: {}
+
+- name: Resolve each developer's effective memory limit
+  ansible.builtin.set_fact:
+    _devbox_memory_high_by_user: >-
+      {{
+        _devbox_memory_high_by_user
+        | combine({item.user: (
+          (
+            (
+              (
+                (ansible_facts.memtotal_mb | int * 1024 * 1024)
+                - (devbox_host.memory_reserve | human_to_bytes)
+              )
+              * (item.resources.memory_high_weight | int)
+              / (devbox_memory_high_weight_total | int)
+            )
+            | int
+            | string
+          )
+          if ((item.resources.memory_high_weight | default(0) | int) > 0)
+          else (item.resources.memory_high | default(''))
+        )})
+      }}
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"

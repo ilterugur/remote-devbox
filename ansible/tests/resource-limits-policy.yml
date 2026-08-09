@@ -1,0 +1,87 @@
+---
+- name: Verify developer resource-limit resolution policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_facts:
+      memtotal_mb: 65536
+    devbox_host:
+      memory_reserve: 4G
+    devbox_memory_high_weight_total: 6
+    devbox_developers:
+      - user: dev-a
+        resources:
+          memory_high_weight: 1
+      - user: dev-b
+        resources:
+          memory_high_weight: 5
+
+  tasks:
+    - name: Resolve and verify weighted memory limits in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-resource-limits-policy-
+          register: render_dir
+
+        - name: Resolve weighted developer memory limits
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../roles/resource_limits/tasks/resolve-memory.yml
+
+        - name: Render the weighted developer slice files
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/resource_limits/templates/slice.conf.j2"
+            dest: "{{ render_dir.path }}/{{ item.user }}.conf"
+            mode: "0600"
+          loop: "{{ devbox_developers }}"
+
+        - name: Read the dev-a slice file
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/dev-a.conf"
+          register: dev_a_dropin
+
+        - name: Read the dev-b slice file
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/dev-b.conf"
+          register: dev_b_dropin
+
+        - name: Assert weighted limits use allocatable physical memory
+          ansible.builtin.assert:
+            that:
+              - _devbox_memory_high_by_user['dev-a'] == '10737418240'
+              - _devbox_memory_high_by_user['dev-b'] == '53687091200'
+              - "'MemoryHigh=10737418240' in dev_a_dropin.content | b64decode"
+              - "'MemoryHigh=53687091200' in dev_b_dropin.content | b64decode"
+              - "'_devbox_memory_high_by_user[item.user]' in lookup('ansible.builtin.file', playbook_dir ~ '/../roles/resource_limits/tasks/main.yml')"
+
+        - name: Select direct memory-limit fixtures
+          ansible.builtin.set_fact:
+            devbox_developers:
+              - user: direct-percent
+                resources:
+                  memory_high: 50%
+              - user: direct-size
+                resources:
+                  memory_high: 32G
+              - user: direct-omitted
+                resources: {}
+
+        - name: Resolve direct developer memory limits
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../roles/resource_limits/tasks/resolve-memory.yml
+
+        - name: Assert direct and omitted limits remain unchanged
+          ansible.builtin.assert:
+            that:
+              - _devbox_memory_high_by_user['direct-percent'] == '50%'
+              - _devbox_memory_high_by_user['direct-size'] == '32G'
+              - _devbox_memory_high_by_user['direct-omitted'] == ''
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

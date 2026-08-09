@@ -13,6 +13,9 @@
 # only matters under contention. MemoryHigh throttles and reclaims (slow but alive);
 # MemoryMax is the hard wall that keeps one developer from taking the host down.
 
+- name: Resolve developer memory limits
+  ansible.builtin.include_tasks: resolve-memory.yml
+
 - name: Look up developer uids
   ansible.builtin.getent:
     database: passwd
@@ -55,7 +58,7 @@
   ansible.builtin.command:
     argv: >-
       {{ ['systemctl', 'set-property', 'user-' ~ ansible_facts.getent_passwd[item.user][1] ~ '.slice']
-         + ['MemoryHigh=' ~ (item.resources.memory_high | default('') or 'infinity')]
+         + ['MemoryHigh=' ~ (_devbox_memory_high_by_user[item.user] or 'infinity')]
          + ['MemoryMax=' ~ (item.resources.memory_max | default('') or 'infinity')]
          + ['MemorySwapMax=' ~ (item.resources.memory_swap_max | default('') or 'infinity')]
          + (['CPUWeight=' ~ item.resources.cpu_weight] if item.resources.cpu_weight | default('') else [])

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { normalize, renderVars } from "./normalize";
-import type { ResolvedSpec } from "./types";
+import { resolveSpec } from "./resolve";
+import type { DevboxSpec, ResolvedSpec } from "./types";
 
 const resolved: ResolvedSpec = {
   config_version: 3,
@@ -153,6 +154,84 @@ test("declared resources survive normalization", () => {
   };
   const dev = (normalize(withLimits).devbox_developers as Record<string, unknown>[])[0]!;
   expect(dev.resources).toEqual({ memory_high: "10G", cpu_weight: 100 });
+});
+
+test("host memory reserve is emitted in canonical systemd form", () => {
+  const out = normalize({ ...resolved, host: { memory_reserve: "4GB" } });
+  expect(out.devbox_host).toMatchObject({ memory_reserve: "4G" });
+});
+
+test("weighted memory_high becomes an Ansible weight and box-wide total", () => {
+  const weighted: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, resources: { memory_high: { weight: 5 } } }],
+  };
+
+  const out = normalize(weighted);
+  expect((out.devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({ memory_high_weight: 5 });
+  expect(out.devbox_memory_high_weight_total).toBe(5);
+});
+
+test("direct memory_high values keep percentages and canonicalize byte aliases", () => {
+  const percent: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, resources: { memory_high: "50%" } }],
+  };
+  const gigabytes: ResolvedSpec = {
+    ...resolved,
+    developers: [{ ...resolved.developers[0]!, resources: { memory_high: "32GB" } }],
+  };
+
+  expect((normalize(percent).devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({ memory_high: "50%" });
+  expect((normalize(gigabytes).devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({ memory_high: "32G" });
+});
+
+test("all direct developer memory limits use canonical systemd units", () => {
+  const withAliases: ResolvedSpec = {
+    ...resolved,
+    developers: [
+      {
+        ...resolved.developers[0]!,
+        resources: { memory_high: "32GB", memory_max: "2048MB", memory_swap_max: "8TB" },
+      },
+    ],
+  };
+
+  expect((normalize(withAliases).devbox_developers as Record<string, unknown>[])[0]!.resources).toEqual({
+    memory_high: "32G",
+    memory_max: "2048M",
+    memory_swap_max: "8T",
+  });
+});
+
+test("remote control canonicalizes inherited and project-overridden memory limits", () => {
+  const declared: DevboxSpec = {
+    ...resolved,
+    remote_control: {
+      resources: { memory_high: "32GB", memory_max: "2048MB", memory_swap_max: "8TB" },
+    },
+    developers: [
+      {
+        ...resolved.developers[0]!,
+        agent_profiles: { main: { provider: "claude" } },
+        default_agent_profile: "main",
+        projects: [
+          {
+            name: "p",
+            repo: "git@github.com:example/p.git",
+            remote_control: { resources: { memory_max: "50%", memory_swap_max: "1024KB" } },
+          },
+        ],
+      },
+    ],
+  };
+  const resolvedWithRc = resolveSpec(declared).resolved!;
+
+  expect((normalize(resolvedWithRc).devbox_rc_units as Record<string, unknown>[])[0]!.resources).toMatchObject({
+    memory_high: "32G",
+    memory_max: "50%",
+    memory_swap_max: "1024K",
+  });
 });
 
 test("file_bridge defaults to off with the mutagen engine", () => {
