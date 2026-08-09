@@ -19,6 +19,7 @@ export interface HealthComponentFact {
   id: string;
   profile?: string;
   unit?: string;
+  unitScope?: "system" | "user";
   listeners?: (TcpListenerFact | UnixListenerFact)[];
   recovery: RecoveryPolicy;
 }
@@ -93,6 +94,12 @@ export function parseHealthFacts(value: unknown): HealthFacts {
       component.unit !== undefined
       && (typeof component.unit !== "string" || !/^[A-Za-z0-9_.@-]+[.]service$/.test(component.unit))
     ) throw new Error(`invalid unit for '${component.id}'`);
+    if (component.unitScope !== undefined && component.unitScope !== "system" && component.unitScope !== "user") {
+      throw new Error(`invalid unit scope for '${component.id}'`);
+    }
+    if (component.unitScope === "user" && component.profile === undefined) {
+      throw new Error(`user unit '${component.id}' requires a profile`);
+    }
     if (component.listeners !== undefined && !Array.isArray(component.listeners)) {
       throw new Error(`listeners for '${component.id}' must be a list`);
     }
@@ -100,6 +107,7 @@ export function parseHealthFacts(value: unknown): HealthFacts {
       id: component.id,
       ...(component.profile === undefined ? {} : { profile: component.profile as string }),
       ...(component.unit === undefined ? {} : { unit: component.unit as string }),
+      ...(component.unitScope === undefined ? {} : { unitScope: component.unitScope as "system" | "user" }),
       ...(component.listeners === undefined ? {} : { listeners: component.listeners.map(parseListener) }),
       recovery: component.recovery as RecoveryPolicy,
     };

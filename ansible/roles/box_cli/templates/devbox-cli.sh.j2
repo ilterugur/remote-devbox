@@ -118,6 +118,10 @@ cmd_doctor() {
   exec /usr/local/libexec/remote-devbox-doctor report --profile "$ME" "$@"
 }
 
+cmd_recover() {
+  exec /usr/local/libexec/remote-devbox-doctor recover "$@"
+}
+
 cmd_compose() {
   local engine bin project
   project="$(current_project)"
@@ -521,9 +525,10 @@ case "${1:-}" in
   container) shift; cmd_container "$@" ;;
   compose) shift; cmd_compose "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
+  recover) shift; cmd_recover "$@" ;;
   client-config) shift; cmd_client_config "$@" ;;
   ""|-h|--help|help)
     sed -n '5,16p' "$0" | sed 's/^# \{0,1\}//'
     ;;
-  *) die "unknown command '$1' (engine|container|compose|doctor|client-config)" ;;
+  *) die "unknown command '$1' (engine|container|compose|doctor|recover|client-config)" ;;
 esac

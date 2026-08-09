@@ -110,8 +110,11 @@ async function collectComponent(
   let reason: string | undefined;
 
   if (fact.unit) {
+    const scope = fact.unitScope === "user"
+      ? ["--user", `--machine=${fact.profile}@`]
+      : [];
     const unit = await safeRun(run, [
-      "systemctl", "show", "--no-pager",
+      "systemctl", ...scope, "show", "--no-pager",
       "--property=LoadState", "--property=ActiveState", "--property=SubState", "--property=MainPID",
       fact.unit,
     ]);

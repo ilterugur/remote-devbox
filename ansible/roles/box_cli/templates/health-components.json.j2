@@ -54,6 +54,8 @@
 {%     set _ = components.append({
          'id': 'memory.' ~ dev.user ~ '.' ~ name,
          'profile': dev.user,
+         'unit': 'hindsight-' ~ name ~ '.service',
+         'unitScope': 'user',
          'listeners': [{
            'protocol': 'tcp',
            'address': '127.0.0.1',

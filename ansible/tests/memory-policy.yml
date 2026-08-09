@@ -1,0 +1,52 @@
+---
+- name: Verify memory daemon service policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    item:
+      user: dev-a
+      name: primary
+      port: 9077
+
+  tasks:
+    - name: Render and verify the memory unit in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-memory-policy-
+          register: render_dir
+
+        - name: Render the memory daemon unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/memory/templates/hindsight.service.j2"
+            dest: "{{ render_dir.path }}/hindsight-primary.service"
+            mode: "0600"
+
+        - name: Read the rendered memory unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/hindsight-primary.service"
+          register: rendered
+
+        - name: Assert monitorable and bounded recovery policy
+          ansible.builtin.assert:
+            that:
+              - "'Type=simple' in unit"
+              - "'ExecStartPre=' in unit"
+              - "'daemon status' in unit"
+              - "'127.0.0.1:9077' in unit"
+              - "'Restart=on-failure' in unit"
+              - "'RestartSec=5s' in unit"
+              - "'StartLimitBurst=6' in unit"
+              - "'RemainAfterExit' not in unit"
+              - "'AUTHKEY' not in unit"
+          vars:
+            unit: "{{ rendered.content | b64decode }}"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

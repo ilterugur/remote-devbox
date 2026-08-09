@@ -27,6 +27,18 @@ test("parseHealthFacts accepts schema 1 and drops undeclared fields", () => {
   expect(parsed.components[0]?.profile).toBe("dev-a");
   expect(parsed.components[0]?.listeners?.[0]?.processMatch).toBe("exact");
   expect(JSON.stringify(parsed)).not.toContain(marker);
+
+  const userUnit = parseHealthFacts({
+    schemaVersion: 1,
+    components: [{
+      id: "memory.dev-a.primary",
+      profile: "dev-a",
+      unit: "hindsight-primary.service",
+      unitScope: "user",
+      recovery: "manual",
+    }],
+  });
+  expect(userUnit.components[0]?.unitScope).toBe("user");
 });
 
 test("parseHealthFacts rejects unsupported versions and unsafe unit names", () => {
@@ -46,4 +58,8 @@ test("parseHealthFacts rejects invalid listener boundaries", () => {
       listeners: [{ protocol: "tcp", address: "127.0.0.1", port: 70000, process: "x" }],
     }],
   })).toThrow("invalid TCP listener");
+  expect(() => parseHealthFacts({
+    schemaVersion: 1,
+    components: [{ id: "memory.primary", unit: "hindsight-primary.service", unitScope: "user", recovery: "manual" }],
+  })).toThrow("requires a profile");
 });

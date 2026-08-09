@@ -4,6 +4,9 @@ import { createSnapshot } from "./snapshot";
 import { readHealthSnapshot } from "./document";
 import { collectProfileComponents, systemProfileProbe } from "./profile";
 import { userInfo } from "node:os";
+import { readFileSync } from "node:fs";
+import { parseHealthFacts } from "./facts";
+import { recoverBoxComponent } from "./recover";
 
 const HEALTH_FACTS_PATH = "/etc/remote-devbox/health-components.json";
 const HEALTH_SNAPSHOT_PATH = "/run/remote-devbox/health.json";
@@ -31,8 +34,32 @@ async function main() {
       process.exit(1);
     }
   }
+  if (cmd === "recover") {
+    if (rest.length !== 1) {
+      console.error("doctor: recover requires exactly one stable component ID");
+      process.exit(2);
+    }
+    if (process.getuid?.() !== 0) {
+      console.error(`doctor: recovery requires an operator: sudo /usr/local/libexec/remote-devbox-doctor recover ${rest[0]}`);
+      process.exit(1);
+    }
+    try {
+      const facts = parseHealthFacts(JSON.parse(readFileSync(HEALTH_FACTS_PATH, "utf8")));
+      const result = await recoverBoxComponent(rest[0]!, {
+        uid: process.getuid?.(),
+        facts,
+        run: runCommand,
+      });
+      console.log(`${rest[0]} ${result.status}: ${result.reason}`);
+      if (result.status !== "recovered" && result.status !== "skipped") process.exitCode = 1;
+      return;
+    } catch {
+      console.error("doctor: recovery failed without exposing command or environment details");
+      process.exit(1);
+    }
+  }
   if (cmd !== "report" && cmd !== undefined) {
-    console.error(`unknown command: ${cmd} (this build supports: report, snapshot)`);
+    console.error(`unknown command: ${cmd} (this build supports: report, snapshot, recover)`);
     process.exit(2);
   }
   let json = false;

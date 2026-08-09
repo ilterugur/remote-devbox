@@ -32,6 +32,8 @@ const facts: HealthFacts = {
     {
       id: "memory.dev-a.primary",
       profile: "dev-a",
+      unit: "hindsight-primary.service",
+      unitScope: "user",
       listeners: [{
         protocol: "tcp",
         address: "127.0.0.1",

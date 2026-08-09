@@ -1,25 +1,25 @@
 # Managed by Ansible (remote-devbox) — do not edit by hand.
 #
-# oneshot + RemainAfterExit, because hindsight-embed forks its own daemon: a simple
-# unit would see the launcher exit and declare the service dead.
+# hindsight-embed owns a background daemon, so systemd runs a foreground monitor as
+# the main process. If the daemon or its socket disappears the monitor exits non-zero;
+# Restart=on-failure then starts the daemon again with bounded delay.
 #
 # A user service, not a system one: the daemon runs as the developer, inside their
 # resource slice. linger (developers role) keeps it up after logout.
 [Unit]
 Description=Hindsight memory daemon ({{ item.name }}) for {{ item.user }}
 After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=6
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon start'
+Type=simple
+ExecStartPre=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon start'
+ExecStart=/bin/bash -lc 'while uvx hindsight-embed -p {{ item.name }} daemon status >/dev/null 2>&1 && ss -Hltn | grep -q "127.0.0.1:{{ item.port }} "; do sleep 10; done; exit 1'
 ExecStop=/bin/bash -lc 'uvx hindsight-embed -p {{ item.name }} daemon stop'
-# Without this the unit reports "active" whenever the LAUNCHER exited cleanly, even when
-# the daemon it forked died seconds later — so a dead memory daemon looked healthy to
-# systemd, to the playbook and to anyone reading `systemctl status`. Prove the socket is
-# actually accepting connections before calling the unit started.
-ExecStartPost=/bin/bash -c 'for _ in $(seq 1 60); do ss -Hltn | grep -q "127.0.0.1:{{ item.port }} " && exit 0; sleep 2; done; echo "no listener on 127.0.0.1:{{ item.port }} after 120s — see ~/.hindsight/profiles/{{ item.name }}.log" >&2; exit 1'
 TimeoutStartSec=600
+Restart=on-failure
+RestartSec=5s
 # Background service, not interactive work: yield under contention.
 Nice=5
 

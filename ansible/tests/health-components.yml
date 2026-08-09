@@ -75,6 +75,16 @@
                 | selectattr('id', 'equalto', 'memory.dev-a.primary')
                 | map(attribute='profile') | first
                 == 'dev-a'
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'memory.dev-a.primary')
+                | map(attribute='unit') | first
+                == 'hindsight-primary.service'
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'memory.dev-a.primary')
+                | map(attribute='unitScope') | first
+                == 'user'
               - marker not in (rendered.content | b64decode)
           vars:
             expected_ids:
