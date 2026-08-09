@@ -5,12 +5,74 @@
   gather_facts: false
 
   vars:
+    fixture_user: "{{ lookup('env', 'USER') }}"
+    fixture_group: "{{ lookup('pipe', 'id -gn') }}"
     item:
       user: dev-a
       name: primary
       port: 9077
 
   tasks:
+    - name: Reconcile user systemd directories in an isolated home root
+      block:
+        - name: Create an isolated home root
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-memory-home-
+          register: memory_home_root
+
+        - name: Create a wrongly-mode intermediate systemd directory
+          ansible.builtin.file:
+            path: "{{ memory_home_root.path }}/{{ fixture_user }}/.config/systemd"
+            state: directory
+            mode: "0755"
+
+        - name: Put a sentinel in the intermediate directory
+          ansible.builtin.copy:
+            dest: "{{ memory_home_root.path }}/{{ fixture_user }}/.config/systemd/keep"
+            content: "preserve\n"
+            mode: "0600"
+
+        - name: Run the production systemd directory reconciliation
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/memory/tasks/ensure-user-systemd.yml"
+          vars:
+            _devbox_memory_home_root: "{{ memory_home_root.path }}"
+            devbox_developers:
+              - user: "{{ fixture_user }}"
+                group: "{{ fixture_group }}"
+                memory:
+                  enabled: true
+
+        - name: Inspect reconciled systemd directories
+          ansible.builtin.stat:
+            path: "{{ memory_home_root.path }}/{{ fixture_user }}/{{ systemd_relative_path }}"
+          loop:
+            - .config/systemd
+            - .config/systemd/user
+          loop_control:
+            loop_var: systemd_relative_path
+          register: systemd_directories
+
+        - name: Inspect the preserved sentinel
+          ansible.builtin.stat:
+            path: "{{ memory_home_root.path }}/{{ fixture_user }}/.config/systemd/keep"
+          register: systemd_sentinel
+
+        - name: Assert directory ownership, mode, and preservation
+          ansible.builtin.assert:
+            that:
+              - systemd_directories.results | map(attribute='stat.mode') | unique | list == ['0700']
+              - systemd_directories.results | map(attribute='stat.pw_name') | unique | list == [fixture_user]
+              - systemd_directories.results | map(attribute='stat.gr_name') | unique | list == [fixture_group]
+              - systemd_sentinel.stat.isreg | default(false)
+
+      always:
+        - name: Remove the isolated home root
+          ansible.builtin.file:
+            path: "{{ memory_home_root.path }}"
+            state: absent
+          when: memory_home_root.path is defined
+
     - name: Render and verify the memory unit in an isolated directory
       block:
         - name: Create an isolated render directory

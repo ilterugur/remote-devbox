@@ -172,12 +172,8 @@
   changed_when: false
 
 - name: Scaffold .env files from .env.example (never overwrites)
-  ansible.builtin.shell:
-    executable: /bin/bash # `read -d ''` is unsupported by dash
-    cmd: >-
-      set -o pipefail;
-      find "{{ item.0.path }}" -name '.env.example' -not -path '*/node_modules/*' -print0 |
-      while IFS= read -r -d '' f; do t="${f%.example}"; [ -f "$t" ] || cp "$f" "$t"; done
+  ansible.builtin.script:
+    cmd: "scaffold-env-files.sh {{ item.0.path | quote }}"
   become: true
   become_user: "{{ item.0.user }}"
   loop: "{{ _devbox_projects | zip(_devbox_repo_git.results) | list }}"

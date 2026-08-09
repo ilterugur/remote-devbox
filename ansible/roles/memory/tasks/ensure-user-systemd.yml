@@ -1,0 +1,14 @@
+---
+- name: Ensure each memory user's systemd directory chain is accessible
+  ansible.builtin.file:
+    path: "{{ _devbox_memory_home_root }}/{{ memory_directory.0.user }}/{{ memory_directory.1 }}"
+    state: directory
+    owner: "{{ memory_directory.0.user }}"
+    group: "{{ memory_directory.0.group | default(memory_directory.0.user) }}"
+    mode: "0700"
+  loop: >-
+    {{ devbox_developers | selectattr('memory.enabled') | list
+       | product(['.config/systemd', '.config/systemd/user']) | list }}
+  loop_control:
+    loop_var: memory_directory
+    label: "{{ memory_directory.0.user }}/{{ memory_directory.1 }}"

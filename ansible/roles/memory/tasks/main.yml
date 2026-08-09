@@ -125,6 +125,11 @@
   no_log: true
   notify: Restart memory daemons
 
+- name: Reconcile the user systemd directory chain
+  ansible.builtin.include_tasks: ensure-user-systemd.yml
+  vars:
+    _devbox_memory_home_root: /home
+
 - name: Install the memory daemon service per instance
   ansible.builtin.template:
     src: hindsight.service.j2

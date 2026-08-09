@@ -1,0 +1,132 @@
+---
+- name: Verify project environment scaffold policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    scaffold_script: "{{ playbook_dir }}/../roles/projects/files/scaffold-env-files.sh"
+    pruned_directories:
+      - node_modules
+      - .git
+      - .worktrees
+      - .turbo
+      - .next
+      - dist
+      - build
+      - coverage
+  tasks:
+    - name: Exercise the scaffold script in an isolated project
+      block:
+        - name: Create the isolated project root
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-projects-policy-
+          register: project_fixture
+
+        - name: Create ordinary source directories
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}/{{ item }}"
+            state: directory
+            mode: "0700"
+          loop: [src/new, src/existing, runtime/private]
+
+        - name: Write ordinary environment examples
+          ansible.builtin.copy:
+            dest: "{{ project_fixture.path }}/{{ item }}"
+            content: "from-example\n"
+            mode: "0600"
+          loop: [src/new/.env.example, src/existing/.env.example]
+
+        - name: Put an environment example below an unreadable runtime tree
+          ansible.builtin.copy:
+            dest: "{{ project_fixture.path }}/runtime/private/.env.example"
+            content: "must-not-fail\n"
+            mode: "0600"
+
+        - name: Write an existing environment sentinel
+          ansible.builtin.copy:
+            dest: "{{ project_fixture.path }}/src/existing/.env"
+            content: "keep-existing\n"
+            mode: "0600"
+
+        - name: Create every pruned tree
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}/{{ item }}/nested"
+            state: directory
+            mode: "0700"
+          loop: "{{ pruned_directories }}"
+
+        - name: Put an environment example below every pruned tree
+          ansible.builtin.copy:
+            dest: "{{ project_fixture.path }}/{{ item }}/nested/.env.example"
+            content: "must-not-copy\n"
+            mode: "0600"
+          loop: "{{ pruned_directories }}"
+
+        - name: Make a dependency child non-traversable
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}/node_modules/nested"
+            mode: "0000"
+
+        - name: Make a non-pruned runtime child non-traversable
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}/runtime/private"
+            mode: "0000"
+
+        - name: Run the production scaffold script
+          ansible.builtin.command:
+            argv: [/bin/bash, "{{ scaffold_script }}", "{{ project_fixture.path }}"]
+          changed_when: false
+
+        - name: Restore dependency fixture permissions for assertions
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}/{{ item }}"
+            mode: "0700"
+          loop:
+            - node_modules/nested
+            - runtime/private
+
+        - name: Read the existing environment sentinel
+          ansible.builtin.slurp:
+            src: "{{ project_fixture.path }}/src/existing/.env"
+          register: existing_environment
+
+        - name: Check the eligible environment file
+          ansible.builtin.stat:
+            path: "{{ project_fixture.path }}/src/new/.env"
+          register: eligible_environment
+
+        - name: Check pruned trees for copied environment files
+          ansible.builtin.stat:
+            path: "{{ project_fixture.path }}/{{ item }}/nested/.env"
+          loop: "{{ pruned_directories }}"
+          register: pruned_environments
+
+        - name: Check the unreadable runtime tree for a copied environment file
+          ansible.builtin.stat:
+            path: "{{ project_fixture.path }}/runtime/private/.env"
+          register: unreadable_environment
+
+        - name: Assert scaffold behavior
+          ansible.builtin.assert:
+            that:
+              - eligible_environment.stat.isreg | default(false)
+              - existing_environment.content | b64decode == 'keep-existing\n'
+              - pruned_environments.results | selectattr('stat.exists') | list | length == 0
+              - not unreadable_environment.stat.exists
+
+      always:
+        - name: Restore fixture permissions before cleanup
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}/{{ item }}"
+            mode: "0700"
+          loop:
+            - node_modules/nested
+            - runtime/private
+          when: project_fixture.path is defined
+
+        - name: Remove the isolated project root
+          ansible.builtin.file:
+            path: "{{ project_fixture.path }}"
+            state: absent
+          when: project_fixture.path is defined
