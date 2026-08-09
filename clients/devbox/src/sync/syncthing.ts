@@ -166,7 +166,9 @@ export class SyncthingEngine implements SyncEngine {
       const folders: any[] = await api(ep, "GET", "/rest/config/folders");
       return folders
         .filter((f) => f.id.startsWith("devbox-"))
-        .map((f) => ({ name: f.id, state: f.paused ? "paused" : "active", conflicts: 0 }));
+        // The folder config endpoint does not expose conflict files. Claiming zero here
+        // would let recovery mutate a session whose conflict state was never inspected.
+        .map((f) => ({ name: f.id, state: f.paused ? "paused" : "active", conflicts: null }));
     } catch {
       return [];
     }

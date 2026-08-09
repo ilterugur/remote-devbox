@@ -48,7 +48,7 @@ describe("mutagen argv", () => {
     // discard every session, not just the paused one.
     const template = buildStatusArgs()[4]!;
     expect(template).toContain("{{if .SessionState}}");
-    expect(template).toContain("{{else}}0{{end}}");
+    expect(template).toContain("{{else}}unknown{{end}}");
     expect(template).not.toMatch(/{{\s*len \.Conflicts\s*}}(?!.*{{else}})/);
   });
 });
@@ -70,7 +70,7 @@ describe("parseStatusOutput", () => {
   });
   test("a malformed row degrades instead of throwing", () => {
     expect(parseStatusOutput("devbox-work\n")).toEqual([
-      { name: "devbox-work", state: "", conflicts: 0 },
+      { name: "devbox-work", state: "", conflicts: null },
     ]);
   });
 });

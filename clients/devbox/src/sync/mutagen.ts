@@ -82,7 +82,7 @@ export function buildStatusArgs(): string[] {
   return [
     "sync", "list", "--label-selector=devbox=true",
     "--template",
-    '{{range .}}{{.Name}}\t{{.Status}}\t{{if .SessionState}}{{len .Conflicts}}{{else}}0{{end}}{{"\\n"}}{{end}}',
+    '{{range .}}{{.Name}}\t{{.Status}}\t{{if .SessionState}}{{len .Conflicts}}{{else}}unknown{{end}}{{"\\n"}}{{end}}',
   ];
 }
 
@@ -92,8 +92,11 @@ export function parseStatusOutput(stdout: string): SyncStatus[] {
     .split("\n")
     .filter((l) => l.trim())
     .map((l) => {
-      const [name = "", state = "", conflicts = "0"] = l.split("\t");
-      return { name, state, conflicts: parseInt(conflicts, 10) || 0 };
+      const [name = "", state = "", rawConflicts] = l.split("\t");
+      const conflicts = rawConflicts !== undefined && /^[0-9]+$/.test(rawConflicts)
+        ? Number(rawConflicts)
+        : null;
+      return { name, state, conflicts };
     });
 }
 

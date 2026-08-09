@@ -7,7 +7,8 @@ import { die, type EngineId } from "../config";
 import { MutagenEngine } from "./mutagen";
 import { SyncthingEngine } from "./syncthing";
 
-export type SyncStatus = { name: string; state: string; conflicts: number };
+/** null means the engine could not prove a conflict count; recovery must fail closed. */
+export type SyncStatus = { name: string; state: string; conflicts: number | null };
 export type SyncUpOpts = { profile: string; host: string; localRoot: string; remoteRoot: string; ignores: string[] };
 
 export interface SyncEngine {
