@@ -18,6 +18,12 @@
 # checksum comparison finds nothing to send.
 set -eu
 
+# The controller may export C.UTF-8 even on macOS, where that locale does not exist.
+# Fingerprints are byte-oriented, so the portable C locale is deterministic and keeps
+# shasum/Perl from aborting before a cached artifact can be reused.
+LC_ALL=C
+export LC_ALL
+
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cli="$here/clients/devbox"
 out="$cli/dist"

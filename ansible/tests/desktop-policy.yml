@@ -89,6 +89,9 @@
               - "'key_file=/etc/xrdp/key.pem' in xrdp_config.content | b64decode"
               - "'ListenAddress=' not in sesman_config.content | b64decode"
               - "'ListenPort=' not in sesman_config.content | b64decode"
+              - "'- dd' in lookup('ansible.builtin.file', playbook_dir ~ '/../roles/desktop/tasks/main.yml')"
+              - "'if=' in lookup('ansible.builtin.file', playbook_dir ~ '/../roles/desktop/tasks/main.yml')"
+              - "'not ansible_check_mode' in lookup('ansible.builtin.file', playbook_dir ~ '/../roles/box_cli/tasks/main.yml')"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:
