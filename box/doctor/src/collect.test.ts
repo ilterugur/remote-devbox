@@ -14,7 +14,7 @@ const facts: HealthFacts = {
     {
       id: "desktop.xrdp-sesman",
       unit: "xrdp-sesman.service",
-      listeners: [{ protocol: "unix", path: "xrdp-sesman.socket", process: "xrdp-sesman" }],
+      listeners: [{ protocol: "unix", path: "sesman.socket", process: "xrdp-sesman" }],
       recovery: "confirmation-required",
     },
     {
@@ -66,7 +66,7 @@ const healthyRunner: CommandRunner = async (argv) => {
     ].join("\n"));
   }
   if (argv.join(" ") === "ss -Hxlpn") {
-    return ok('u_str LISTEN 0 4096 /run/xrdp/sockdir/xrdp-sesman.socket users:(("xrdp-sesman",pid=480,fd=7))');
+    return ok('u_str LISTEN 0 4096 /run/xrdp/sockdir/sesman.socket users:(("xrdp-sesman",pid=480,fd=7))');
   }
   throw new Error(`unexpected command: ${argv.join(" ")}`);
 };

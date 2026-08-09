@@ -357,7 +357,17 @@
 
 - name: Prove xrdp can read its TLS certificate and key
   ansible.builtin.command:
-    argv: [test, -r, "{{ item }}"]
+    argv:
+      # GNU `test -r` can report false under Ansible's sudo/become execution even
+      # when the target user's supplementary ssl-cert group can open the file.
+      # Read one byte instead: this proves xrdp's permission boundary without
+      # ever emitting certificate or private-key contents.
+      - dd
+      - "if={{ item }}"
+      - of=/dev/null
+      - bs=1
+      - count=1
+      - status=none
   become: true
   become_user: xrdp
   changed_when: false

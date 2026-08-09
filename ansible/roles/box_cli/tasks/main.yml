@@ -86,6 +86,10 @@
     enabled: true
     state: started
     daemon_reload: true
+  # First-install check mode does not write the new unit file, so systemd cannot
+  # discover it. Template diffs still show the pending change; the real run writes
+  # the unit before this task and enables it normally.
+  when: not ansible_check_mode
 
 - name: Install the box CLI
   ansible.builtin.template:

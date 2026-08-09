@@ -50,6 +50,12 @@
             dest: "{{ render_dir.path }}/health-components.json"
             mode: "0600"
 
+        - name: Render the health snapshot service
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/box_cli/templates/devbox-health-snapshot.service.j2"
+            dest: "{{ render_dir.path }}/devbox-health-snapshot.service"
+            mode: "0600"
+
         - name: Read rendered health component facts
           ansible.builtin.slurp:
             src: "{{ render_dir.path }}/health-components.json"
@@ -58,6 +64,11 @@
         - name: Parse rendered health component facts
           ansible.builtin.set_fact:
             health: "{{ rendered.content | b64decode | from_json }}"
+
+        - name: Read the rendered health snapshot service
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/devbox-health-snapshot.service"
+          register: rendered_service
 
         - name: Assert configured components and secret boundary
           ansible.builtin.assert:
@@ -85,7 +96,14 @@
                 | selectattr('id', 'equalto', 'memory.dev-a.primary')
                 | map(attribute='unitScope') | first
                 == 'user'
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'desktop.xrdp-sesman')
+                | map(attribute='listeners') | first
+                | map(attribute='path') | first
+                == 'sesman.socket'
               - marker not in (rendered.content | b64decode)
+              - "'RuntimeDirectoryPreserve=yes' in rendered_service.content | b64decode"
           vars:
             expected_ids:
               - desktop.xrdp
