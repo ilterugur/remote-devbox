@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { hasErrors } from "./issues";
+import { normalize } from "./normalize";
+import { validateReferences } from "./references";
+import { resolveSpec } from "./resolve";
 import { validateStructure } from "./validate";
 
 const KEY = "ssh-ed25519 AAAAC3Nz key@client";
@@ -14,6 +18,19 @@ const minimal = () => ({
 
 const paths = (raw: unknown) =>
   validateStructure(raw).issues.map((i) => `${i.severity}:${i.path}`);
+
+const runRawPipeline = (raw: unknown) => {
+  const structural = validateStructure(raw);
+  if (!structural.spec) return { normalized: null, issues: structural.issues };
+  const referenceIssues = validateReferences(structural.spec);
+  const issues = [...structural.issues, ...referenceIssues];
+  if (hasErrors(issues)) return { normalized: null, issues };
+  const resolution = resolveSpec(structural.spec);
+  return {
+    normalized: resolution.resolved ? normalize(resolution.resolved) : null,
+    issues: [...issues, ...resolution.issues],
+  };
+};
 
 /** minimal() with one project, merged with the given project overrides. */
 const withProject = (extra: Record<string, unknown>) => ({
@@ -426,6 +443,62 @@ test("developer memory_high accepts a positive weight object", () => {
     developers: [{ user: "dev-a", login_ssh_keys: [KEY], resources: { memory_high: { weight: 5 } } }],
   };
   expect(paths(weighted)).toEqual([]);
+});
+
+test("raw developer resources cannot inject the internal memory_high_weight field", () => {
+  const injected = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], resources: { memory_high_weight: 5 } }],
+  };
+  const result = runRawPipeline(injected);
+
+  expect(result.normalized).toBeNull();
+  expect(result.issues.map((issue) => `${issue.severity}:${issue.path}`)).toContain(
+    "error:developers[0].resources.memory_high_weight",
+  );
+});
+
+test("raw developer resources reject an internal field even beside a valid weight", () => {
+  const injected = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        resources: { memory_high: { weight: 1 }, memory_high_weight: 5 },
+      },
+    ],
+  };
+  const result = runRawPipeline(injected);
+
+  expect(result.normalized).toBeNull();
+  expect(result.issues.map((issue) => `${issue.severity}:${issue.path}`)).toContain(
+    "error:developers[0].resources.memory_high_weight",
+  );
+});
+
+test("raw resource mappings reject unknown keys instead of forwarding them", () => {
+  const unknown = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], resources: { burst_memory: "2G" } }],
+  };
+  const result = runRawPipeline(unknown);
+
+  expect(result.normalized).toBeNull();
+  expect(result.issues.map((issue) => `${issue.severity}:${issue.path}`)).toContain(
+    "error:developers[0].resources.burst_memory",
+  );
+});
+
+test("remote control resource allowlisting retains every service-only knob", () => {
+  const rc = {
+    ...minimal(),
+    remote_control: {
+      resources: { nice: 5, oom_score_adjust: 300, cpu_quota: "150%" },
+    },
+  };
+
+  expect(runRawPipeline(rc).issues).toEqual([]);
 });
 
 test("weights are rejected outside developer memory_high", () => {

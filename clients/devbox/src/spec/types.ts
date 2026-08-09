@@ -210,6 +210,16 @@ export interface MemoryWeightSpec {
 
 export type MemoryLimitSpec = string | MemoryWeightSpec;
 
+export const SLICE_RESOURCE_KEYS = [
+  "memory_high",
+  "memory_max",
+  "memory_swap_max",
+  "cpu_weight",
+  "io_weight",
+  "tasks_max",
+] as const;
+export const SERVICE_RESOURCE_KEYS = [...SLICE_RESOURCE_KEYS, "nice", "oom_score_adjust", "cpu_quota"] as const;
+
 export interface ResourceSpec {
   memory_high?: MemoryLimitSpec;
   memory_max?: string;

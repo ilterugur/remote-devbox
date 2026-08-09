@@ -14,6 +14,8 @@ import {
   type DevboxSpec,
   type EngineId,
   type RcSpawn,
+  SERVICE_RESOURCE_KEYS,
+  SLICE_RESOURCE_KEYS,
   SUPPORTED_PLATFORM,
   type SshAccess,
 } from "./types";
@@ -364,7 +366,7 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
     });
   }
 
-  validateResources(d.resources, `${base}.resources`, issues, true);
+  validateResources(d.resources, `${base}.resources`, issues, { allowMemoryHighWeight: true });
   if (d.browser !== undefined && typeof d.browser !== "boolean") {
     issues.push(err(`${base}.browser`, "must be true or false"));
   }
@@ -494,17 +496,31 @@ function validateLazyMounts(raw: unknown, base: string, issues: Issue[]): void {
   });
 }
 
-function validateResources(r: unknown, base: string, issues: Issue[], allowMemoryHighWeight = false): void {
+interface ResourceValidationOptions {
+  allowMemoryHighWeight?: boolean;
+  allowServiceKnobs?: boolean;
+}
+
+function validateResources(
+  r: unknown,
+  base: string,
+  issues: Issue[],
+  options: ResourceValidationOptions = {},
+): void {
   if (r === undefined) return;
   if (!isRecord(r)) {
     issues.push(err(base, "must be a mapping"));
     return;
   }
+  const allowedKeys: readonly string[] = options.allowServiceKnobs ? SERVICE_RESOURCE_KEYS : SLICE_RESOURCE_KEYS;
+  for (const key of Object.keys(r)) {
+    if (!allowedKeys.includes(key)) issues.push(err(`${base}.${key}`, "unknown resource field"));
+  }
   for (const k of ["memory_high", "memory_max", "memory_swap_max"] as const) {
     const value = r[k];
     const valid =
       (typeof value === "string" && canonicalMemorySize(value) !== null) ||
-      (k === "memory_high" && allowMemoryHighWeight && isMemoryWeight(value));
+      (k === "memory_high" && options.allowMemoryHighWeight && isMemoryWeight(value));
     // systemd byte suffixes or bounded percentages; "" means "no limit for this knob".
     if (value !== undefined && !valid) {
       issues.push(err(`${base}.${k}`, "must be a systemd size like '10G' (or '' for no limit)"));
@@ -518,10 +534,15 @@ function validateResources(r: unknown, base: string, issues: Issue[], allowMemor
   // Service-only knobs. Both have kernel-defined ranges, and a value outside them is
   // rejected by systemd at unit load — which surfaces as a unit that simply never
   // starts, so catch it here instead.
-  if (r.nice !== undefined && !(typeof r.nice === "number" && Number.isInteger(r.nice) && r.nice >= -20 && r.nice <= 19)) {
+  if (
+    options.allowServiceKnobs &&
+    r.nice !== undefined &&
+    !(typeof r.nice === "number" && Number.isInteger(r.nice) && r.nice >= -20 && r.nice <= 19)
+  ) {
     issues.push(err(`${base}.nice`, "must be an integer in -20..19"));
   }
   if (
+    options.allowServiceKnobs &&
     r.oom_score_adjust !== undefined &&
     !(
       typeof r.oom_score_adjust === "number" &&
@@ -532,7 +553,11 @@ function validateResources(r: unknown, base: string, issues: Issue[], allowMemor
   ) {
     issues.push(err(`${base}.oom_score_adjust`, "must be an integer in -1000..1000"));
   }
-  if (r.cpu_quota !== undefined && !(typeof r.cpu_quota === "string" && /^(\d+%|)$/.test(String(r.cpu_quota)))) {
+  if (
+    options.allowServiceKnobs &&
+    r.cpu_quota !== undefined &&
+    !(typeof r.cpu_quota === "string" && /^(\d+%|)$/.test(String(r.cpu_quota)))
+  ) {
     issues.push(err(`${base}.cpu_quota`, "must be a percentage like '300%' (or '' for no cap)"));
   }
 }
@@ -579,7 +604,7 @@ function validateRemoteControl(raw: Record<string, unknown>, issues: Issue[]): v
     issues.push(err("remote_control.spawn", `must be one of: ${RC_SPAWNS.join(", ")}`));
   }
   validatePositiveInts(rc, "remote_control", ["capacity"], issues);
-  validateResources(rc.resources, "remote_control.resources", issues);
+  validateResources(rc.resources, "remote_control.resources", issues, { allowServiceKnobs: true });
   validateBuildEnv(rc.build_env, "remote_control.build_env", issues);
 
   const ar = rc.autorestart;
@@ -630,7 +655,7 @@ function validateProjectRemoteControl(raw: unknown, base: string, issues: Issue[
     issues.push(err(`${base}.spawn`, `must be one of: ${RC_SPAWNS.join(", ")}`));
   }
   validatePositiveInts(raw, base, ["capacity"], issues);
-  validateResources(raw.resources, `${base}.resources`, issues);
+  validateResources(raw.resources, `${base}.resources`, issues, { allowServiceKnobs: true });
   validateBuildEnv(raw.build_env, `${base}.build_env`, issues);
 }
 

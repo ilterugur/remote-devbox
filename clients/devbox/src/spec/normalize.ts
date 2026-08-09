@@ -9,7 +9,7 @@
  *     in a template is a real bug rather than a silent policy decision.
  */
 import { assignClientPorts } from "./client-ports";
-import { DEFAULT_CLI_TARGETS } from "./types";
+import { DEFAULT_CLI_TARGETS, SERVICE_RESOURCE_KEYS, SLICE_RESOURCE_KEYS } from "./types";
 import type {
   ClientFacts,
   GitIdentity,
@@ -168,7 +168,7 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
           spawn: rc.spawn,
           capacity: rc.capacity,
           project_dir: `/home/${dev.user}/projects/${p.name}`,
-          resources: normalizeDirectMemoryResources(rc.resources),
+          resources: normalizeDirectMemoryResources(rc.resources, true),
           build_env: { ...rc.build_env },
         },
       ];
@@ -257,11 +257,22 @@ function normalizeDeveloper(
   };
 }
 
-function normalizeDirectMemoryResources(resources: ResourceSpec): Record<string, unknown> {
-  const normalized: Record<string, unknown> = { ...resources };
-  for (const key of ["memory_high", "memory_max", "memory_swap_max"] as const) {
-    const value = resources[key];
-    if (typeof value === "string") normalized[key] = canonicalMemorySize(value) ?? value;
+function normalizeDirectMemoryResources(
+  resources: ResourceSpec,
+  includeServiceKnobs = false,
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+  const source = resources as unknown as Record<string, unknown>;
+  const allowedKeys: readonly string[] = includeServiceKnobs ? SERVICE_RESOURCE_KEYS : SLICE_RESOURCE_KEYS;
+  for (const key of allowedKeys) {
+    const value = source[key];
+    if (value === undefined) continue;
+    normalized[key] =
+      key === "memory_high" || key === "memory_max" || key === "memory_swap_max"
+        ? typeof value === "string"
+          ? canonicalMemorySize(value) ?? value
+          : value
+        : value;
   }
   return normalized;
 }
