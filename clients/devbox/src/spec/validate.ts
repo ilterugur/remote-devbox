@@ -17,6 +17,7 @@ import {
   SUPPORTED_PLATFORM,
   type SshAccess,
 } from "./types";
+import { canonicalMemorySize, isMemoryWeight } from "./memory-limit";
 import { resolveEntry } from "../app-configs/registry";
 import { normalizePath, pathsOverlap } from "../bridge";
 
@@ -134,6 +135,13 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   }
   if (h.swap_size !== undefined && !(typeof h.swap_size === "string" && /^\d+[KMGT]?$/.test(h.swap_size))) {
     issues.push(err("host.swap_size", "must be a size like '8G'"));
+  }
+  const reserve = h.memory_reserve;
+  if (
+    reserve !== undefined &&
+    !(typeof reserve === "string" && canonicalMemorySize(reserve)?.endsWith("%") === false)
+  ) {
+    issues.push(err("host.memory_reserve", "must be an absolute systemd size like '4G'"));
   }
   for (const k of ["mosh", "eternal_terminal", "harden_ssh", "hide_pids", "github_cli"] as const) {
     if (h[k] !== undefined && typeof h[k] !== "boolean") issues.push(err(`host.${k}`, "must be true or false"));
@@ -297,6 +305,19 @@ function validateDevelopers(raw: Record<string, unknown>, issues: Issue[]): void
   }
   devs.forEach((d, i) => validateDeveloper(d, `developers[${i}]`, issues));
 
+  const modes = new Set<"direct" | "weight">();
+  devs.filter(isRecord).forEach((developer) => {
+    const resources = developer.resources;
+    if (!isRecord(resources) || resources.memory_high === undefined) return;
+    if (isMemoryWeight(resources.memory_high)) modes.add("weight");
+    else if (typeof resources.memory_high === "string" && canonicalMemorySize(resources.memory_high) !== null) {
+      modes.add("direct");
+    }
+  });
+  if (modes.size > 1) {
+    issues.push(err("developers.resources.memory_high", "direct sizes and weights cannot be mixed"));
+  }
+
   // Two developers driven from one client would open two tunnels; the same local port
   // twice means the second silently fails to bind. Named both ways so the fix is obvious.
   const claimed = new Map<string, string>();
@@ -342,7 +363,7 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
     });
   }
 
-  validateResources(d.resources, `${base}.resources`, issues);
+  validateResources(d.resources, `${base}.resources`, issues, true);
   if (d.browser !== undefined && typeof d.browser !== "boolean") {
     issues.push(err(`${base}.browser`, "must be true or false"));
   }
@@ -472,15 +493,19 @@ function validateLazyMounts(raw: unknown, base: string, issues: Issue[]): void {
   });
 }
 
-function validateResources(r: unknown, base: string, issues: Issue[]): void {
+function validateResources(r: unknown, base: string, issues: Issue[], allowMemoryHighWeight = false): void {
   if (r === undefined) return;
   if (!isRecord(r)) {
     issues.push(err(base, "must be a mapping"));
     return;
   }
   for (const k of ["memory_high", "memory_max", "memory_swap_max"] as const) {
-    // systemd byte suffixes; "" means "no limit for this knob".
-    if (r[k] !== undefined && !(typeof r[k] === "string" && /^(\d+[KMGT]?|)$/.test(String(r[k])))) {
+    const value = r[k];
+    const valid =
+      (typeof value === "string" && canonicalMemorySize(value) !== null) ||
+      (k === "memory_high" && allowMemoryHighWeight && isMemoryWeight(value));
+    // systemd byte suffixes or bounded percentages; "" means "no limit for this knob".
+    if (value !== undefined && !valid) {
       issues.push(err(`${base}.${k}`, "must be a systemd size like '10G' (or '' for no limit)"));
     }
   }

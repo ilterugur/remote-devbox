@@ -398,6 +398,57 @@ test("remote_control.resources reuses the systemd size rules", () => {
   expect(paths(spec)).toContain("error:remote_control.resources.memory_high");
 });
 
+test("memory sizes accept systemd units, B aliases and bounded percentages", () => {
+  for (const value of ["32G", "32GB", "20%", "1%", "100%", ""]) {
+    expect(
+      paths({
+        ...minimal(),
+        developers: [{ user: "dev-a", login_ssh_keys: [KEY], resources: { memory_high: value } }],
+      }),
+    ).toEqual([]);
+  }
+});
+
+test("memory sizes reject malformed units and percentages", () => {
+  for (const value of ["0%", "101%", "20.5%", "32GiB", "GB", "-1G"]) {
+    expect(
+      paths({
+        ...minimal(),
+        developers: [{ user: "dev-a", login_ssh_keys: [KEY], resources: { memory_high: value } }],
+      }),
+    ).toContain("error:developers[0].resources.memory_high");
+  }
+});
+
+test("developer memory_high accepts a positive weight object", () => {
+  const weighted = {
+    ...minimal(),
+    developers: [{ user: "dev-a", login_ssh_keys: [KEY], resources: { memory_high: { weight: 5 } } }],
+  };
+  expect(paths(weighted)).toEqual([]);
+});
+
+test("weights are rejected outside developer memory_high", () => {
+  const bad = { ...minimal(), remote_control: { resources: { memory_high: { weight: 5 } } } };
+  expect(paths(bad)).toContain("error:remote_control.resources.memory_high");
+});
+
+test("direct and weighted developer memory_high modes cannot mix", () => {
+  const mixed = {
+    ...minimal(),
+    developers: [
+      { user: "dev-a", login_ssh_keys: [KEY], resources: { memory_high: { weight: 1 } } },
+      { user: "dev-b", login_ssh_keys: [KEY], resources: { memory_high: "50%" } },
+    ],
+  };
+  expect(paths(mixed)).toContain("error:developers.resources.memory_high");
+});
+
+test("memory_reserve is an absolute size and defaults independently of weight mode", () => {
+  expect(paths({ ...minimal(), host: { memory_reserve: "4GB" } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { memory_reserve: "20%" } })).toContain("error:host.memory_reserve");
+});
+
 test("remote_control.resources accepts nice and oom_score_adjust ranges", () => {
   const bad = { ...minimal(), remote_control: { resources: { nice: 25, oom_score_adjust: 2000 } } };
   expect(paths(bad)).toContain("error:remote_control.resources.nice");

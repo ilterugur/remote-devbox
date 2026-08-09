@@ -33,6 +33,7 @@ export interface OperatorSpec {
 /** Host tuning that is not part of the developer model. */
 export interface HostSpec {
   swap_size?: string;
+  memory_reserve?: string;
   zram?: { enabled: boolean; percent?: number; algo?: string; priority?: number };
   locales?: string[];
   mosh?: boolean;
@@ -203,8 +204,14 @@ export interface AppConfigsSpec {
   paths?: (string | Record<string, unknown>)[];
 }
 
+export interface MemoryWeightSpec {
+  weight: number;
+}
+
+export type MemoryLimitSpec = string | MemoryWeightSpec;
+
 export interface ResourceSpec {
-  memory_high?: string;
+  memory_high?: MemoryLimitSpec;
   memory_max?: string;
   memory_swap_max?: string;
   cpu_weight?: number;
