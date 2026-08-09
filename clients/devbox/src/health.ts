@@ -11,6 +11,8 @@ import {
   type AgentSpec,
 } from "./agent";
 import { hostFor, type Config } from "./config";
+import { collectMountHealth } from "./mount";
+import { collectSyncHealth } from "./sync";
 
 export type HealthStatus =
   | "healthy"
@@ -322,9 +324,10 @@ export function probeAgentHealth(
 function configuredAgentSpecs(cfg: Config, profile: string): AgentSpec[] {
   const host = hostFor(cfg, profile);
   const mode = readBrowserMode(profile);
+  const browserEnabled = cfg.profiles.find((candidate) => candidate.user === profile)?.browserFailover !== undefined;
   const specs = agentsFor(cfg, profile)
     .filter((spec) => spec.label !== `com.devbox.${profile}.browser` || mode === "client");
-  if (mode === "client") {
+  if (mode === "client" && browserEnabled) {
     for (const port of browserAutoBindPorts(cfg, profile)) {
       specs.push(browserAutoBindAgent(profile, port, host));
     }
@@ -368,11 +371,25 @@ export function formatHealthHuman(document: HealthDocument): string {
   return lines.join("\n");
 }
 
-export function runDoctor(cfg: Config, profile: string, options: DoctorOptions = {}): number {
+export async function collectDoctorHealth(
+  cfg: Config,
+  profile: string,
+  options: Pick<DoctorOptions, "now" | "runner"> = {},
+): Promise<HealthDocument> {
   const now = options.now ?? new Date();
   const runner = options.runner ?? defaultDoctorRunner;
   const remote = fetchBoxHealth(hostFor(cfg, profile), runner, now);
-  const document = combineHealth(remote, collectLocalAgentHealth(cfg, profile, runner), now);
+  const sync = await collectSyncHealth(cfg, profile);
+  const local = [
+    ...collectLocalAgentHealth(cfg, profile, runner),
+    ...collectMountHealth(cfg, profile, runner),
+    ...(sync ? [sync] : []),
+  ];
+  return combineHealth(remote, local, now);
+}
+
+export async function runDoctor(cfg: Config, profile: string, options: DoctorOptions = {}): Promise<number> {
+  const document = await collectDoctorHealth(cfg, profile, options);
   const rendered = options.json ? JSON.stringify(document, null, 2) : formatHealthHuman(document);
   (options.write ?? ((value) => process.stdout.write(value)))(`${rendered}\n`);
   return document.status === "healthy" ? 0 : 1;

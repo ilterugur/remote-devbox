@@ -4,11 +4,13 @@ import {
   decideSyncRecovery,
   planSync,
   recoverSync,
+  collectSyncHealth,
   syncHealthFromStatus,
 } from "./sync";
 import { resolveEntry } from "./app-configs/registry";
 import { DEFAULT_IGNORES, type SyncStatus } from "./sync/engine";
 import type { Config } from "./config";
+import type { SyncEngine } from "./sync/engine";
 
 const entry = (key: string) => (resolveEntry(key) as { entry: any }).entry;
 
@@ -91,6 +93,22 @@ describe("syncHealthFromStatus", () => {
     expect(result.status).toBe("unknown");
     expect(result.reason).toBe("sync_conflicts_unknown");
     expect(result.observed.join(" ")).toContain("devbox-work");
+  });
+
+  test("collects only the profile's exact engine session and fails closed when absent", async () => {
+    const engine = (rows: SyncStatus[]): SyncEngine => ({
+      id: "mutagen",
+      up: async () => {}, down: async () => {}, pause: async () => {}, resume: async () => {},
+      status: async () => rows,
+    });
+    expect((await collectSyncHealth(base, "work", engine([
+      { name: "devbox-other", state: "Watching", conflicts: 0 },
+      status("Watching", 0),
+    ])))?.status).toBe("healthy");
+    expect(await collectSyncHealth(base, "work", engine([]))).toMatchObject({
+      status: "unknown",
+      reason: "sync_session_missing",
+    });
   });
 });
 

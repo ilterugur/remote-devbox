@@ -5,6 +5,9 @@ import {
   buildSshfsRemoteCmd,
   buildSshRArgs,
   decideMountRecovery,
+  mountHealthFromEvidence,
+  collectMountHealth,
+  parseMountProbe,
   planMounts,
 } from "./mount";
 import type { Config } from "./config";
@@ -70,6 +73,39 @@ describe("decideMountRecovery", () => {
       .toEqual({ action: "refuse", reason: "mount_evidence_unknown" });
     expect(decideMountRecovery({ mounted: false, reachable: false, openHandles: 0, ownedBridge: false }))
       .toEqual({ action: "refuse", reason: "foreign_mount_process" });
+  });
+
+  test("maps the decision boundary into a stable health component", () => {
+    expect(mountHealthFromEvidence("work", "desktop", {
+      mounted: false, reachable: false, openHandles: 0, ownedBridge: true,
+    })).toMatchObject({
+      id: "client.mount.work.desktop",
+      status: "failed",
+      reason: "mount_absent",
+      recovery: "automatic",
+    });
+    expect(mountHealthFromEvidence("work", "desktop", {
+      mounted: true, reachable: false, openHandles: 1, ownedBridge: true,
+    })).toMatchObject({ status: "blocked", reason: "mount_busy" });
+  });
+});
+
+test("collectMountHealth joins exact bridge ownership with sanitized remote evidence", () => {
+  const commands: string[] = [];
+  const result = collectMountHealth(cfg, "work", (command, args) => {
+    commands.push([command, ...args].join(" "));
+    if (command === "ssh") return { status: 0, stdout: "mounted=1\nreachable=1\nhandles=0\n", stderr: "" };
+    if (args.includes("41")) return { status: 0, stdout: "/usr/bin/ssh\n", stderr: "" };
+    return { status: 0, stdout: "/opt/homebrew/bin/rclone\n", stderr: "" };
+  }, [{
+    profile: "work", label: "desktop", tunnelPort: 5301, sshPid: 41, rclonePid: 42,
+    remotePath: "/home/work/mnt/desktop", localPath: "/Users/me/Desktop", createdAt: "now",
+  }]);
+  expect(result.find((item) => item.id === "client.mount.work.desktop")?.status).toBe("healthy");
+  expect(result.find((item) => item.id === "client.mount.work.docs")?.status).toBe("blocked");
+  expect(commands.some((command) => command.includes("ConnectTimeout=8"))).toBe(true);
+  expect(parseMountProbe("mounted=1\nreachable=0\nhandles=2\n")).toEqual({
+    mounted: true, reachable: false, openHandles: 2,
   });
 });
 

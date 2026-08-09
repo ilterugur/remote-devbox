@@ -5,11 +5,13 @@ import {
   parseHealthDocument,
   parseLaunchctlState,
   probeAgentHealth,
+  runDoctor,
   type DoctorRunner,
   type HealthDocument,
   type LocalHealthResult,
 } from "./health";
 import type { AgentSpec } from "./agent";
+import type { Config } from "./config";
 
 const box = (status: "healthy" | "failed" = "healthy"): HealthDocument => ({
   schemaVersion: 1,
@@ -157,4 +159,24 @@ test("probeAgentHealth uses a supervisor's ready-file SSH PID for browser forwar
   }, () => "72\n");
   expect(result.status).toBe("healthy");
   expect(commands[1]).toContain("-p 72");
+});
+
+test("runDoctor emits one JSON document combining local PID ownership and box health", async () => {
+  const cfg: Config = {
+    prefix: "devbox", default: "dev-a", locale: "en_US.UTF-8", launch: "",
+    profiles: [{ user: "dev-a", projects: [], desktop: { clientPort: 3390, access: ["tunnel"] } }],
+  };
+  let output = "";
+  const status = await runDoctor(cfg, "dev-a", {
+    json: true,
+    now: new Date("2026-08-09T12:00:01.000Z"),
+    write: (value) => { output += value; },
+    runner: (command) => {
+      if (command === "ssh") return { status: 0, stdout: JSON.stringify(box()), stderr: "" };
+      if (command === "launchctl") return { status: 0, stdout: "state = running\npid = 91\n", stderr: "" };
+      return { status: 0, stdout: "ssh 91 user TCP 127.0.0.1:3390 (LISTEN)\n", stderr: "" };
+    },
+  });
+  expect(status).toBe(0);
+  expect(JSON.parse(output).components.map((item: HealthResult) => item.id)).toContain("client.rdp-tunnel.dev-a");
 });

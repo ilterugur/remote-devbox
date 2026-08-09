@@ -10,8 +10,7 @@ import {
 } from "./config";
 import { normalizePath, pathsOverlap, syncDiskRoot } from "./bridge";
 import { STORE_ROOT } from "./app-configs/registry";
-import { DEFAULT_IGNORES, engineFor } from "./sync/engine";
-import type { SyncStatus } from "./sync/engine";
+import { DEFAULT_IGNORES, engineFor, type SyncEngine, type SyncStatus } from "./sync/engine";
 import type { LocalHealthResult } from "./health";
 
 export type SyncPlan = { localRoot: string; remoteRoot: string; host: string; engine: EngineId; ignores: string[] };
@@ -39,6 +38,33 @@ export function syncHealthFromStatus(profile: string, evidence: SyncStatus): Loc
     return { ...base, status: "failed", reason: "sync_disconnected" };
   }
   return { ...base, status: "healthy" };
+}
+
+export async function collectSyncHealth(
+  cfg: Config,
+  profile: string,
+  engine: SyncEngine = engineFor(syncEngineFor(cfg, profile)),
+): Promise<LocalHealthResult | null> {
+  if (!syncDiskEnabled(cfg, profile)) return null;
+  let statuses: SyncStatus[];
+  try {
+    statuses = await engine.status();
+  } catch {
+    statuses = [];
+  }
+  const name = `devbox-${profile}`;
+  const evidence = statuses.find((candidate) => candidate.name === name);
+  if (!evidence) {
+    return {
+      id: `client.sync.${profile}`,
+      status: "unknown",
+      expected: [`sync session ${name} with exactly zero conflicts`],
+      observed: [`session ${name} not present in engine evidence`, "conflicts unknown"],
+      reason: "sync_session_missing",
+      recovery: "automatic",
+    };
+  }
+  return syncHealthFromStatus(profile, evidence);
 }
 
 export type SyncRecoveryDecision =
