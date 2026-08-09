@@ -29,6 +29,9 @@ provisioner:
   config_options:
     defaults:
       interpreter_python: auto_silent
+      # Molecule writes an ephemeral ansible.cfg outside the repository. Anchor
+      # the roles path to the detected project directory instead of that cache.
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/roles
   inventory:
     group_vars:
       all:
