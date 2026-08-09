@@ -409,8 +409,8 @@ test("memory sizes accept systemd units, B aliases and bounded percentages", () 
   }
 });
 
-test("memory sizes reject malformed units and percentages", () => {
-  for (const value of ["0%", "101%", "20.5%", "32GiB", "GB", "-1G"]) {
+test("memory sizes reject malformed units, unsupported units, and percentages", () => {
+  for (const value of ["0%", "101%", "20.5%", "32GiB", "GB", "-1G", "32P", "32PB", "32E", "32EB"]) {
     expect(
       paths({
         ...minimal(),
@@ -447,6 +447,7 @@ test("direct and weighted developer memory_high modes cannot mix", () => {
 test("memory_reserve is an absolute size and defaults independently of weight mode", () => {
   expect(paths({ ...minimal(), host: { memory_reserve: "4GB" } })).toEqual([]);
   expect(paths({ ...minimal(), host: { memory_reserve: "20%" } })).toContain("error:host.memory_reserve");
+  expect(paths({ ...minimal(), host: { memory_reserve: "" } })).toContain("error:host.memory_reserve");
 });
 
 test("remote_control.resources accepts nice and oom_score_adjust ranges", () => {

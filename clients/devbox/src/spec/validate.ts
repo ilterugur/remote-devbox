@@ -137,9 +137,10 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
     issues.push(err("host.swap_size", "must be a size like '8G'"));
   }
   const reserve = h.memory_reserve;
+  const canonicalReserve = typeof reserve === "string" ? canonicalMemorySize(reserve) : null;
   if (
     reserve !== undefined &&
-    !(typeof reserve === "string" && canonicalMemorySize(reserve)?.endsWith("%") === false)
+    !(canonicalReserve && !canonicalReserve.endsWith("%"))
   ) {
     issues.push(err("host.memory_reserve", "must be an absolute systemd size like '4G'"));
   }

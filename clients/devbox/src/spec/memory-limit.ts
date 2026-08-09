@@ -1,6 +1,6 @@
 import type { MemoryLimitSpec, MemoryWeightSpec } from "./types";
 
-const DIRECT_SIZE_RE = /^(\d+)([KMGTPE]?)(?:B)?$/;
+const DIRECT_SIZE_RE = /^(\d+)([KMGT]?)(?:B)?$/;
 const PERCENT_RE = /^(?:[1-9]\d?|100)%$/;
 
 /**
