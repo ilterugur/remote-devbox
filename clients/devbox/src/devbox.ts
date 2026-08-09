@@ -55,6 +55,7 @@ import { detectClientKeyboard } from "./keyboard";
 import { renderPlan } from "./spec/plan";
 import { describePhases, tagsFor } from "./spec/phases";
 import { runDoctor } from "./health";
+import { runRecover } from "./recovery";
 
 function newHelp(prof: string) {
   const lines = [
@@ -176,7 +177,7 @@ cli
   .action((action: string | undefined, opts: { profile?: string; label?: string }) => {
     const prof = resolveProfile(cfg(), opts.profile);
     switch (action ?? "up") {
-      case "up": return runMountUp(cfg(), prof);
+      case "up": return runMountUp(cfg(), prof, opts.label);
       case "down": return runMountDown(cfg(), prof, opts.label);
       case "status": return runMountStatus();
       default: return die(`unknown mount action "${action}" (up|down|status)`);
@@ -203,6 +204,14 @@ cli
   .action(async (opts: { profile?: string; json?: boolean }) => {
     const prof = resolveProfile(cfg(), opts.profile);
     process.exitCode = await runDoctor(cfg(), prof, { json: opts.json === true });
+  });
+
+cli
+  .command("recover [component]", "recover only policy-eligible failed components")
+  .option("-p, --profile <profile>", "target profile")
+  .action(async (component: string | undefined, opts: { profile?: string }) => {
+    const prof = resolveProfile(cfg(), opts.profile);
+    process.exitCode = await runRecover(cfg(), prof, component ?? "all");
   });
 
 cli

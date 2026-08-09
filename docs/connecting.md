@@ -117,9 +117,9 @@ PAM password whose hash is in `devbox.secrets.yml`.
   says otherwise). `devbox agent up` keeps an ssh tunnel to the box open under launchd,
   and because that tunnel dials the ssh alias it follows the same tailnet→public fallback
   every other ssh does — so the address in your RDP client is right whether Tailscale is
-  up, down, or restarting. `devbox agent status` says whether the local end of that tunnel
-  is up; it cannot tell you the box's xrdp answers, because the listener it connects to is
-  ssh's own (ssh accepts the connection first and only then dials the box).
+  up, down, or restarting. `devbox agent status` remains a fast local view. Use
+  `devbox doctor` for the end-to-end answer: it requires both the exact launchd SSH PID
+  to own the local listener and the box's `desktop.xrdp` component to be healthy.
 - **Reachability on the box follows `desktop.access`** — a list, defaulting to
   `[tunnel, tailnet]` with Tailscale on and `[tunnel]` without it. `tunnel` is what makes
   xrdp listen on 127.0.0.1, and it is the only entry the agent's tunnel can reach: drop it
@@ -241,6 +241,8 @@ Client-side services are launchd agents written by
 devbox agent status   # what is described, what launchd has loaded, what the local port does
 devbox agent up       # install or update them, and remove any the config no longer describes
 devbox agent down     # remove them
+devbox doctor         # join local ownership with the versioned downstream box report
+devbox recover all    # recover only allowlisted failures; refusals stay non-destructive
 ```
 
 Each agent appears only when its profile asks for it: the desktop one for a developer with

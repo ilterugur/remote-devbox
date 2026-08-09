@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { die, hostFor, lazyMountsFor, resolveCfgDir, shQuote, type Config } from "./config";
+import type { HealthResult } from "./health";
 
 export type AgentMode = "daemon" | "interval";
 export type BrowserMode = "client" | "server";
@@ -87,6 +88,45 @@ export function recoverOwnedAgent(
     actions.bootout(spec.label);
     actions.bootstrap(spec.label);
     return { status: "recovered", reason: "agent_restarted" };
+  } catch {
+    return { status: "failed", reason: "agent_action_failed" };
+  }
+}
+
+/** Live adapter for the pure ownership decision above. It touches one exact plist label. */
+export function recoverOwnedAgentLive(spec: AgentSpec, health: HealthResult): OwnedAgentRecoveryResult {
+  try {
+    const resolved = { ...spec, argv: resolveArgv(spec.argv) };
+    const desiredPlist = renderPlist(resolved, logDirFor());
+    const path = plistPath(spec.label);
+    const installedPlist = existsSync(path) ? readFileSync(path, "utf8") : null;
+    const loaded = isLoaded(spec.label);
+    const port = localForwardPort(spec);
+    const foreignListener = !!port && health.status !== "healthy"
+      && spawnSync("/usr/sbin/lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).status === 0;
+
+    return recoverOwnedAgent(spec, {
+      healthStatus: health.status,
+      reason: health.reason,
+      installedPlist,
+      desiredPlist,
+      loaded,
+      foreignListener,
+    }, {
+      writePlist: (_label, contents) => {
+        mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+        writeFileSync(path, contents);
+      },
+      bootout: (label) => {
+        bootoutIfLoaded(label);
+        if (spec.readyFile) rmSync(spec.readyFile, { force: true });
+      },
+      bootstrap: () => {
+        if (spec.readyFile) rmSync(spec.readyFile, { force: true });
+        const result = launchctl("bootstrap", domain(), path);
+        if (result.status !== 0) throw new Error("launchctl bootstrap failed");
+      },
+    });
   } catch {
     return { status: "failed", reason: "agent_action_failed" };
   }
@@ -469,7 +509,7 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
       mode: "interval",
       intervalSeconds: 60,
       description: "lazy mounts: re-establish after sleep, wake or a dropped link",
-      argv: ["devbox", "mount", "up"],
+      argv: ["devbox", "mount", "up", "-p", profile],
     });
   }
 

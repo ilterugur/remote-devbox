@@ -40,15 +40,30 @@ export function syncHealthFromStatus(profile: string, evidence: SyncStatus): Loc
   return { ...base, status: "healthy" };
 }
 
+async function syncStatusWithTimeout(engine: SyncEngine, timeoutMs = 8_000): Promise<SyncStatus[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      engine.status(),
+      new Promise<SyncStatus[]>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("sync status timed out")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function collectSyncHealth(
   cfg: Config,
   profile: string,
-  engine: SyncEngine = engineFor(syncEngineFor(cfg, profile)),
+  injectedEngine?: SyncEngine,
 ): Promise<LocalHealthResult | null> {
   if (!syncDiskEnabled(cfg, profile)) return null;
+  const engine = injectedEngine ?? engineFor(syncEngineFor(cfg, profile));
   let statuses: SyncStatus[];
   try {
-    statuses = await engine.status();
+    statuses = await syncStatusWithTimeout(engine);
   } catch {
     statuses = [];
   }
@@ -102,6 +117,35 @@ export async function recoverSync(
   } catch {
     return { status: "failed", reason: "sync_action_failed" };
   }
+}
+
+export async function recoverSyncLive(
+  cfg: Config,
+  profile: string,
+  expectedReason: string,
+  engine: SyncEngine = engineFor(syncEngineFor(cfg, profile)),
+): Promise<{ status: "acted" | "blocked" | "failed"; reason: string }> {
+  let statuses: SyncStatus[];
+  try {
+    statuses = await syncStatusWithTimeout(engine);
+  } catch {
+    return { status: "blocked", reason: "sync_evidence_unknown" };
+  }
+  const evidence = statuses.find((candidate) => candidate.name === `devbox-${profile}`);
+  if (!evidence) return { status: "blocked", reason: "sync_session_missing" };
+  const health = syncHealthFromStatus(profile, evidence);
+  if (health.reason !== expectedReason || (health.status !== "failed" && health.status !== "degraded")) {
+    return { status: "blocked", reason: "sync_evidence_changed" };
+  }
+  const result = await recoverSync(evidence, {
+    // A disconnected named session already exists; resume asks the engine to reconnect
+    // without deleting or recreating it. The "up" decision is semantic, not a recreate.
+    up: async () => engine.resume(profile),
+    resume: async () => engine.resume(profile),
+  });
+  if (result.status === "recovered") return { status: "acted", reason: result.reason };
+  if (result.status === "failed") return { status: "failed", reason: result.reason };
+  return { status: "blocked", reason: result.reason };
 }
 
 /**

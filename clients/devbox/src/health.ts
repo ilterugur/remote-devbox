@@ -193,7 +193,7 @@ export function parseLaunchctlState(output: string): LaunchctlState {
   return { state, pid: rawPid ? Number(rawPid) : null };
 }
 
-function agentIdentity(spec: AgentSpec, profile: string): Pick<LocalHealthResult, "id" | "remoteComponent"> {
+export function agentHealthIdentity(spec: AgentSpec, profile: string): Pick<LocalHealthResult, "id" | "remoteComponent"> {
   if (spec.label === `com.devbox.${profile}.desktop`) {
     return { id: `client.rdp-tunnel.${profile}`, remoteComponent: "desktop.xrdp" };
   }
@@ -209,7 +209,7 @@ export function probeAgentHealth(
   runner: LocalProbeRunner = defaultDoctorRunner,
   readReadyFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
 ): LocalHealthResult {
-  const identity = agentIdentity(spec, profile);
+  const identity = agentHealthIdentity(spec, profile);
   const domain = `gui/${process.getuid?.() ?? 0}/${spec.label}`;
   let launchd: ReturnType<LocalProbeRunner>;
   try {
@@ -321,7 +321,7 @@ export function probeAgentHealth(
   };
 }
 
-function configuredAgentSpecs(cfg: Config, profile: string): AgentSpec[] {
+export function configuredAgentSpecs(cfg: Config, profile: string): AgentSpec[] {
   const host = hostFor(cfg, profile);
   const mode = readBrowserMode(profile);
   const browserEnabled = cfg.profiles.find((candidate) => candidate.user === profile)?.browserFailover !== undefined;

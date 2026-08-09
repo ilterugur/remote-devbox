@@ -517,7 +517,8 @@ describe("agentsFor", () => {
     const mount = agents.find((a) => a.label === "com.devbox.ilterugur.mount")!;
     expect(mount.mode).toBe("interval");
     expect(mount.intervalSeconds).toBe(60);
-    expect(mount.argv.slice(-3)).toEqual(["devbox", "mount", "up"]);
+    expect(mount.argv).toEqual(["devbox", "mount", "up", "-p", "ilterugur"]);
+    expect(mount.argv.slice(0, 3)).toEqual(["devbox", "mount", "up"]);
   });
 });
 

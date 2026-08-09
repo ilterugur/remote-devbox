@@ -212,8 +212,10 @@ const out = (s: string) => process.stdout.write(s + "\n");
 /** Establish all configured lazy mounts for a profile. Idempotent: reconciles + skips
  *  labels already live. Each mount = one detached rclone serve + one detached `ssh -R`
  *  running `sshfs -f` (foreground, so the ssh process is the mount's lifecycle). */
-export function runMountUp(cfg: Config, profile: string): void {
-  const plans = planMounts(cfg, profile);
+export function runMountUp(cfg: Config, profile: string, label?: string): void {
+  const configured = planMounts(cfg, profile);
+  const plans = label ? configured.filter((plan) => plan.label === label) : configured;
+  if (label && !plans.length) die(`no lazy mount named "${label}" is configured for "${profile}"`);
   if (!plans.length) return void out(`devbox: no lazy_mounts configured for profile "${profile}"`);
   const live = reconcileBridges();
   const host = hostFor(cfg, profile);
@@ -265,6 +267,58 @@ export function runMountUp(cfg: Config, profile: string): void {
     };
     writeBridges([...reconcileBridges(), entry]);
     out(`  ✓ ${p.label}: ${p.localPath} -> ${host}:${p.remotePath} (read-only)`);
+  }
+}
+
+export function recoverMountLive(
+  cfg: Config,
+  profile: string,
+  label: string,
+  expectedReason: string,
+): { status: "acted" | "blocked" | "failed"; reason: string } {
+  const current = collectMountHealth(cfg, profile).find((component) => component.id === `client.mount.${profile}.${label}`);
+  if (!current || current.reason !== expectedReason || current.status !== "failed") {
+    return { status: "blocked", reason: "mount_evidence_changed" };
+  }
+  if (expectedReason === "mount_absent") {
+    try {
+      runMountUp(cfg, profile, label);
+      return { status: "acted", reason: "mount_started" };
+    } catch {
+      return { status: "failed", reason: "mount_action_failed" };
+    }
+  }
+  if (expectedReason !== "mount_disconnected_clean") {
+    return { status: "blocked", reason: "mount_reason_not_recoverable" };
+  }
+
+  const plan = planMounts(cfg, profile).find((candidate) => candidate.label === label);
+  const bridges = readBridges();
+  const bridge = bridges.find((candidate) => candidate.profile === profile && candidate.label === label);
+  if (!plan || !bridge || bridgeOwnership(bridge, defaultMountProbeRunner) !== true) {
+    return { status: "blocked", reason: "mount_ownership_changed" };
+  }
+  const unmount = defaultMountProbeRunner("ssh", [
+    "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", plan.host,
+    `fusermount -u ${shQuote(plan.remotePath)}`,
+  ]);
+  if (unmount.status !== 0) return { status: "blocked", reason: "mount_busy_or_unknown" };
+
+  // Re-check each recorded PID immediately before signalling it; PID reuse is a foreign-owner boundary.
+  for (const [pid, expected] of [[bridge.sshPid, "ssh"], [bridge.rclonePid, "rclone"]] as const) {
+    const processInfo = defaultMountProbeRunner("ps", ["-p", String(pid), "-o", "comm="]);
+    if (processInfo.status === 1) continue;
+    if (processInfo.status !== 0 || processInfo.stdout.trim().split("/").at(-1) !== expected) {
+      return { status: "blocked", reason: "mount_ownership_changed" };
+    }
+    killPid(pid);
+  }
+  writeBridges(bridges.filter((candidate) => candidate !== bridge));
+  try {
+    runMountUp(cfg, profile, label);
+    return { status: "acted", reason: "mount_restarted" };
+  } catch {
+    return { status: "failed", reason: "mount_action_failed" };
   }
 }
 

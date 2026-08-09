@@ -4,6 +4,7 @@ import {
   decideSyncRecovery,
   planSync,
   recoverSync,
+  recoverSyncLive,
   collectSyncHealth,
   syncHealthFromStatus,
 } from "./sync";
@@ -145,5 +146,24 @@ describe("recoverSync", () => {
   test("the pure decision table exposes the conflict boundary", () => {
     expect(decideSyncRecovery(status("Disconnected", 3))).toEqual({ action: "refuse", reason: "sync_conflicts" });
     expect(decideSyncRecovery(status("Disconnected", null))).toEqual({ action: "refuse", reason: "sync_conflicts_unknown" });
+  });
+
+  test("live recovery re-probes the exact named session before resuming it", async () => {
+    const calls: string[] = [];
+    const engine: SyncEngine = {
+      id: "mutagen",
+      up: async () => { calls.push("up"); },
+      down: async () => {},
+      pause: async () => {},
+      resume: async (profile) => { calls.push(`resume:${profile}`); },
+      status: async () => [status("Disconnected", 0)],
+    };
+    expect(await recoverSyncLive(base, "work", "sync_disconnected", engine)).toEqual({
+      status: "acted", reason: "sync_started",
+    });
+    expect(calls).toEqual(["resume:work"]);
+    expect(await recoverSyncLive(base, "work", "sync_paused", engine)).toEqual({
+      status: "blocked", reason: "sync_evidence_changed",
+    });
   });
 });
