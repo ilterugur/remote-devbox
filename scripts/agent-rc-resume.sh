@@ -92,11 +92,10 @@ for p in plan:
     st["count"] += 1; st["last"] = now
     state[uuid] = st
 
-    # human-readable name shown on the phone
-    if kw:
-        name = kw[0]["name"] or f"{project} resume"
-    else:
-        name = f"{project} · {uuid[:8]}"
+    # The name only reaches claude.ai when a fresh card has to be minted. The
+    # scanner derives it from the conversation so that card is not called
+    # "<project> · 393f13d9"; the fallback here is for a plan from an older scanner.
+    name = str(p.get("name") or "").strip() or f"{project} · {uuid[:8]}"
 
     # per-session resume notice (system-framed); only mentions workflows that are
     # genuinely unfinished, so the agent never re-runs completed ones.

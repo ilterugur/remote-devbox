@@ -60,6 +60,66 @@ def ended_mid_response(recs):
             return True
     return False
 
+def _text_of(rec):
+    m = rec.get("message")
+    if not isinstance(m, dict):
+        return ""
+    c = m.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(b.get("text", "") for b in c
+                        if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def last_custom_title(recs):
+    """The title a rename wrote into the transcript, if this session ever had one."""
+    title = None
+    for o in recs:
+        if o.get("type") == "custom-title":
+            v = str(o.get("customTitle") or "").strip()
+            if v:
+                title = v
+    return title
+
+
+def first_user_line(recs, limit=60):
+    """The first line the human actually typed -- the closest thing to a title on disk.
+
+    Skips the machinery that also arrives as `user` records: meta records, the
+    caveat banner, slash-command and system-reminder wrappers, and this feature's
+    own resume notice.
+    """
+    for o in recs:
+        if o.get("type") != "user" or o.get("isMeta"):
+            continue
+        text = _text_of(o).strip()
+        if not text or text.startswith("<") or text.startswith("Caveat:"):
+            continue
+        if text.startswith("[automated resume notice"):
+            continue
+        line = "".join(ch for ch in text.splitlines()[0] if ch.isprintable()).strip()
+        if line:
+            return line[:limit].rstrip()
+    return None
+
+
+def resolve_name(recs, killed, project, uuid):
+    """What a freshly minted card is called.
+
+    Only reached when no reattach pointer survived the crash: a session that gets
+    its own card back keeps the title that card already carries.
+    """
+    if killed:
+        wf = str(killed[0].get("name") or "").strip()
+        if wf:
+            return wf
+    for candidate in (last_custom_title(recs), first_user_line(recs)):
+        if candidate:
+            return candidate
+    return "%s · %s" % (project, uuid[:8])
+
 def killed_workflows(sess_dir):
     res = []
     for j in glob.glob(os.path.join(sess_dir, "workflows", "wf_*.json")):
@@ -88,6 +148,7 @@ def main():
     wt_base = os.path.join(project_dir, ".claude", "worktrees")
     slug = encode_path(wt_base + "/") + "bridge-cse-"
     now = time.time()
+    project = os.environ.get("CLAUDE_RC_NAME") or os.path.basename(project_dir)
 
     plan = []
     for proj_dir in glob.glob(os.path.join(projects, slug + "*")):
@@ -103,14 +164,16 @@ def main():
         wt = os.path.join(wt_base, "bridge-" + cse)
         if not os.path.isdir(wt):
             continue
+        kw = killed_workflows(sess_dir)
         plan.append({
             "cse": cse,
             "uuid": uuid,
             "worktree": wt,
             "permissionMode": last_permission_mode(recs),
             "ageHours": round((now - os.path.getmtime(f)) / 3600, 2),
-            "killedWorkflows": killed_workflows(sess_dir),
+            "killedWorkflows": kw,
             "midResponse": ended_mid_response(recs),
+            "name": resolve_name(recs, kw, project, uuid),
         })
 
     plan.sort(key=lambda p: p["ageHours"])
