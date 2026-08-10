@@ -26,10 +26,15 @@ Environment=NODE_OPTIONS=--max-old-space-size=512
    attach to (the client's browser or the box-local fallback); with failover off there
    is none, so the server has to launch and own its own headless Chrome instead — the
    same thing the per-session entry used to do before this server was shared. #}
+{# Pinned explicitly: the server defaults to IPv6 loopback (::1), but the config every
+   session is wired with connects over IPv4 (127.0.0.1). Left to the default, the unit
+   starts clean and looks healthy while every browser tool call fails to connect —
+   relying on the resolver to prefer ::1 would make this work by luck until the next
+   resolver change broke it silently. #}
 {% if devbox_browser.failover.enabled %}
-ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --cdp-endpoint http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}'
+ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --host 127.0.0.1 --cdp-endpoint http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}'
 {% else %}
-ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --browser chrome --headless --no-sandbox'
+ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --host 127.0.0.1 --browser chrome --headless --no-sandbox'
 {% endif %}
 Restart=on-failure
 RestartSec=10
