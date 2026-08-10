@@ -53,5 +53,12 @@
           # would hand the user a card they cannot type into. Matching on the "="
           # keeps the prose in the surrounding comment from tripping this.
           - "'CLAUDE_BRIDGE_REATTACH_OUTBOUND_ONLY=' not in exec_src"
+          # SEQ and GROUPING carry no trustworthy value after an OOM: the resumed
+          # process has no way to know what sequence/grouping state the crashed
+          # one was in, so assigning either would be a guess dressed up as fact.
+          - "'CLAUDE_BRIDGE_REATTACH_SEQ=' not in exec_src"
+          - "'CLAUDE_BRIDGE_REATTACH_GROUPING=' not in exec_src"
         fail_msg: >-
-          the resumed session no longer reattaches to its own card
+          the resumed session no longer reattaches to its own card, or does so
+          in a way that blocks phone input (OUTBOUND_ONLY) or fabricates
+          post-OOM sequence/grouping state that cannot be trusted (SEQ/GROUPING)

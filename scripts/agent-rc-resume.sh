@@ -87,6 +87,13 @@ try:
 except Exception:
     bmap = {}
 
+# The map is written by a separate process (the monitor loop) that can be
+# killed mid-write, so its top-level shape is not guaranteed even when the
+# JSON itself parses. A resume cycle must survive that: one corrupt or
+# wrong-shaped map must not cost sessions that have nothing to do with it.
+if not isinstance(bmap, dict):
+    bmap = {}
+
 out = []
 for p in plan:
     uuid = p["uuid"]; wt = p["worktree"]; perm = p["permissionMode"]
@@ -131,7 +138,11 @@ for p in plan:
     # captured before the crash. Without it the CLI mints a second card and the
     # original is orphaned for good.
     bf = os.path.join(rundir, uuid + ".bridge")
-    bid = str((bmap.get(uuid) or {}).get("bridge") or "")
+    # A wrong-shaped entry (torn write, future schema change) costs only the
+    # pointer for this session, never the batch: bid falls back to "" instead
+    # of raising, so the loop keeps going and out/state still get written below.
+    entry = bmap.get(uuid)
+    bid = str(entry.get("bridge") or "") if isinstance(entry, dict) else ""
     if BRIDGE_RE.match(bid):
         open(bf, "w").write(bid)
     else:
@@ -147,18 +158,8 @@ for line in out:
 PY
 )"
 
-# The reattach variable is read out of the CLI bundle, not a documented API. If an
-# upgrade drops it, resumes silently go back to minting a second card per session --
-# so say so in the journal instead of letting it rot unnoticed.
-if ls "${RUNDIR}"/*.bridge >/dev/null 2>&1; then
-  CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
-  if [ -n "${CLAUDE_BIN}" ] && \
-     ! grep -qa CLAUDE_BRIDGE_REATTACH_SESSION "$(readlink -f "${CLAUDE_BIN}")" 2>/dev/null; then
-    log "WARNING: installed claude no longer references CLAUDE_BRIDGE_REATTACH_SESSION — resumed sessions will mint new claude.ai cards"
-  fi
-fi
-
 launched=0
+warned=0
 while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
   [ -z "${uuid:-}" ] && continue
   case "${uuid}" in \#*) log "${uuid} ${perm}"; continue;; esac
@@ -166,6 +167,29 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
   # idempotency: never double-resume a session that is already running
   if pgrep -f "$(adapter_resume_pgrep_pattern "${uuid}")" >/dev/null 2>&1; then
     log "already running: ${uuid}"; continue
+  fi
+
+  # The reattach variable is read out of the CLI bundle, not a documented API. If an
+  # upgrade drops it, resumes silently go back to minting a second card per session --
+  # so say so in the journal instead of letting it rot unnoticed. Checked at most once
+  # per cycle (not once per session), and only once a session that is actually about
+  # to be launched has a readable pointer -- a leftover .bridge file from a uuid no
+  # longer in this plan must not trigger it. The check reads the *resolved* binary
+  # (readlink -f); a future thin-wrapper install that execs a separate bundle would
+  # resolve to something that never contains the string even though reattach still
+  # works, so this is phrased as "could not confirm", not "is broken", and only runs
+  # when the resolved path is a plain file to begin with. Best-effort only: never
+  # allowed to fail the script under set -uo pipefail.
+  if [ "${warned}" -eq 0 ] && [ -n "${bridgefile}" ] && [ -r "${bridgefile}" ]; then
+    warned=1
+    CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+    if [ -n "${CLAUDE_BIN}" ]; then
+      CLAUDE_RESOLVED="$(readlink -f "${CLAUDE_BIN}" 2>/dev/null || echo "${CLAUDE_BIN}")"
+      if [ -f "${CLAUDE_RESOLVED}" ] && \
+         ! grep -qa CLAUDE_BRIDGE_REATTACH_SESSION "${CLAUDE_RESOLVED}" 2>/dev/null; then
+        log "WARNING: could not confirm CLAUDE_BRIDGE_REATTACH_SESSION in ${CLAUDE_RESOLVED} — either this claude no longer supports reattach (resumed sessions will mint new claude.ai cards) or it is a wrapper around a separate bundle"
+      fi
+    fi
   fi
 
   win="resume:$(basename "${namefile}" .name | cut -c1-8)"
