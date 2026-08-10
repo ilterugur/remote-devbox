@@ -69,6 +69,74 @@ class ResolveName(unittest.TestCase):
         self.assertEqual(scan.resolve_name([user("gercek mesaj")], killed, "P", UUID),
                          "gercek mesaj")
 
+    def test_system_reminder_block_first_human_text_second(self):
+        """Regression test for Finding 1: system-reminder in same record should not mask human text."""
+        recs = [{
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "<system-reminder>…</system-reminder>"},
+                    {"type": "text", "text": "genuine user message here"},
+                ]
+            }
+        }]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "genuine user message here")
+
+    def test_system_reminder_only_then_real_text(self):
+        """Regression test: system-reminder-only record followed by real text in next record."""
+        recs = [
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "<system-reminder>automated noise</system-reminder>"},
+                    ]
+                }
+            },
+            user("real user message"),
+        ]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "real user message")
+
+    def test_text_blocks_handles_record_without_message_key(self):
+        """Degradation test: record missing message key should be skipped gracefully."""
+        recs = [{"type": "user"}]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "Project · 393f13d9")
+
+    def test_text_blocks_handles_message_not_dict(self):
+        """Degradation test: message that is not a dict should be skipped gracefully."""
+        recs = [{"type": "user", "message": "not a dict"}]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "Project · 393f13d9")
+
+    def test_text_blocks_handles_content_is_none(self):
+        """Degradation test: content that is None should yield no blocks."""
+        recs = [{"type": "user", "message": {"content": None}}]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "Project · 393f13d9")
+
+    def test_text_blocks_handles_content_is_dict(self):
+        """Degradation test: content that is a dict (not string or list) should be skipped."""
+        recs = [{"type": "user", "message": {"content": {"type": "text", "text": "data"}}}]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "Project · 393f13d9")
+
+    def test_text_blocks_handles_list_without_text_key(self):
+        """Degradation test: content list with blocks lacking 'text' key should yield empty blocks."""
+        recs = [{
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "text"},  # missing "text" key
+                    {"type": "code", "code": "print('hello')"},  # wrong type
+                ]
+            }
+        }]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "Project · 393f13d9")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,18 +60,18 @@ def ended_mid_response(recs):
             return True
     return False
 
-def _text_of(rec):
+def _text_blocks(rec):
+    """Every text block of a record, in order. A plain-string content is one block."""
     m = rec.get("message")
     if not isinstance(m, dict):
-        return ""
+        return []
     c = m.get("content")
     if isinstance(c, str):
-        return c
+        return [c]
     if isinstance(c, list):
-        return " ".join(b.get("text", "") for b in c
-                        if isinstance(b, dict) and b.get("type") == "text")
-    return ""
-
+        return [b.get("text", "") for b in c
+                if isinstance(b, dict) and b.get("type") == "text"]
+    return []
 
 def last_custom_title(recs):
     """The title a rename wrote into the transcript, if this session ever had one."""
@@ -83,27 +83,28 @@ def last_custom_title(recs):
                 title = v
     return title
 
-
 def first_user_line(recs, limit=60):
     """The first line the human actually typed -- the closest thing to a title on disk.
 
-    Skips the machinery that also arrives as `user` records: meta records, the
-    caveat banner, slash-command and system-reminder wrappers, and this feature's
-    own resume notice.
+    Judged per block, not per record: an auto-injected system-reminder often shares
+    a record with the human's own text, so a record-level test would throw both away.
+    Skips meta records, caveat banners, slash-command wrappers, and resume notices.
+    Note: startswith("<") excludes genuine messages that happen to start with XML,
+    trading that edge case for reliable filtering of system markup.
     """
     for o in recs:
         if o.get("type") != "user" or o.get("isMeta"):
             continue
-        text = _text_of(o).strip()
-        if not text or text.startswith("<") or text.startswith("Caveat:"):
-            continue
-        if text.startswith("[automated resume notice"):
-            continue
-        line = "".join(ch for ch in text.splitlines()[0] if ch.isprintable()).strip()
-        if line:
-            return line[:limit].rstrip()
+        for block in _text_blocks(o):
+            text = block.strip()
+            if not text or text.startswith("<") or text.startswith("Caveat:"):
+                continue
+            if text.startswith("[automated resume notice"):
+                continue
+            line = "".join(ch for ch in text.splitlines()[0] if ch.isprintable()).strip()
+            if line:
+                return line[:limit].rstrip()
     return None
-
 
 def resolve_name(recs, killed, project, uuid):
     """What a freshly minted card is called.
