@@ -9,16 +9,34 @@
   gather_facts: false
 
   tasks:
-    - name: Read the files that carry the reattach contract
+    - name: Read the wiring that keeps a resumed session on its own card
       ansible.builtin.set_fact:
+        role_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_remote/tasks/main.yml') | from_yaml }}"
         monitor_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/agent-rc-monitor.sh') }}"
-        role_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_remote/tasks/main.yml') }}"
 
-    - name: Assert the snapshotter is deployed and driven from the monitor loop
+    - name: Find the task that deploys the snapshotter
+      ansible.builtin.set_fact:
+        snapshot_deploy: "{{ item['ansible.builtin.copy'] }}"
+      loop: "{{ role_tasks }}"
+      loop_control:
+        label: "{{ item.name | default('unnamed') }}"
+      when:
+        - item['ansible.builtin.copy'] is defined
+        - item['ansible.builtin.copy'].dest | default('') == '/usr/local/bin/agent-rc-bridge-snapshot'
+
+    - name: Assert the snapshotter is correctly deployed and driven from the monitor loop
       ansible.builtin.assert:
         that:
-          - "'agent-rc-bridge-snapshot' in role_src"
-          - "'agent-rc-bridge-snapshot' in monitor_src"
+          - snapshot_deploy is defined
+          - snapshot_deploy.src is search('scripts/agent-rc-bridge-snapshot\.py$')
+          - snapshot_deploy.mode == '0755'
+          - snapshot_deploy.owner == 'root'
+          - snapshot_deploy.group == 'root'
+          - monitor_src is search('/usr/local/bin/agent-rc-bridge-snapshot')
+          - monitor_src is search('(?s)while tmux.*?\${SNAPSHOT}.*?done')
         fail_msg: >-
-          the bridge identity is no longer captured while sessions live; every
-          resumed session will mint a second claude.ai card
+          the bridge identity is no longer captured while sessions live: the
+          snapshotter must be deployed executable (mode 0755, owner root), and
+          the monitor must call it from inside the tmux-alive loop so it runs
+          every ~30s while a session is active; every resumed session without
+          this wiring will mint a second claude.ai card
