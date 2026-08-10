@@ -88,5 +88,7 @@ ExecStartPost=-+/usr/bin/systemctl start --no-block agent-rc-resume-{{ ID }}.ser
 {% endif %}
 {%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
 {% endif %}
+{%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
+{% endif %}
 [Install]
 WantedBy=multi-user.target

@@ -122,12 +122,20 @@ export function resolveMemorySpace(
 /**
  * Box-wide fallbacks. Deliberately no memory_* key: a ceiling inherited from an earlier,
  * smaller box is the failure this model exists to prevent. The relative knobs are safe to
- * default — they only decide who yields first, never how much anyone may have.
+ * default — they only decide who yields first, never how much anyone may have. `oom_policy`
+ * belongs here for the same reason: it decides what happens when a ceiling is crossed, not
+ * where the ceiling sits.
  */
 const RC_DEFAULTS = {
   spawn: "worktree" as RcSpawn,
   capacity: 4,
-  resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300 } as RcResourceSpec,
+  resources: {
+    cpu_weight: 80,
+    io_weight: 80,
+    nice: 5,
+    oom_score_adjust: 300,
+    oom_policy: "continue",
+  } as RcResourceSpec,
 };
 
 /**

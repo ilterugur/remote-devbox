@@ -531,6 +531,18 @@ test("remote_control.resources accepts nice and oom_score_adjust ranges", () => 
   expect(paths(ok)).toEqual([]);
 });
 
+test("remote_control.resources rejects an unknown oom_policy", () => {
+  const bad = { ...minimal(), remote_control: { resources: { oom_policy: "restart" } } };
+  expect(paths(bad)).toContain("error:remote_control.resources.oom_policy");
+});
+
+test("remote_control.resources accepts the three systemd oom policies", () => {
+  for (const policy of ["continue", "stop", "kill"]) {
+    const spec = { ...minimal(), remote_control: { resources: { oom_policy: policy } } };
+    expect(paths(spec)).not.toContain("error:remote_control.resources.oom_policy");
+  }
+});
+
 test("remote_control.build_env must be a flat string map", () => {
   const spec = { ...minimal(), remote_control: { build_env: { NODE_OPTIONS: 4096 } } };
   expect(paths(spec)).toContain("error:remote_control.build_env.NODE_OPTIONS");

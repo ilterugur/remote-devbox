@@ -218,7 +218,13 @@ export const SLICE_RESOURCE_KEYS = [
   "io_weight",
   "tasks_max",
 ] as const;
-export const SERVICE_RESOURCE_KEYS = [...SLICE_RESOURCE_KEYS, "nice", "oom_score_adjust", "cpu_quota"] as const;
+export const SERVICE_RESOURCE_KEYS = [
+  ...SLICE_RESOURCE_KEYS,
+  "nice",
+  "oom_score_adjust",
+  "cpu_quota",
+  "oom_policy",
+] as const;
 
 export interface ResourceSpec {
   memory_high?: MemoryLimitSpec;
@@ -231,6 +237,10 @@ export interface ResourceSpec {
 
 export type RcSpawn = "worktree" | "same-dir" | "session";
 
+/** systemd's `OOMPolicy`. `continue` keeps the unit alive when the kernel kills one
+ *  process in its cgroup, so a runaway build dies without taking the session set. */
+export type OomPolicy = "continue" | "stop" | "kill";
+
 /**
  * Resource knobs for one Remote Control unit. Extends the slice knobs with the three
  * systemd properties that only mean something on a service: build niceness, the OOM
@@ -240,6 +250,7 @@ export interface RcResourceSpec extends ResourceSpec {
   nice?: number;
   oom_score_adjust?: number;
   cpu_quota?: string;
+  oom_policy?: OomPolicy;
 }
 
 export interface RcAutorestartSpec {

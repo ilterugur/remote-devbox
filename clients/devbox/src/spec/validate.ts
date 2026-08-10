@@ -560,6 +560,13 @@ function validateResources(
   ) {
     issues.push(err(`${base}.cpu_quota`, "must be a percentage like '300%' (or '' for no cap)"));
   }
+  if (
+    options.allowServiceKnobs &&
+    r.oom_policy !== undefined &&
+    !(typeof r.oom_policy === "string" && ["continue", "stop", "kill"].includes(r.oom_policy))
+  ) {
+    issues.push(err(`${base}.oom_policy`, "must be one of 'continue', 'stop', 'kill'"));
+  }
 }
 
 function validateBuildEnv(raw: unknown, base: string, issues: Issue[]): void {
