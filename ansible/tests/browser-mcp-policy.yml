@@ -142,6 +142,7 @@
               - "'--cdp-endpoint http://127.0.0.1:9222' in unit.content | b64decode"
               - "'NODE_OPTIONS=--max-old-space-size=512' in unit.content | b64decode"
               - "'OOMPolicy=continue' in unit.content | b64decode"
+              - "'/bin/bash -lc' in unit.content | b64decode"
       always:
         - name: Remove the isolated working directory
           ansible.builtin.file:
