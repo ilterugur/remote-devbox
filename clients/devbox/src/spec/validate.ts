@@ -919,11 +919,7 @@ function validateBrowser(raw: Record<string, unknown>, issues: Issue[]): void {
   if (b.enabled !== undefined && typeof b.enabled !== "boolean") {
     issues.push(err("browser.enabled", "must be true or false"));
   }
-  const mcpPort = (b as Record<string, unknown>).mcp_port;
-  if (
-    mcpPort !== undefined &&
-    !(typeof mcpPort === "number" && Number.isInteger(mcpPort) && mcpPort >= 1 && mcpPort <= 65535)
-  ) {
+  if (b.mcp_port !== undefined && !isPort(b.mcp_port)) {
     issues.push(err("browser.mcp_port", "must be an integer in 1..65535"));
   }
   const f = b.failover;

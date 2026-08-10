@@ -59,7 +59,12 @@
     group: root
     mode: "0644"
   when: devbox_browser.enabled
-  notify: Reload systemd
+  # A changed unit definition (port, failover mode, ...) has to actually reach the
+  # running process, not just sit on disk until someone restarts it by hand — hence
+  # both handlers, reload before restart, only firing when the file really changed.
+  notify:
+    - Reload systemd
+    - Restart the shared playwright MCP service
 
 - name: Apply the systemd change now
   ansible.builtin.meta: flush_handlers

@@ -120,29 +120,58 @@
               - "'--headless' in cfg_self_launch.mcpServers.playwright.args"
               - "'--no-sandbox' in cfg_self_launch.mcpServers.playwright.args"
 
-        - name: Render the shared server unit
+        - name: Render the shared server unit (failover on)
           ansible.builtin.template:
             src: "{{ playbook_dir }}/../roles/browser/templates/devbox-playwright-mcp.service.j2"
-            dest: "{{ work_dir.path }}/unit.service"
+            dest: "{{ work_dir.path }}/unit-failover-on.service"
             mode: "0600"
           vars:
             devbox_browser:
               mcp_port: 9522
-              failover: { chrome_user: dev-a, cdp_port: 9222 }
+              failover: { enabled: true, chrome_user: dev-a, cdp_port: 9222 }
 
-        - name: Read the rendered unit
+        - name: Read the rendered unit (failover on)
           ansible.builtin.slurp:
-            src: "{{ work_dir.path }}/unit.service"
-          register: unit
+            src: "{{ work_dir.path }}/unit-failover-on.service"
+          register: unit_failover_on
 
-        - name: Assert the unit carries the port and the heap cap
+        - name: Assert the failover-on unit attaches to the shared CDP endpoint
           ansible.builtin.assert:
             that:
-              - "'--port 9522' in unit.content | b64decode"
-              - "'--cdp-endpoint http://127.0.0.1:9222' in unit.content | b64decode"
-              - "'NODE_OPTIONS=--max-old-space-size=512' in unit.content | b64decode"
-              - "'OOMPolicy=continue' in unit.content | b64decode"
-              - "'/bin/bash -lc' in unit.content | b64decode"
+              - "'--port 9522' in unit_failover_on.content | b64decode"
+              - "'--cdp-endpoint http://127.0.0.1:9222' in unit_failover_on.content | b64decode"
+              - "'--browser' not in unit_failover_on.content | b64decode"
+              - "'NODE_OPTIONS=--max-old-space-size=512' in unit_failover_on.content | b64decode"
+              - "'OOMPolicy=continue' in unit_failover_on.content | b64decode"
+              - "'/bin/bash -lc' in unit_failover_on.content | b64decode"
+
+        - name: Render the shared server unit (failover off)
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/browser/templates/devbox-playwright-mcp.service.j2"
+            dest: "{{ work_dir.path }}/unit-failover-off.service"
+            mode: "0600"
+          vars:
+            devbox_browser:
+              mcp_port: 9522
+              failover: { enabled: false, chrome_user: dev-a, cdp_port: 9222 }
+
+        - name: Read the rendered unit (failover off)
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/unit-failover-off.service"
+          register: unit_failover_off
+
+        - name: Assert the failover-off unit launches its own headless Chrome
+          ansible.builtin.assert:
+            that:
+              - "'--port 9522' in unit_failover_off.content | b64decode"
+              - "'--cdp-endpoint' not in unit_failover_off.content | b64decode"
+              - "'--browser' in unit_failover_off.content | b64decode"
+              - "'chrome' in unit_failover_off.content | b64decode"
+              - "'--headless' in unit_failover_off.content | b64decode"
+              - "'--no-sandbox' in unit_failover_off.content | b64decode"
+              - "'NODE_OPTIONS=--max-old-space-size=512' in unit_failover_off.content | b64decode"
+              - "'OOMPolicy=continue' in unit_failover_off.content | b64decode"
+              - "'/bin/bash -lc' in unit_failover_off.content | b64decode"
       always:
         - name: Remove the isolated working directory
           ansible.builtin.file:

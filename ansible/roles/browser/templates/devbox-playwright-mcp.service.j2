@@ -5,6 +5,11 @@
 Description=Shared playwright MCP server (HTTP, port {{ devbox_browser.mcp_port }})
 After=network-online.target
 Wants=network-online.target
+{# Bound the crash-loop: on a box that has already had memory incidents, an unbounded
+   Restart=on-failure retry storm is its own problem. Give up after 6 restarts in 60s
+   rather than hammering the box forever — matches hindsight.service.j2. #}
+StartLimitIntervalSec=60
+StartLimitBurst=6
 
 [Service]
 Type=simple
@@ -17,7 +22,15 @@ Environment=NODE_OPTIONS=--max-old-space-size=512
    `env npx` cannot find it here. The login shell sources mise's profile.d activation
    the same way agent-rc.service.j2 and hindsight.service.j2 already do — do not
    "simplify" this back to a bare ExecStart. #}
+{# Two branches, not one: with failover on there is already a shared CDP endpoint to
+   attach to (the client's browser or the box-local fallback); with failover off there
+   is none, so the server has to launch and own its own headless Chrome instead — the
+   same thing the per-session entry used to do before this server was shared. #}
+{% if devbox_browser.failover.enabled %}
 ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --cdp-endpoint http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}'
+{% else %}
+ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --browser chrome --headless --no-sandbox'
+{% endif %}
 Restart=on-failure
 RestartSec=10
 {# A shared server is not an agent session: if it overruns it should die alone and be

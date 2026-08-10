@@ -6,3 +6,8 @@
   ansible.builtin.systemd_service:
     name: haproxy
     state: reloaded
+
+- name: Restart the shared playwright MCP service
+  ansible.builtin.systemd_service:
+    name: devbox-playwright-mcp
+    state: restarted
