@@ -62,7 +62,7 @@
               - --config
               - "{{ work_dir.path }}/claude.json"
               - --playwright-url
-              - http://127.0.0.1:9522/mcp
+              - http://localhost:9522/mcp
           changed_when: false
 
         - name: Read the config again
@@ -70,13 +70,17 @@
             src: "{{ work_dir.path }}/claude.json"
           register: shared
 
-        - name: Assert the shared server replaces the spawned one
+        # The URL here and the unit's --host below must always say "localhost": playwright-mcp
+        # rejects any request whose Host header isn't exactly "localhost:<port>", so an IP
+        # literal on either side breaks every session's browser tool calls at the application
+        # layer even though the network connection succeeds.
+        - name: Assert the shared server replaces the spawned one, wired at localhost
           vars:
             cfg: "{{ shared.content | b64decode | from_json }}"
           ansible.builtin.assert:
             that:
               - cfg.mcpServers.playwright.type == 'http'
-              - cfg.mcpServers.playwright.url == 'http://127.0.0.1:9522/mcp'
+              - cfg.mcpServers.playwright.url == 'http://localhost:9522/mcp'
               - "'command' not in cfg.mcpServers.playwright"
               - "'chrome-devtools' not in cfg.mcpServers"
               - "'some-other-server' in cfg.mcpServers"
@@ -139,7 +143,7 @@
           ansible.builtin.assert:
             that:
               - "'--port 9522' in unit_failover_on.content | b64decode"
-              - "'--host 127.0.0.1' in unit_failover_on.content | b64decode"
+              - "'--host localhost' in unit_failover_on.content | b64decode"
               - "'--cdp-endpoint http://127.0.0.1:9222' in unit_failover_on.content | b64decode"
               - "'--browser' not in unit_failover_on.content | b64decode"
               - "'NODE_OPTIONS=--max-old-space-size=512' in unit_failover_on.content | b64decode"
@@ -165,7 +169,7 @@
           ansible.builtin.assert:
             that:
               - "'--port 9522' in unit_failover_off.content | b64decode"
-              - "'--host 127.0.0.1' in unit_failover_off.content | b64decode"
+              - "'--host localhost' in unit_failover_off.content | b64decode"
               - "'--cdp-endpoint' not in unit_failover_off.content | b64decode"
               - "'--browser' in unit_failover_off.content | b64decode"
               - "'chrome' in unit_failover_off.content | b64decode"

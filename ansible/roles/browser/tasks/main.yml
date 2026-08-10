@@ -78,12 +78,14 @@
 
 # Reconciles only the browser entries in each developer's agent config; every other
 # mcpServers entry is preserved. Every session attaches to the one shared HTTP server
-# instead of spawning its own.
+# instead of spawning its own. The URL says "localhost", not an IP literal, because
+# playwright-mcp itself only accepts requests whose Host header is "localhost:<port>"
+# (see devbox-playwright-mcp.service.j2) — the unit's --host and this URL must agree.
 - name: Wire the browser MCP server into each profile
   ansible.builtin.command:
     argv: >-
       {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ item.user ~ '/.claude.json',
-          '--playwright-url', 'http://127.0.0.1:' ~ devbox_browser.mcp_port ~ '/mcp'] }}
+          '--playwright-url', 'http://localhost:' ~ devbox_browser.mcp_port ~ '/mcp'] }}
   become: true
   become_user: "{{ item.user }}"
   environment:
