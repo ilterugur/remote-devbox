@@ -171,12 +171,18 @@
     - item.2.stat.exists | default(false)
   changed_when: false
 
+# Unreadable directories are pruned rather than descended into. A project can legitimately
+# contain a tree this user cannot read — a rootless container's data directory is owned by a
+# subordinate uid and mode 0700 — and `find` exits non-zero when it cannot descend, which
+# `set -o pipefail` then turns into a failed play. Pruning is also correct on the merits: a
+# directory the project user cannot read cannot hold a .env.example it could copy.
 - name: Scaffold .env files from .env.example (never overwrites)
   ansible.builtin.shell:
     executable: /bin/bash # `read -d ''` is unsupported by dash
     cmd: >-
       set -o pipefail;
-      find "{{ item.0.path }}" -name '.env.example' -not -path '*/node_modules/*' -print0 |
+      find "{{ item.0.path }}" \( -type d ! -readable -prune \) -o
+      \( -name '.env.example' -not -path '*/node_modules/*' -print0 \) |
       while IFS= read -r -d '' f; do t="${f%.example}"; [ -f "$t" ] || cp "$f" "$t"; done
   become: true
   become_user: "{{ item.0.user }}"

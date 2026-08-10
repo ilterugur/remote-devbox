@@ -1,4 +1,11 @@
 ---
+# Run this one WITH the tag selection it exists to verify:
+#
+#   ansible-playbook --tags developers,resources ansible/tests/resource-limits-tag-safety.yml
+#
+# The filter is the subject of the test, not an optimisation. Without it every preflight
+# guard is selected, the generated-config guard fails first, and the rescue records the
+# wrong task name — a misleading failure that still exits 0 because the rescue swallows it.
 - name: Verify tagged resource reconciliation runs the reserve guard first
   hosts: localhost
   connection: local
