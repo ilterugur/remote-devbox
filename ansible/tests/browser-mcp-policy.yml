@@ -1,0 +1,101 @@
+---
+- name: Verify browser MCP wiring retires chrome-devtools and preserves foreign entries
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Reconcile a fixture config in an isolated directory
+      block:
+        - name: Create an isolated working directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-browser-mcp-policy-
+          register: work_dir
+
+        - name: Seed a config carrying both browser entries and a foreign one
+          ansible.builtin.copy:
+            dest: "{{ work_dir.path }}/claude.json"
+            mode: "0600"
+            content: |
+              {
+                "mcpServers": {
+                  "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]},
+                  "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+                  "some-other-server": {"command": "uvx", "args": ["some-other-server"]}
+                },
+                "unrelatedTopLevelKey": {"keep": true}
+              }
+
+        - name: Run the wiring script in attached mode
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude.json"
+              - --cdp-endpoint
+              - http://127.0.0.1:9222
+          changed_when: false
+
+        - name: Read the reconciled config
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude.json"
+          register: reconciled
+
+        - name: Assert the retirement and the preservation
+          vars:
+            cfg: "{{ reconciled.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - "'chrome-devtools' not in cfg.mcpServers"
+              - "'playwright' in cfg.mcpServers"
+              - "'--cdp-endpoint' in cfg.mcpServers.playwright.args"
+              - "'http://127.0.0.1:9222' in cfg.mcpServers.playwright.args"
+              - "'some-other-server' in cfg.mcpServers"
+              - cfg.mcpServers['some-other-server'].command == 'uvx'
+              - cfg.unrelatedTopLevelKey.keep
+
+        - name: Seed a second config for the self-launch (no failover) mode
+          ansible.builtin.copy:
+            dest: "{{ work_dir.path }}/claude-self-launch.json"
+            mode: "0600"
+            content: |
+              {
+                "mcpServers": {
+                  "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]},
+                  "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+                  "some-other-server": {"command": "uvx", "args": ["some-other-server"]}
+                },
+                "unrelatedTopLevelKey": {"keep": true}
+              }
+
+        - name: Run the wiring script with neither --cdp-endpoint nor --playwright-url
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude-self-launch.json"
+          changed_when: false
+
+        - name: Read the self-launch reconciled config
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude-self-launch.json"
+          register: reconciled_self_launch
+
+        - name: Assert the self-launch entry and the retirement
+          vars:
+            cfg_self_launch: "{{ reconciled_self_launch.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - "'chrome-devtools' not in cfg_self_launch.mcpServers"
+              - "'playwright' in cfg_self_launch.mcpServers"
+              - "'--browser' in cfg_self_launch.mcpServers.playwright.args"
+              - "'chrome' in cfg_self_launch.mcpServers.playwright.args"
+              - "'--headless' in cfg_self_launch.mcpServers.playwright.args"
+              - "'--no-sandbox' in cfg_self_launch.mcpServers.playwright.args"
+      always:
+        - name: Remove the isolated working directory
+          ansible.builtin.file:
+            path: "{{ work_dir.path }}"
+            state: absent
+          when: work_dir.path is defined

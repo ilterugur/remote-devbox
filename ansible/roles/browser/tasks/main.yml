@@ -1,10 +1,11 @@
 ---
 # Server-side, headless browser use for the agent: install Google Chrome once, and wire
-# two MCP servers into the agent config of every developer that asked for them
-# (developers[].browser) — Playwright (drive the browser: navigate/click/snapshot,
-# console + network) and Chrome DevTools (deeper debugging: performance traces / Web
-# Vitals, throttling). Both run the system Chrome headless. This is NOT "Claude in
-# Chrome" (that extension is client-side, on your client).
+# the Playwright MCP server (navigate/click/snapshot, console + network) into the agent
+# config of every developer that asked for it (developers[].browser). Runs against the
+# system Chrome headless. This is NOT "Claude in Chrome" (that extension is client-side,
+# on your client).
+#
+# chrome-devtools-mcp is retired — see wire-browser-mcp.py for why.
 
 - name: Install supporting fonts for headless Chrome rendering
   ansible.builtin.apt:
@@ -42,49 +43,23 @@
         path: /tmp/google-chrome-stable_current_amd64.deb
         state: absent
 
-- name: Wire browser MCP servers into each profile — launch own Chrome (user scope ~/.claude.json)
-  # Idempotent: sets only the "playwright" + "chrome-devtools" mcpServers entries,
-  # preserving any others. Both launch via npx at runtime; node/npx
-  # resolve through mise shims for the Remote Control service and interactive sessions.
-  #   playwright       — drive the headless system Chrome (navigate/click/snapshot,
-  #                      console + network inspection). The default for automation.
-  #   chrome-devtools  — deeper CDP debugging: performance traces / Web Vitals,
-  #                      network bodies+timing, CPU/network throttling.
-  when: not devbox_browser.failover.enabled
-  ansible.builtin.command:
-    cmd: >-
-      python3 -c 'import json,os;
-      p=os.path.expanduser("~/.claude.json");
-      d=json.load(open(p)) if os.path.exists(p) else {};
-      m=d.setdefault("mcpServers",{});
-      m["playwright"]={"command":"npx","args":["-y","@playwright/mcp@latest","--browser","chrome","--headless","--no-sandbox"]};
-      m["chrome-devtools"]={"command":"npx","args":["-y","chrome-devtools-mcp@latest","--headless","--isolated","--channel","stable","--chrome-arg=--no-sandbox","--chrome-arg=--disable-setuid-sandbox","--no-usage-statistics"]};
-      json.dump(d,open(p,"w"),indent=2)'
-  become: true
-  become_user: "{{ item.user }}"
-  environment:
-    HOME: "/home/{{ item.user }}"
-  loop: "{{ devbox_developers | selectattr('browser') | list }}"
-  loop_control:
-    label: "{{ item.user }}"
-  changed_when: false
+- name: Install the browser MCP wiring script
+  ansible.builtin.copy:
+    src: wire-browser-mcp.py
+    dest: /usr/local/bin/wire-browser-mcp
+    owner: root
+    group: root
+    mode: "0755"
 
-- name: Wire browser MCP servers into each profile — attach to CDP failover endpoint (user scope ~/.claude.json)
-  # Idempotent: sets only the "playwright" + "chrome-devtools" mcpServers entries,
-  # preserving any others. Both attach to the shared CDP endpoint at the failover cdp_port
-  # instead of launching their own headless Chrome instance.
-  #   playwright       — attach via --cdp-endpoint to a running Chrome/Chromium remote.
-  #   chrome-devtools  — attach via --browserUrl to the same CDP endpoint.
-  when: devbox_browser.failover.enabled
+# Reconciles only the browser entries in each developer's agent config; every other
+# mcpServers entry is preserved. The mode follows the failover setting: attached to
+# the shared CDP endpoint when it is on, self-launching when it is off.
+- name: Wire the browser MCP server into each profile
   ansible.builtin.command:
-    cmd: >-
-      python3 -c 'import json,os;
-      p=os.path.expanduser("~/.claude.json");
-      d=json.load(open(p)) if os.path.exists(p) else {};
-      m=d.setdefault("mcpServers",{});
-      m["playwright"]={"command":"npx","args":["-y","@playwright/mcp@latest","--cdp-endpoint","http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}"]};
-      m["chrome-devtools"]={"command":"npx","args":["-y","chrome-devtools-mcp@latest","--browserUrl","http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}","--no-usage-statistics"]};
-      json.dump(d,open(p,"w"),indent=2)'
+    argv: >-
+      {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ item.user ~ '/.claude.json']
+         + (['--cdp-endpoint', 'http://127.0.0.1:' ~ devbox_browser.failover.cdp_port]
+            if devbox_browser.failover.enabled else []) }}
   become: true
   become_user: "{{ item.user }}"
   environment:
