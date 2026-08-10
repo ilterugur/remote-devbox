@@ -2,8 +2,13 @@
 
 Run: python3 -m unittest discover -s scripts -p 'test_*.py' -t scripts
 """
+import contextlib
 import importlib.util
+import io
+import os
 import pathlib
+import sys
+import tempfile
 import unittest
 
 
@@ -90,6 +95,50 @@ class Merge(unittest.TestCase):
         live = {"u1": {"bridge": "session_01aaaaaaaa", "cwd": "/w"}}
         got = snap.merge(5, live, 2.0, 14)
         self.assertEqual(got["u1"]["bridge"], "session_01aaaaaaaa")
+
+
+class WriteAtomic(unittest.TestCase):
+    def test_a_serialization_failure_leaves_no_temp_file_and_no_damage(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bridge-map-x.json")
+            with open(path, "w") as fh:
+                fh.write('{"kept": true}')
+            with self.assertRaises(TypeError):
+                snap.write_atomic(path, {"boom": object()})
+            self.assertEqual(os.listdir(d), ["bridge-map-x.json"])
+            with open(path) as fh:
+                self.assertEqual(fh.read(), '{"kept": true}')
+
+
+class InstanceId(unittest.TestCase):
+    def _run(self, instance_id, home):
+        """Returns (exit code, whatever main() wrote to stderr)."""
+        argv, env = sys.argv, os.environ.get("HOME")
+        sys.argv = ["agent-rc-bridge-snapshot", instance_id]
+        os.environ["HOME"] = home
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                return snap.main(), err.getvalue()
+        finally:
+            sys.argv = argv
+            if env is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = env
+
+    def test_a_traversing_instance_id_is_refused_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            code, err = self._run("../../evil", d)
+            self.assertEqual(code, 2)
+            self.assertIn("refusing instance id", err)
+            self.assertEqual(os.listdir(d), [])
+
+    def test_a_real_instance_id_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            # No session state under this HOME, so nothing to record -- the point is
+            # that the id itself passes the guard rather than exiting 2.
+            self.assertEqual(self._run("claude-dev-p", d), (0, ""))
 
 
 if __name__ == "__main__":

@@ -37,6 +37,13 @@ NOTICE="$(cat "${NOTICEFILE}")"
 # Deliberately not set: CLAUDE_BRIDGE_REATTACH_OUTBOUND_ONLY, because the session has
 # to accept input from the phone; and the SEQ / GROUPING companions, which are
 # optional and have no trustworthy value after an OOM.
+#
+# The pointer is re-validated here rather than trusted from the orchestrator: this is
+# a separate process, and the value is about to enter the agent's environment. The
+# echoes below are pane-local — this script runs under the tmux server, so they are
+# overwritten by the agent's own screen within seconds and are useful only to someone
+# attached live. The durable statement of which path ran is the orchestrator's
+# journald line, which applies the same pattern before it claims anything.
 if [ -n "${BRIDGEFILE}" ] && [ -r "${BRIDGEFILE}" ]; then
   BRIDGE="$(tr -d '\r\n' < "${BRIDGEFILE}")"
   if printf '%s' "${BRIDGE}" | grep -Eq '^session_[A-Za-z0-9_-]{6,128}$'; then

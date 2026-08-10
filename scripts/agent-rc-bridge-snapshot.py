@@ -27,6 +27,8 @@ import time
 
 BRIDGE_RE = re.compile(r"^session_[A-Za-z0-9_-]{6,128}$")
 UUID_RE = re.compile(r"^[0-9a-fA-F-]{16,64}$")
+# <agent>-<user>-<project>, all three already charset-bound by `devbox plan`.
+INSTANCE_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 def live_entries(states, instance_id):
@@ -104,9 +106,18 @@ def read_states(sessions_dir):
 
 def write_atomic(path, data):
     tmp = "%s.tmp.%d" % (path, os.getpid())
-    with open(tmp, "w") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+    except Exception:
+        # The rename never happened, so the previous map is still the good one --
+        # take the half-written file with us rather than leaving it in the rundir.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def main():
@@ -114,6 +125,12 @@ def main():
         print("usage: agent-rc-bridge-snapshot <instance-id>", file=sys.stderr)
         return 2
     instance_id = sys.argv[1]
+    # The id reaches us from a root-generated systemd unit, so nothing on the box can
+    # bend it today -- but it lands in a filename, and a caller that gets this wrong
+    # should fail loudly here instead of writing outside the run directory.
+    if not INSTANCE_RE.match(instance_id):
+        print("agent-rc-bridge-snapshot: refusing instance id %r" % instance_id, file=sys.stderr)
+        return 2
     home = os.environ.get("HOME", os.path.expanduser("~"))
     try:
         ttl_days = float(os.environ.get("RC_BRIDGE_MAP_TTL_DAYS", "14"))

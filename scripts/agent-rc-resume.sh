@@ -39,6 +39,11 @@ SYSFILE="/usr/local/share/agent-devbox/agent-rc-resume-sys.txt"
 RUNDIR="${HOME}/.cache/agent-devbox/resume"
 STATE="${RUNDIR}/attempts.json"
 BRIDGE_MAP="${RUNDIR}/bridge-map-${ID}.json"
+# One definition for this script and the planner it embeds, so the pointer the
+# planner accepts and the pointer this script reports can never drift apart. The
+# launcher keeps its own copy on purpose: it is a separate process and re-checks
+# what it is handed rather than trusting us.
+BRIDGE_RE='^session_[A-Za-z0-9_-]{6,128}$'
 mkdir -p "${RUNDIR}"
 
 log() { echo "[agent-rc-resume] $*" >&2; }
@@ -68,7 +73,7 @@ PLAN="$(adapter_resume_scan "${DIR}" "${LOOKBACK_H}")"
 LAUNCH_TSV="$(
   RC_PLAN="${PLAN}" RC_RUNDIR="${RUNDIR}" RC_STATE="${STATE}" \
   RC_MAX_ATTEMPTS="${MAX_ATTEMPTS}" RC_PROJECT="${PROJECT_NAME}" \
-  RC_BRIDGE_MAP="${BRIDGE_MAP}" \
+  RC_BRIDGE_MAP="${BRIDGE_MAP}" RC_BRIDGE_RE="${BRIDGE_RE}" \
   "${PYBIN}" - <<'PY'
 # NOTE: this heredoc body sits inside LAUNCH_TSV="$( ... <<PY ... PY )", where the
 # PY delimiter is quoted so the shell does not expand $vars in here. On macOS
@@ -78,7 +83,7 @@ LAUNCH_TSV="$(
 # itself deliberately uses zero, so it can not tip an even body odd.
 import os, json, time, re
 
-BRIDGE_RE = re.compile(r"^session_[A-Za-z0-9_-]{6,128}$")
+BRIDGE_RE = re.compile(os.environ["RC_BRIDGE_RE"])
 plan = json.loads(os.environ["RC_PLAN"])
 rundir = os.environ["RC_RUNDIR"]; statef = os.environ["RC_STATE"]
 maxatt = int(os.environ["RC_MAX_ATTEMPTS"]); project = os.environ["RC_PROJECT"]
@@ -205,7 +210,24 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
   tmux -L "${SOCKET}" new-window -t "${SOCKET}:" -n "${win}" \
     "${EXEC}" "${uuid}" "${perm}" "${worktree}" "${namefile}" "${noticefile}" "${SYSFILE}" "${bridgefile}"
   launched=$((launched + 1))
-  log "launched ${uuid} (perm=${perm})"
+  # Say which path the launcher will take, where it can actually be read: the
+  # launcher runs under the tmux server, so its own stderr lands in a pane the
+  # agent's TUI overwrites within seconds, while this line reaches journald.
+  # Validate the content rather than the file's existence — the planner writes the
+  # pointer non-atomically, so a kill mid-write leaves a readable file the launcher
+  # will reject, and a journal that claimed "reattaching" would be lying about the
+  # one outcome this feature exists to guarantee.
+  bridge=""
+  if [ -n "${bridgefile}" ] && [ -r "${bridgefile}" ]; then
+    bridge="$(tr -d '\r\n' < "${bridgefile}" 2>/dev/null || true)"
+  fi
+  if [ -n "${bridge}" ] && printf '%s' "${bridge}" | grep -Eq "${BRIDGE_RE}"; then
+    log "launched ${uuid} (perm=${perm}, reattaching to ${bridge})"
+  elif [ -n "${bridge}" ]; then
+    log "launched ${uuid} (perm=${perm}, unusable pointer — a fresh claude.ai card will be minted)"
+  else
+    log "launched ${uuid} (perm=${perm}, no pointer — a fresh claude.ai card will be minted)"
+  fi
 
   # throttle: settle, then wait for memory + concurrency headroom before the next
   sleep "${SETTLE_SEC}"
