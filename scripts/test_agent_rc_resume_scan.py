@@ -137,6 +137,37 @@ class ResolveName(unittest.TestCase):
         self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
                          "Project · 393f13d9")
 
+    def test_null_text_block_does_not_abort_and_real_text_still_found(self):
+        """Regression test for Finding 1: a `"text": null` block must not raise
+        AttributeError in first_user_line (block.strip() on None) -- it should be
+        skipped like an empty string, letting a later real block win."""
+        recs = [{
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "real message after the null block"},
+                ]
+            }
+        }]
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID),
+                         "real message after the null block")
+
+    def test_numeric_text_block_is_coerced_not_fatal(self):
+        """Regression test for Finding 1: a non-string 'text' value (e.g. a number)
+        must be neutralised rather than raising when .strip() is called on it."""
+        recs = [{
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "text", "text": 42},
+                ]
+            }
+        }]
+        # A bare "42" is a valid (if odd) first line -- the point is that resolving
+        # the name does not raise.
+        self.assertEqual(scan.resolve_name(recs, [], "Project", UUID), "42")
+
 
 if __name__ == "__main__":
     unittest.main()

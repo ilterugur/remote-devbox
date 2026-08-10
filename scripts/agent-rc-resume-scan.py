@@ -69,7 +69,10 @@ def _text_blocks(rec):
     if isinstance(c, str):
         return [c]
     if isinstance(c, list):
-        return [b.get("text", "") for b in c
+        # `b.get("text") or ""` also neutralises a `"text": null` block (the key
+        # present but None) and any non-string value, either of which would
+        # otherwise blow up block.strip() below and abort the whole resume cycle.
+        return [str(b.get("text") or "") for b in c
                 if isinstance(b, dict) and b.get("type") == "text"]
     return []
 

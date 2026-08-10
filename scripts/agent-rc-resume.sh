@@ -70,6 +70,12 @@ LAUNCH_TSV="$(
   RC_MAX_ATTEMPTS="${MAX_ATTEMPTS}" RC_PROJECT="${PROJECT_NAME}" \
   RC_BRIDGE_MAP="${BRIDGE_MAP}" \
   "${PYBIN}" - <<'PY'
+# NOTE: this heredoc body sits inside LAUNCH_TSV="$( ... <<PY ... PY )", where the
+# PY delimiter is quoted so the shell does not expand $vars in here. On macOS
+# bash 3.2, though, an odd count of literal apostrophes in the body still breaks
+# the outer $( ... ) command-substitution parse -- the quoting is heredoc-local,
+# not substitution-local. Keep every apostrophe below paired: this comment block
+# itself deliberately uses zero, so it can not tip an even body odd.
 import os, json, time, re
 
 BRIDGE_RE = re.compile(r"^session_[A-Za-z0-9_-]{6,128}$")

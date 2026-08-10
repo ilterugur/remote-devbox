@@ -74,6 +74,23 @@ class Merge(unittest.TestCase):
         existing = {"u1": "not-a-dict", "u2": {"bridge": "nope", "seen": 1.0}}
         self.assertEqual(snap.merge(existing, {}, 2.0, 14), {})
 
+    def test_a_list_shaped_existing_map_does_not_raise(self):
+        """Regression test for Finding 2: existing.items() on a list must not raise
+        AttributeError -- a wrong-shaped map degrades to empty instead of bricking
+        the snapshotter permanently."""
+        self.assertEqual(snap.merge([], {}, 2.0, 14), {})
+
+    def test_a_string_shaped_existing_map_does_not_raise(self):
+        """Regression test for Finding 2: existing.items() on a string must not raise."""
+        self.assertEqual(snap.merge("x", {}, 2.0, 14), {})
+
+    def test_a_wrong_shaped_map_still_accepts_live_sessions(self):
+        """A wrong-shaped stored map should not prevent live sessions from being
+        recorded -- only the (unusable) stored history is discarded."""
+        live = {"u1": {"bridge": "session_01aaaaaaaa", "cwd": "/w"}}
+        got = snap.merge(5, live, 2.0, 14)
+        self.assertEqual(got["u1"]["bridge"], "session_01aaaaaaaa")
+
 
 if __name__ == "__main__":
     unittest.main()

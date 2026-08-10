@@ -45,6 +45,8 @@ if [ -n "${BRIDGEFILE}" ] && [ -r "${BRIDGEFILE}" ]; then
   else
     echo "[agent-rc-resume] ignoring malformed bridge pointer for ${UUID}" >&2
   fi
+else
+  echo "[agent-rc-resume] no bridge pointer for ${UUID} — a fresh claude.ai card will be minted" >&2
 fi
 
 exec claude --resume "${UUID}" \

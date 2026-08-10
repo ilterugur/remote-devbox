@@ -57,9 +57,17 @@ def merge(existing, live, now, ttl_days):
     A session that is not running right now keeps its entry -- that is precisely
     the case the resume path exists for. Only age retires an entry.
     """
+    # A map that parses as JSON but is not an object (a torn write, a future
+    # schema change) must degrade to "nothing stored" rather than raise here --
+    # this is the writer side of the same hazard the reader already guards
+    # against (agent-rc-resume.sh), except a crash here is permanent: the monitor
+    # calls this every tick and swallows failures with `|| true`, so an unguarded
+    # AttributeError would brick the snapshotter for this unit forever.
+    if not isinstance(existing, dict):
+        existing = {}
     ttl = ttl_days * 86400
     out = {}
-    for uuid, rec in (existing or {}).items():
+    for uuid, rec in existing.items():
         if not isinstance(rec, dict):
             continue
         bridge = str(rec.get("bridge") or "")

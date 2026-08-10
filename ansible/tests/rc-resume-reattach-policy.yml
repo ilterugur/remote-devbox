@@ -35,7 +35,11 @@
           - snapshot_deploy.owner == 'root'
           - snapshot_deploy.group == 'root'
           - monitor_src is search('/usr/local/bin/agent-rc-bridge-snapshot')
-          - monitor_src is search('(?s)while tmux.*?\${SNAPSHOT}.*?done')
+          # Match the actual invocation ("${SNAPSHOT}" "${ID}"), not just the
+          # `[ -x "${SNAPSHOT}" ]` executability guard -- a bare ${SNAPSHOT}
+          # reference is satisfied by the guard alone even if the call itself
+          # were replaced with a no-op, so the assertion has to be about the call.
+          - monitor_src is search('(?s)while tmux.*?\${SNAPSHOT}"\s+"\${ID}.*?done')
         fail_msg: >-
           the bridge identity is no longer captured while sessions live: the
           snapshotter must be deployed executable (mode 0755, owner root), and
