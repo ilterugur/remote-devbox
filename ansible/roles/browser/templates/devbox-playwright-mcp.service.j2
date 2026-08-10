@@ -1,0 +1,56 @@
+{# Managed by Ansible (remote-devbox). One MCP server per browser-enabled developer,
+   running as that developer. Claude Code spawns a stdio MCP server per session, so N
+   sessions produced N copies of this process; over HTTP one process serves every
+   session that developer runs.
+
+   Per developer rather than one for the box, because this process does the session's
+   browser file I/O: an upload reads out of that developer's 0700 home (which no other
+   account can read) and a screenshot is written back into it. A single server would do
+   both as whichever account it happened to run as. #}
+[Unit]
+Description=Playwright MCP server for {{ server.user }} (HTTP, port {{ server.port }})
+After=network-online.target
+Wants=network-online.target
+{# Bound the crash-loop: on a box that has already had memory incidents, an unbounded
+   Restart=on-failure retry storm is its own problem. Give up after 6 restarts in 60s
+   rather than hammering the box forever — matches hindsight.service.j2. A unit parked
+   in `failed` by this limit is what the health component in box_cli watches for. #}
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Service]
+Type=simple
+User={{ server.user }}
+Environment=HOME=/home/{{ server.user }}
+{# The cap that upstream advises putting on every spawned MCP child. There is one child
+   per developer now, so it goes here and covers every session that developer runs. #}
+Environment=NODE_OPTIONS=--max-old-space-size=512
+{# Node is installed per-user through mise, not on the system PATH, so a bare
+   `env npx` cannot find it here. The login shell sources mise's profile.d activation
+   the same way agent-rc.service.j2 and hindsight.service.j2 already do — do not
+   "simplify" this back to a bare ExecStart. #}
+{# Two branches, not one: with failover on there is already a shared CDP endpoint to
+   attach to (the client's browser or the box-local fallback); with failover off there
+   is none, so the server has to launch and own its own headless Chrome instead — the
+   same thing the per-session entry used to do before this server was shared. #}
+{# playwright-mcp enforces its own Host-header check and only accepts requests whose
+   Host is exactly "localhost:<port>" — it says so in its own startup log
+   ("url": "http://localhost:<port>/mcp"). The bind host and the URL every session is
+   wired with (see main.yml's wiring task) therefore both have to say "localhost", not
+   an IP literal: a 127.0.0.1 bind (or URL) passes the network connection but fails
+   this application-level check, and a mismatched pair fails silently until a real
+   client request is made. #}
+{% if devbox_browser.failover.enabled %}
+ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ server.port }} --host localhost --cdp-endpoint http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}'
+{% else %}
+ExecStart=/bin/bash -lc 'npx -y @playwright/mcp@latest --port {{ server.port }} --host localhost --browser chrome --headless --no-sandbox'
+{% endif %}
+Restart=on-failure
+RestartSec=10
+{# A long-lived server is not an agent session: if it overruns it should die alone and
+   be restarted, never take anything with it. #}
+MemoryMax=1G
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

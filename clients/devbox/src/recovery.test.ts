@@ -89,6 +89,7 @@ test("the registry covers stable and profile-scoped component IDs", () => {
     "desktop.xrdp-sesman",
     "browser.proxy",
     "browser.fallback",
+    "browser.mcp.dev-a",
     "memory.dev-a.primary",
     "remote-control.agent-rc-claude-dev-a-web.service",
     "client.rdp-tunnel.dev-a",

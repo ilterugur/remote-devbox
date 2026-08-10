@@ -1,0 +1,326 @@
+---
+- name: Verify browser MCP wiring retires chrome-devtools and preserves foreign entries
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Reconcile a fixture config in an isolated directory
+      block:
+        - name: Create an isolated working directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-browser-mcp-policy-
+          register: work_dir
+
+        - name: Seed a config carrying both browser entries and a foreign one
+          ansible.builtin.copy:
+            dest: "{{ work_dir.path }}/claude.json"
+            mode: "0600"
+            content: |
+              {
+                "mcpServers": {
+                  "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]},
+                  "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+                  "some-other-server": {"command": "uvx", "args": ["some-other-server"]}
+                },
+                "unrelatedTopLevelKey": {"keep": true}
+              }
+
+        - name: Run the wiring script in attached mode
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude.json"
+              - --cdp-endpoint
+              - http://127.0.0.1:9222
+          changed_when: false
+
+        - name: Read the reconciled config
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude.json"
+          register: reconciled
+
+        - name: Assert the retirement and the preservation
+          vars:
+            cfg: "{{ reconciled.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - "'chrome-devtools' not in cfg.mcpServers"
+              - "'playwright' in cfg.mcpServers"
+              - "'--cdp-endpoint' in cfg.mcpServers.playwright.args"
+              - "'http://127.0.0.1:9222' in cfg.mcpServers.playwright.args"
+              - "'some-other-server' in cfg.mcpServers"
+              - cfg.mcpServers['some-other-server'].command == 'uvx'
+              - cfg.unrelatedTopLevelKey.keep
+
+        - name: Run the wiring script in HTTP server mode
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude.json"
+              - --playwright-url
+              - http://localhost:9522/mcp
+          changed_when: false
+
+        - name: Read the config again
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude.json"
+          register: shared
+
+        # The URL here and the unit's --host below must always say "localhost": playwright-mcp
+        # rejects any request whose Host header isn't exactly "localhost:<port>", so an IP
+        # literal on either side breaks every session's browser tool calls at the application
+        # layer even though the network connection succeeds.
+        - name: Assert the developer's own server replaces the spawned one, wired at localhost
+          vars:
+            cfg: "{{ shared.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - cfg.mcpServers.playwright.type == 'http'
+              - cfg.mcpServers.playwright.url == 'http://localhost:9522/mcp'
+              - "'command' not in cfg.mcpServers.playwright"
+              - "'chrome-devtools' not in cfg.mcpServers"
+              - "'some-other-server' in cfg.mcpServers"
+
+        - name: Seed a second config for the self-launch (no failover) mode
+          ansible.builtin.copy:
+            dest: "{{ work_dir.path }}/claude-self-launch.json"
+            mode: "0600"
+            content: |
+              {
+                "mcpServers": {
+                  "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]},
+                  "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+                  "some-other-server": {"command": "uvx", "args": ["some-other-server"]}
+                },
+                "unrelatedTopLevelKey": {"keep": true}
+              }
+
+        - name: Run the wiring script with neither --cdp-endpoint nor --playwright-url
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude-self-launch.json"
+          changed_when: false
+
+        - name: Read the self-launch reconciled config
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude-self-launch.json"
+          register: reconciled_self_launch
+
+        - name: Assert the self-launch entry and the retirement
+          vars:
+            cfg_self_launch: "{{ reconciled_self_launch.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - "'chrome-devtools' not in cfg_self_launch.mcpServers"
+              - "'playwright' in cfg_self_launch.mcpServers"
+              - "'--browser' in cfg_self_launch.mcpServers.playwright.args"
+              - "'chrome' in cfg_self_launch.mcpServers.playwright.args"
+              - "'--headless' in cfg_self_launch.mcpServers.playwright.args"
+              - "'--no-sandbox' in cfg_self_launch.mcpServers.playwright.args"
+
+        # Two developers, because one server per browser-enabled developer is the whole
+        # point: each unit has to run as its own account on its own port, and each
+        # developer has to be wired to the server that runs as them. A single-developer
+        # fixture cannot tell a per-developer value from a box-wide one.
+        - name: Render a unit per developer (failover on)
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/browser/templates/devbox-playwright-mcp.service.j2"
+            dest: "{{ work_dir.path }}/unit-failover-on-{{ server.user }}.service"
+            mode: "0600"
+          loop: "{{ devbox_browser.servers }}"
+          loop_control:
+            loop_var: server
+            label: "{{ server.user }}"
+          vars:
+            devbox_browser:
+              mcp_port: 9522
+              servers:
+                - { user: dev-a, port: 9522 }
+                - { user: dev-b, port: 9523 }
+              failover: { enabled: true, chrome_user: dev-a, cdp_port: 9222 }
+
+        - name: Read the rendered units (failover on)
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/unit-failover-on-{{ item }}.service"
+          loop: [dev-a, dev-b]
+          register: units_failover_on
+
+        - name: Assert each failover-on unit runs as its own developer on its own port
+          vars:
+            unit_a: "{{ units_failover_on.results[0].content | b64decode }}"
+            unit_b: "{{ units_failover_on.results[1].content | b64decode }}"
+          ansible.builtin.assert:
+            that:
+              - "'User=dev-a' in unit_a"
+              - "'Environment=HOME=/home/dev-a' in unit_a"
+              - "'--port 9522' in unit_a"
+              - "'--port 9523' not in unit_a"
+              - "'User=dev-b' in unit_b"
+              - "'Environment=HOME=/home/dev-b' in unit_b"
+              - "'--port 9523' in unit_b"
+              - "'--port 9522' not in unit_b"
+              # chrome_user names the fallback Chrome's account only — it must never be
+              # what a server runs as, or four developers out of five get someone else's
+              # home. dev-a is chrome_user here, so dev-b's unit proves the point.
+              - "'User=dev-a' not in unit_b"
+              - "'--host localhost' in unit_a"
+              - "'--cdp-endpoint http://127.0.0.1:9222' in unit_a"
+              - "'--cdp-endpoint http://127.0.0.1:9222' in unit_b"
+              - "'--browser' not in unit_a"
+              - "'NODE_OPTIONS=--max-old-space-size=512' in unit_a"
+              - "'OOMPolicy=continue' in unit_a"
+              - "'/bin/bash -lc' in unit_a"
+
+        # chrome_user is null here on purpose: with failover off the generator emits
+        # exactly that (validate.ts only requires the name when failover is on), so it
+        # is the shape the unit has to render from. A fixture that hand-fed a name
+        # tested a config that cannot be produced.
+        - name: Render a unit per developer (failover off, no chrome_user)
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/browser/templates/devbox-playwright-mcp.service.j2"
+            dest: "{{ work_dir.path }}/unit-failover-off-{{ server.user }}.service"
+            mode: "0600"
+          loop: "{{ devbox_browser.servers }}"
+          loop_control:
+            loop_var: server
+            label: "{{ server.user }}"
+          vars:
+            devbox_browser:
+              mcp_port: 9522
+              servers:
+                - { user: dev-a, port: 9522 }
+                - { user: dev-b, port: 9523 }
+              failover: { enabled: false, chrome_user: null, cdp_port: 9222 }
+
+        - name: Read the rendered units (failover off)
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/unit-failover-off-{{ item }}.service"
+          loop: [dev-a, dev-b]
+          register: units_failover_off
+
+        - name: Assert the failover-off units launch their own headless Chrome as themselves
+          vars:
+            unit_a: "{{ units_failover_off.results[0].content | b64decode }}"
+            unit_b: "{{ units_failover_off.results[1].content | b64decode }}"
+          ansible.builtin.assert:
+            that:
+              # The defect this fixture exists for: an absent chrome_user must not reach
+              # User=, or systemd is handed "User=None" and refuses to start the unit —
+              # which fails the whole play, not just the browser role.
+              - "'User=None' not in unit_a"
+              - "'User=None' not in unit_b"
+              - "'User=dev-a' in unit_a"
+              - "'User=dev-b' in unit_b"
+              - "'Environment=HOME=/home/dev-b' in unit_b"
+              - "'--port 9522' in unit_a"
+              - "'--port 9523' in unit_b"
+              - "'--host localhost' in unit_a"
+              - "'--cdp-endpoint' not in unit_a"
+              - "'--browser' in unit_a"
+              - "'chrome' in unit_a"
+              - "'--headless' in unit_a"
+              - "'--no-sandbox' in unit_a"
+              - "'NODE_OPTIONS=--max-old-space-size=512' in unit_a"
+              - "'OOMPolicy=continue' in unit_a"
+              - "'/bin/bash -lc' in unit_a"
+
+        # The wiring half of the same claim: the URL a developer's agent config gets has
+        # to be the port of the unit that runs as them, not a box-wide one.
+        - name: Seed a config per developer
+          ansible.builtin.copy:
+            dest: "{{ work_dir.path }}/claude-{{ item }}.json"
+            mode: "0600"
+            content: |
+              {"mcpServers": {"some-other-server": {"command": "uvx", "args": ["some-other-server"]}}}
+          loop: [dev-a, dev-b]
+
+        - name: Wire each developer to their own server
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude-{{ server.user }}.json"
+              - --playwright-url
+              - "http://localhost:{{ server.port }}/mcp"
+          loop:
+            - { user: dev-a, port: 9522 }
+            - { user: dev-b, port: 9523 }
+          loop_control:
+            loop_var: server
+            label: "{{ server.user }}"
+          changed_when: false
+
+        - name: Read both wired configs
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude-{{ item }}.json"
+          loop: [dev-a, dev-b]
+          register: wired
+
+        - name: Assert each developer points at their own unit's port
+          vars:
+            cfg_a: "{{ wired.results[0].content | b64decode | from_json }}"
+            cfg_b: "{{ wired.results[1].content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - cfg_a.mcpServers.playwright.url == 'http://localhost:9522/mcp'
+              - cfg_b.mcpServers.playwright.url == 'http://localhost:9523/mcp'
+              - "'some-other-server' in cfg_a.mcpServers"
+              - "'some-other-server' in cfg_b.mcpServers"
+
+        # Anything that parses but is not an object is refused, not replaced: it is
+        # someone's file, and `null` reaching setdefault used to be an AttributeError
+        # traceback rather than a message naming the path.
+        - name: Seed a config holding valid JSON that is not an object
+          ansible.builtin.copy:
+            dest: "{{ work_dir.path }}/claude-not-an-object.json"
+            mode: "0600"
+            content: "null\n"
+
+        - name: Run the wiring script against it
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude-not-an-object.json"
+              - --playwright-url
+              - http://localhost:9522/mcp
+          register: not_an_object
+          failed_when: false
+          changed_when: false
+
+        - name: Read the file back
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude-not-an-object.json"
+          register: untouched
+
+        - name: Assert it was refused by name and left alone
+          ansible.builtin.assert:
+            that:
+              - not_an_object.rc != 0
+              - "'is not a JSON object' in not_an_object.stderr"
+              - "'claude-not-an-object.json' in not_an_object.stderr"
+              - (untouched.content | b64decode).strip() == 'null'
+
+        - name: List the working directory
+          ansible.builtin.find:
+            paths: "{{ work_dir.path }}"
+            patterns: "tmp*"
+            hidden: true
+          register: strays
+
+        - name: Assert no temp file was left behind
+          ansible.builtin.assert:
+            that:
+              - strays.files | length == 0
+      always:
+        - name: Remove the isolated working directory
+          ansible.builtin.file:
+            path: "{{ work_dir.path }}"
+            state: absent
+          when: work_dir.path is defined

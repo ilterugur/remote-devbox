@@ -1,10 +1,11 @@
 ---
-# Server-side, headless browser use for the agent: install Google Chrome once, and wire
-# two MCP servers into the agent config of every developer that asked for them
-# (developers[].browser) — Playwright (drive the browser: navigate/click/snapshot,
-# console + network) and Chrome DevTools (deeper debugging: performance traces / Web
-# Vitals, throttling). Both run the system Chrome headless. This is NOT "Claude in
-# Chrome" (that extension is client-side, on your client).
+# Server-side, headless browser use for the agent: install Google Chrome once, run one
+# Playwright MCP server (navigate/click/snapshot, console + network) per developer that
+# asked for it (developers[].browser), and wire each of them into their own. Runs against
+# the system Chrome headless. This is NOT "Claude in Chrome" (that extension is
+# client-side, on your client).
+#
+# chrome-devtools-mcp is retired — see wire-browser-mcp.py for why.
 
 - name: Install supporting fonts for headless Chrome rendering
   ansible.builtin.apt:
@@ -42,58 +43,91 @@
         path: /tmp/google-chrome-stable_current_amd64.deb
         state: absent
 
-- name: Wire browser MCP servers into each profile — launch own Chrome (user scope ~/.claude.json)
-  # Idempotent: sets only the "playwright" + "chrome-devtools" mcpServers entries,
-  # preserving any others. Both launch via npx at runtime; node/npx
-  # resolve through mise shims for the Remote Control service and interactive sessions.
-  #   playwright       — drive the headless system Chrome (navigate/click/snapshot,
-  #                      console + network inspection). The default for automation.
-  #   chrome-devtools  — deeper CDP debugging: performance traces / Web Vitals,
-  #                      network bodies+timing, CPU/network throttling.
-  when: not devbox_browser.failover.enabled
-  ansible.builtin.command:
-    cmd: >-
-      python3 -c 'import json,os;
-      p=os.path.expanduser("~/.claude.json");
-      d=json.load(open(p)) if os.path.exists(p) else {};
-      m=d.setdefault("mcpServers",{});
-      m["playwright"]={"command":"npx","args":["-y","@playwright/mcp@latest","--browser","chrome","--headless","--no-sandbox"]};
-      m["chrome-devtools"]={"command":"npx","args":["-y","chrome-devtools-mcp@latest","--headless","--isolated","--channel","stable","--chrome-arg=--no-sandbox","--chrome-arg=--disable-setuid-sandbox","--no-usage-statistics"]};
-      json.dump(d,open(p,"w"),indent=2)'
-  become: true
-  become_user: "{{ item.user }}"
-  environment:
-    HOME: "/home/{{ item.user }}"
-  loop: "{{ devbox_developers | selectattr('browser') | list }}"
-  loop_control:
-    label: "{{ item.user }}"
-  changed_when: false
-
-- name: Wire browser MCP servers into each profile — attach to CDP failover endpoint (user scope ~/.claude.json)
-  # Idempotent: sets only the "playwright" + "chrome-devtools" mcpServers entries,
-  # preserving any others. Both attach to the shared CDP endpoint at the failover cdp_port
-  # instead of launching their own headless Chrome instance.
-  #   playwright       — attach via --cdp-endpoint to a running Chrome/Chromium remote.
-  #   chrome-devtools  — attach via --browserUrl to the same CDP endpoint.
-  when: devbox_browser.failover.enabled
-  ansible.builtin.command:
-    cmd: >-
-      python3 -c 'import json,os;
-      p=os.path.expanduser("~/.claude.json");
-      d=json.load(open(p)) if os.path.exists(p) else {};
-      m=d.setdefault("mcpServers",{});
-      m["playwright"]={"command":"npx","args":["-y","@playwright/mcp@latest","--cdp-endpoint","http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}"]};
-      m["chrome-devtools"]={"command":"npx","args":["-y","chrome-devtools-mcp@latest","--browserUrl","http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}","--no-usage-statistics"]};
-      json.dump(d,open(p,"w"),indent=2)'
-  become: true
-  become_user: "{{ item.user }}"
-  environment:
-    HOME: "/home/{{ item.user }}"
-  loop: "{{ devbox_developers | selectattr('browser') | list }}"
-  loop_control:
-    label: "{{ item.user }}"
-  changed_when: false
+- name: Install the browser MCP wiring script
+  ansible.builtin.copy:
+    src: wire-browser-mcp.py
+    dest: /usr/local/bin/wire-browser-mcp
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Set up the CDP failover endpoint (HAProxy + fallback Chrome)
   ansible.builtin.include_tasks: failover.yml
   when: devbox_browser.failover.enabled
+
+# Everything below runs AFTER the failover include on purpose: with failover on, each
+# MCP server is started with --cdp-endpoint pointing at the endpoint that include puts
+# there. On a fresh box HAProxy is not installed until it runs, so a server started
+# first would attach to nothing.
+
+# A box that ran an earlier revision of this role has one box-wide unit holding the
+# base port. Left in place it would keep running and the first developer's server
+# would fail to bind.
+- name: Retire the box-wide playwright MCP service if present
+  ansible.builtin.systemd_service:
+    name: devbox-playwright-mcp.service
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Delete the box-wide unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/devbox-playwright-mcp.service
+    state: absent
+  notify: Reload systemd
+
+# One unit per browser-enabled developer, each running as that developer on the port
+# the generator assigned them (devbox_browser.servers) — see browser-ports.ts for why
+# the account and the port are decided there and not here.
+- name: Install a playwright MCP service per browser-enabled developer
+  ansible.builtin.template:
+    src: devbox-playwright-mcp.service.j2
+    dest: "/etc/systemd/system/devbox-playwright-mcp-{{ server.user }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_browser.servers }}"
+  loop_control:
+    loop_var: server
+    label: "{{ server.user }}"
+  register: mcp_units
+  when: devbox_browser.enabled
+
+# A changed unit definition (port, failover mode, ...) has to actually reach the running
+# process, not just sit on disk until someone restarts it by hand — so a unit whose file
+# changed is restarted, and only that one. daemon_reload rides in the same task rather
+# than in a separately notified handler: handler order is not guaranteed, and a restart
+# that runs before the reload silently keeps the old command line running.
+- name: Enable and start each developer's playwright MCP service
+  ansible.builtin.systemd_service:
+    name: "devbox-playwright-mcp-{{ unit.server.user }}.service"
+    enabled: true
+    state: "{{ 'restarted' if unit.changed else 'started' }}"
+    daemon_reload: true
+  loop: "{{ mcp_units.results }}"
+  loop_control:
+    loop_var: unit
+    label: "{{ unit.server.user }}"
+  when: devbox_browser.enabled
+
+# Reconciles only the browser entries in each developer's agent config; every other
+# mcpServers entry is preserved. Every session that developer runs attaches to their own
+# HTTP server instead of spawning one per session — their own, not a shared one, because
+# the server reads and writes files as the account it runs as. The URL says "localhost",
+# not an IP literal, because playwright-mcp itself only accepts requests whose Host
+# header is "localhost:<port>" (see devbox-playwright-mcp.service.j2) — the unit's --host
+# and this URL must agree.
+- name: Wire each developer into their own browser MCP server
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ server.user ~ '/.claude.json',
+          '--playwright-url', 'http://localhost:' ~ server.port ~ '/mcp'] }}
+  become: true
+  become_user: "{{ server.user }}"
+  environment:
+    HOME: "/home/{{ server.user }}"
+  loop: "{{ devbox_browser.servers }}"
+  loop_control:
+    loop_var: server
+    label: "{{ server.user }}"
+  changed_when: false

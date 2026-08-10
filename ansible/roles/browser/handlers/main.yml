@@ -6,3 +6,9 @@
   ansible.builtin.systemd_service:
     name: haproxy
     state: reloaded
+
+# There is no MCP restart handler: the units are per developer, and a handler cannot
+# see which one changed, so it would have to restart everybody's server whenever any
+# one unit file moved. main.yml restarts exactly the changed ones instead, with the
+# daemon-reload in the same task (handler order is not guaranteed, and a restart that
+# runs before the reload silently keeps the old command line running).

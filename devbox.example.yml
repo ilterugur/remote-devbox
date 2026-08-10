@@ -89,11 +89,11 @@ shared_services:
   engine: system-docker
 
 # ── Server-side browser ───────────────────────────────────────────────────────
-# Headless Chrome plus two MCP servers (Playwright to drive it, Chrome DevTools for
-# traces and throttling) in the agent config of every developer that opts in below.
+# Headless Chrome plus the Playwright MCP server that drives it, in the agent config of
+# every developer that opts in below.
 # This is NOT the client-side "Claude in Chrome" extension.
 #
-# failover: instead of each MCP launching its own headless Chrome, both attach to one
+# failover: instead of each MCP launching its own headless Chrome, they attach to one
 # CDP endpoint — the client's real browser through a reverse tunnel while it is
 # online, and a box-local Chrome when it is not. chrome_user names the account that
 # box-local Chrome runs as; it is required, because "whichever developer came first"
@@ -109,6 +109,13 @@ shared_services:
 # browser supervisor.
 # browser:
 #   enabled: true
+#   # Base of the MCP port range: one server per developer that opted in, from here
+#   # upward in the order they are declared below. Claude Code starts a stdio MCP server
+#   # per session, so N sessions used to mean N copies of this process; over HTTP one
+#   # process serves every session that developer runs. Per developer and not one for
+#   # the box, because the server does the session's file I/O — an upload reads out of
+#   # that developer's 0700 home, a screenshot is written back into it.
+#   mcp_port: 9522
 #   failover:
 #     enabled: false
 #     chrome_user: dev-a

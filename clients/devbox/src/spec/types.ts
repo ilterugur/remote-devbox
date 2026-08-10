@@ -309,6 +309,10 @@ export interface ProjectRemoteControlSpec {
 /** Chrome and the browser MCP servers. Chrome is installed once for the whole box. */
 export interface BrowserSpec {
   enabled?: boolean;
+  /** Base of the playwright MCP port range: one server per browser-enabled developer,
+   *  from here upward in declaration order. One server serves every session that
+   *  developer runs; the alternative is one spawned process per session. */
+  mcp_port?: number;
   failover?: BrowserFailoverSpec;
 }
 
@@ -319,7 +323,10 @@ export interface BrowserSpec {
  */
 export interface BrowserFailoverSpec {
   enabled?: boolean;
-  /** The developer whose account runs the box-local fallback Chrome. */
+  /**
+   * The developer whose account runs the box-local fallback Chrome, and nothing else.
+   * Each MCP server runs as its own developer whatever this says.
+   */
   chrome_user?: string;
   cdp_port?: number;
   fallback_chrome_port?: number;
