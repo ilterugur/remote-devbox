@@ -523,6 +523,22 @@ test("memory_reserve is an absolute size and defaults independently of weight mo
   expect(paths({ ...minimal(), host: { memory_reserve: "" } })).toContain("error:host.memory_reserve");
 });
 
+test("host.oomd pressure limit must be a percentage", () => {
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60%" } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60G" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+});
+
+test("host.oomd pressure duration must be a positive integer", () => {
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_duration_sec: 0 } } })).toContain(
+    "error:host.oomd.memory_pressure_duration_sec",
+  );
+});
+
 test("remote_control.resources accepts nice and oom_score_adjust ranges", () => {
   const bad = { ...minimal(), remote_control: { resources: { nice: 25, oom_score_adjust: 2000 } } };
   expect(paths(bad)).toContain("error:remote_control.resources.nice");

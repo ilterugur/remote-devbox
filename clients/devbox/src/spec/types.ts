@@ -30,10 +30,21 @@ export interface OperatorSpec {
   private_key_path?: string;
 }
 
+/** systemd-oomd thresholds, applied per developer slice. The limit is a percentage
+ *  because that is what oomd accepts; the duration is the window a slice must hold above
+ *  that limit before anything is killed. Swap-based killing needs no key here: it fires
+ *  at oomd's daemon-wide default, which is already the threshold we want. */
+export interface OomdSpec {
+  enabled?: boolean;
+  memory_pressure_limit?: string;
+  memory_pressure_duration_sec?: number;
+}
+
 /** Host tuning that is not part of the developer model. */
 export interface HostSpec {
   swap_size?: string;
   memory_reserve?: string;
+  oomd?: OomdSpec;
   zram?: { enabled: boolean; percent?: number; algo?: string; priority?: number };
   locales?: string[];
   mosh?: boolean;

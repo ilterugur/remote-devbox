@@ -146,6 +146,24 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   ) {
     issues.push(err("host.memory_reserve", "must be an absolute systemd size like '4G'"));
   }
+  const oomd = h.oomd;
+  if (oomd !== undefined) {
+    if (!isRecord(oomd)) {
+      issues.push(err("host.oomd", "must be a mapping"));
+    } else {
+      if (oomd.enabled !== undefined && typeof oomd.enabled !== "boolean") {
+        issues.push(err("host.oomd.enabled", "must be true or false"));
+      }
+      const limit = oomd.memory_pressure_limit;
+      if (limit !== undefined && !(typeof limit === "string" && /^\d{1,3}%$/.test(String(limit)))) {
+        issues.push(err("host.oomd.memory_pressure_limit", "must be a percentage like '60%'"));
+      }
+      const d = oomd.memory_pressure_duration_sec;
+      if (d !== undefined && !(typeof d === "number" && Number.isInteger(d) && d > 0)) {
+        issues.push(err("host.oomd.memory_pressure_duration_sec", "must be a positive integer"));
+      }
+    }
+  }
   for (const k of ["mosh", "eternal_terminal", "harden_ssh", "hide_pids", "github_cli"] as const) {
     if (h[k] !== undefined && typeof h[k] !== "boolean") issues.push(err(`host.${k}`, "must be true or false"));
   }

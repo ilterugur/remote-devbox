@@ -161,6 +161,18 @@ test("host memory reserve is emitted in canonical systemd form", () => {
   expect(out.devbox_host).toMatchObject({ memory_reserve: "4G" });
 });
 
+test("host.oomd is always emitted, fully defaulted", () => {
+  const out = normalize({ ...resolved, host: {} });
+  expect(out.devbox_host).toMatchObject({
+    oomd: { enabled: true, memory_pressure_limit: "60%", memory_pressure_duration_sec: 20 },
+  });
+});
+
+test("host.oomd values override the defaults", () => {
+  const out = normalize({ ...resolved, host: { oomd: { memory_pressure_limit: "75%" } } });
+  expect(out.devbox_host).toMatchObject({ oomd: { memory_pressure_limit: "75%", enabled: true } });
+});
+
 test("weighted memory_high becomes an Ansible weight and box-wide total", () => {
   const weighted: ResolvedSpec = {
     ...resolved,
