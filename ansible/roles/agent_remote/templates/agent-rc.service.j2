@@ -88,5 +88,11 @@ ExecStartPost=-+/usr/bin/systemctl start --no-block agent-rc-resume-{{ ID }}.ser
 {% endif %}
 {%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
 {% endif %}
+{%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
+{% endif %}
+{# Already bounded by MemoryMax above, and OOMPolicy=continue makes that bound kill the
+   build rather than the session. oomd must not pick these units when a neighbour in the
+   same slice is the one overrunning. #}
+ManagedOOMPreference=avoid
 [Install]
 WantedBy=multi-user.target

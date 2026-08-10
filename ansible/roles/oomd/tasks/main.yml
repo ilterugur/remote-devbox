@@ -1,0 +1,137 @@
+---
+# systemd-oomd is the net for work that runs outside a Remote Control unit — login
+# shells, the editor server, the desktop session. Those have no unit ceiling of their
+# own, so without this a runaway there still parks the host in swap thrash.
+#
+# Remote Control units carry ManagedOOMPreference=avoid: they are already bounded by
+# their own MemoryMax, and that bound kills the build rather than the session. A
+# neighbour's overrun must not take out a live agent session.
+
+- name: Install systemd-oomd
+  ansible.builtin.apt:
+    name: systemd-oomd
+    state: present
+    update_cache: true
+  when: devbox_host.oomd.enabled
+
+- name: Look up developer uids
+  ansible.builtin.getent:
+    database: passwd
+
+# resource_limits also creates this directory, but this role must stand alone under
+# its own `oomd` tag (see ansible/playbook.yml) — a `--tags oomd` run that never
+# touches resource_limits would otherwise template into a directory that does not
+# exist yet. ansible.builtin.template does not create parent directories itself.
+- name: Create the slice drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+
+- name: Write each developer's managed-OOM drop-in
+  ansible.builtin.template:
+    src: slice-oomd.conf.j2
+    dest: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+  notify: Reload systemd
+
+- name: Remove each developer's managed-OOM drop-in when oomd is turned off
+  ansible.builtin.file:
+    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    state: absent
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: not devbox_host.oomd.enabled
+  notify: Reload systemd
+
+# daemon-reload alone only affects slices started afterwards (and, on a failed later
+# role, might never run at all — handlers fire at the end of the whole play). systemd-oomd
+# is already enabled and started by its own postinst once the apt task above runs, so
+# flushing here does not happen before the daemon starts. What it guarantees is that the
+# drop-in is loaded before any cgroup is handed to the daemon with a kill policy: the
+# set-property reconcile below is what actually arms monitoring, and it runs after this.
+- name: Apply the systemd change now
+  ansible.builtin.meta: flush_handlers
+
+# set-property pushes the same values into an already-running slice, so a developer
+# already logged in gets the policy without a reboot or a forced logout. A
+# set-property drop-in lives on under /etc/systemd/system.control and outranks the
+# file drop-in above, so all four properties are named on every run — a value left
+# unset here would otherwise outlive the config that asked for it.
+- name: Reconcile the managed-OOM properties on the running slice
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - set-property
+      - "user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice"
+      - "ManagedOOMSwap=kill"
+      - "ManagedOOMMemoryPressure=kill"
+      - "ManagedOOMMemoryPressureLimit={{ devbox_host.oomd.memory_pressure_limit }}"
+      - "ManagedOOMMemoryPressureDurationSec={{ devbox_host.oomd.memory_pressure_duration_sec }}s"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+  changed_when: false
+  failed_when: false # the slice may simply not be running yet — the drop-in still applies
+
+# The disable path must undo the enabled path's set-property, not just stop the
+# drop-in from being reapplied: without this, a running slice keeps reporting a kill
+# policy from /etc/systemd/system.control forever, and anything that later starts
+# systemd-oomd (manual triage, a dependency, an operator unaware Ansible turned it
+# off) silently re-arms a policy that was explicitly turned off. systemd's own
+# defaults for ManagedOOMSwap and ManagedOOMMemoryPressure are "auto" — restating them
+# here is what actually clears the override. The limit and duration are named too, so
+# no value from the enabled path is left stranded in /etc/systemd/system.control —
+# harmless while pressure monitoring is auto, but the point is that nothing outlives
+# the config that asked for it, on this branch same as the enable branch above.
+- name: Reconcile the running slice back to the systemd defaults
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - set-property
+      - "user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice"
+      - "ManagedOOMSwap=auto"
+      - "ManagedOOMMemoryPressure=auto"
+      - "ManagedOOMMemoryPressureLimit=0%"
+      - "ManagedOOMMemoryPressureDurationSec=0s"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: not devbox_host.oomd.enabled
+  changed_when: false
+  failed_when: false # the slice may simply not be running yet — the drop-in still applies
+
+- name: Enable and start systemd-oomd
+  ansible.builtin.systemd_service:
+    name: systemd-oomd
+    enabled: true
+    state: started
+  when: devbox_host.oomd.enabled
+
+- name: Stop and disable systemd-oomd when it is turned off
+  ansible.builtin.systemd_service:
+    name: systemd-oomd
+    enabled: false
+    state: stopped
+  when: not devbox_host.oomd.enabled
+  # oomd may never have been installed if it was always off, and stopping/disabling a
+  # unit that does not exist is the only failure this should swallow. The reconcile
+  # above already cleared the set-property override regardless of whether this task
+  # succeeds, so a real systemd/D-Bus failure here leaves the slices correctly
+  # configured either way; we accept mirroring resource_limits' precedent rather than
+  # adding a stat-based existence check.
+  failed_when: false

@@ -1,0 +1,106 @@
+---
+- name: Verify remote control unit resource rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_facts:
+      getent_passwd:
+        dev-a: ["x", "1004"]
+    devbox_remote_control:
+      autorestart: { enabled: true, restart_sec: 10, burst: 10, interval: 600 }
+      resume: { on_boot: false }
+    inherited_row:
+      user: dev-a
+      agent: claude
+      project: plain
+      name: Plain
+      spawn: worktree
+      capacity: 32
+      agent_profile: claude-main
+      project_dir: /home/dev-a/projects/plain
+      build_env: {}
+      resources:
+        memory_high: "8G"
+        memory_max: "12G"
+        memory_swap_max: "1G"
+        cpu_weight: 80
+        io_weight: 80
+        nice: 5
+        oom_score_adjust: 300
+        oom_policy: continue
+    override_row:
+      user: dev-a
+      agent: claude
+      project: heavy
+      name: Heavy
+      spawn: worktree
+      capacity: 32
+      agent_profile: claude-main
+      project_dir: /home/dev-a/projects/heavy
+      build_env: {}
+      resources:
+        memory_high: "28G"
+        memory_max: "34G"
+        memory_swap_max: "2G"
+        cpu_weight: 80
+        io_weight: 80
+        nice: 5
+        oom_score_adjust: 300
+        oom_policy: continue
+
+  tasks:
+    - name: Render and verify both unit files in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-rc-unit-limits-policy-
+          register: render_dir
+
+        - name: Render the inherited unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/agent-rc.service.j2"
+            dest: "{{ render_dir.path }}/plain.service"
+            mode: "0600"
+          vars:
+            row: "{{ inherited_row }}"
+
+        - name: Render the overriding unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/agent-rc.service.j2"
+            dest: "{{ render_dir.path }}/heavy.service"
+            mode: "0600"
+          vars:
+            row: "{{ override_row }}"
+
+        - name: Read the inherited unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/plain.service"
+          register: plain_unit
+
+        - name: Read the overriding unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/heavy.service"
+          register: heavy_unit
+
+        - name: Assert the ceilings and the oom policy reach the unit files
+          ansible.builtin.assert:
+            that:
+              - "'MemoryHigh=8G' in plain_unit.content | b64decode"
+              - "'MemoryMax=12G' in plain_unit.content | b64decode"
+              - "'MemorySwapMax=1G' in plain_unit.content | b64decode"
+              - "'OOMPolicy=continue' in plain_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in plain_unit.content | b64decode"
+              - "'MemoryHigh=28G' in heavy_unit.content | b64decode"
+              - "'MemoryMax=34G' in heavy_unit.content | b64decode"
+              - "'MemorySwapMax=2G' in heavy_unit.content | b64decode"
+              - "'OOMPolicy=continue' in heavy_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in heavy_unit.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

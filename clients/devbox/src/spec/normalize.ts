@@ -75,6 +75,11 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       github_cli: resolved.host?.github_cli ?? true,
       umask: resolved.host?.umask ?? "077",
       swappiness: resolved.host?.swappiness ?? null,
+      oomd: {
+        enabled: resolved.host?.oomd?.enabled ?? true,
+        memory_pressure_limit: resolved.host?.oomd?.memory_pressure_limit ?? "60%",
+        memory_pressure_duration_sec: resolved.host?.oomd?.memory_pressure_duration_sec ?? 20,
+      },
     },
     devbox_operator: {
       user: resolved.operator.user,

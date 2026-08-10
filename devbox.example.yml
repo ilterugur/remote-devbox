@@ -43,6 +43,13 @@ host:
   # build heaps then stay resident instead of being paged into zram, which lives in RAM
   # and so would double-count against memory rather than relieve it.
   # swappiness: 10
+  # Kills under sustained memory pressure so the box recovers on its own instead of
+  # parking in swap thrash. Covers work outside a Remote Control unit — login shells,
+  # the editor server, the desktop — where no unit ceiling reaches.
+  # oomd:
+  #   enabled: true
+  #   memory_pressure_limit: 60%      # per developer slice
+  #   memory_pressure_duration_sec: 20
 
 # Shared toolchain, installed once via mise and resolved on every developer PATH.
 runtimes:
@@ -114,18 +121,36 @@ shared_services:
 # gets one unless it says otherwise — `remote_control: false` on a project turns that
 # one off, and `enabled: false` here turns the whole box off.
 #
-# The units run inside each developer's own slice, so the ceiling under
-# developers[].resources already covers them alongside that person's shells and builds.
-# Set a memory knob below only to cap one project independently of that shared ceiling.
-# Leaving it unset is the point: a ceiling written for a box you have since outgrown
-# keeps throttling long after the RAM arrives.
+# Everything an agent session spawns — shells, builds, MCP servers — lands in that
+# session's unit cgroup, so this is where a runaway build is contained. Do not rely on
+# developers[].resources for it: a slice ceiling sized near the host's RAM engages only
+# once the whole box is already out of memory, which is far too late to help.
+#
+# Set these from measurement, not from a guess: read MemoryPeak off the running units
+# (`systemctl show <unit> -p MemoryPeak`) and leave headroom above the ordinary peak.
+# Every project inherits what is written here; a project that genuinely needs more
+# declares its own under its `remote_control.resources`.
+#
+# The gap between memory_high and memory_max is also a kill-policy decision, not just
+# a throttle band: a unit sitting between the two is under continuous reclaim, and that
+# pressure propagates to the parent slice. Remote Control units are marked
+# ManagedOOMPreference=avoid, so if that pressure lasts past host.oomd's
+# memory_pressure_duration_sec, systemd-oomd fires at the slice and picks a
+# non-Remote-Control victim instead — a login session scope, or the developer's whole
+# user@.service. Keep memory_high close to memory_max: a narrow band trips the unit's
+# own hard wall quickly and kills the build itself, while a wide one leaves the unit
+# reclaim-thrashing long enough for systemd-oomd to kill an innocent neighbour.
 # remote_control:
 #   spawn: worktree         # worktree | same-dir | session
 #   capacity: 4             # parallel sessions per server
 #   resources:
+#     memory_high: 8G       # throttle here — reclaim starts, nothing dies yet
+#     memory_max: 12G       # hard wall — the largest process in the unit is killed
+#     memory_swap_max: 1G
 #     cpu_weight: 80        # <100 yields to interactive shells under contention
 #     nice: 5
 #     oom_score_adjust: 300 # if the host ever runs out, kill builds before your shell
+#     oom_policy: continue  # a killed build must not take the session set down with it
 #   build_env: {}           # e.g. { NODE_OPTIONS: "--max-old-space-size=6144" }
 #   resume:
 #     max_concurrent: 2     # sessions warming at once after a reboot

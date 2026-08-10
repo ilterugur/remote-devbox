@@ -523,12 +523,55 @@ test("memory_reserve is an absolute size and defaults independently of weight mo
   expect(paths({ ...minimal(), host: { memory_reserve: "" } })).toContain("error:host.memory_reserve");
 });
 
+test("host.oomd pressure limit must be a percentage", () => {
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60%" } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60G" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+});
+
+test("host.oomd pressure limit is bounded to 1..99", () => {
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "0%" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "100%" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "999%" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "1%" } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60%" } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "99%" } } })).toEqual([]);
+});
+
+test("host.oomd pressure duration must be a positive integer", () => {
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_duration_sec: 0 } } })).toContain(
+    "error:host.oomd.memory_pressure_duration_sec",
+  );
+});
+
 test("remote_control.resources accepts nice and oom_score_adjust ranges", () => {
   const bad = { ...minimal(), remote_control: { resources: { nice: 25, oom_score_adjust: 2000 } } };
   expect(paths(bad)).toContain("error:remote_control.resources.nice");
   expect(paths(bad)).toContain("error:remote_control.resources.oom_score_adjust");
   const ok = { ...minimal(), remote_control: { resources: { nice: 5, oom_score_adjust: 300 } } };
   expect(paths(ok)).toEqual([]);
+});
+
+test("remote_control.resources rejects an unknown oom_policy", () => {
+  const bad = { ...minimal(), remote_control: { resources: { oom_policy: "restart" } } };
+  expect(paths(bad)).toContain("error:remote_control.resources.oom_policy");
+});
+
+test("remote_control.resources accepts the three systemd oom policies", () => {
+  for (const policy of ["continue", "stop", "kill"]) {
+    const spec = { ...minimal(), remote_control: { resources: { oom_policy: policy } } };
+    expect(paths(spec)).not.toContain("error:remote_control.resources.oom_policy");
+  }
 });
 
 test("remote_control.build_env must be a flat string map", () => {

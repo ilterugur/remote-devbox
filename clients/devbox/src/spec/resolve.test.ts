@@ -241,7 +241,14 @@ test("project resources and build_env merge over the box defaults", () => {
   ).remote_control!;
   expect(rc.name).toBe("P");
   expect(rc.capacity).toBe(32);
-  expect(rc.resources).toEqual({ cpu_weight: 80, io_weight: 80, nice: 10, oom_score_adjust: 300, memory_high: "12G" });
+  expect(rc.resources).toEqual({
+    cpu_weight: 80,
+    io_weight: 80,
+    nice: 10,
+    oom_score_adjust: 300,
+    oom_policy: "continue",
+    memory_high: "12G",
+  });
   expect(rc.build_env).toEqual({ NODE_OPTIONS: "--max-old-space-size=6144", CI: "1" });
 });
 
@@ -249,6 +256,28 @@ test("no memory ceiling is invented when nobody asked for one", () => {
   const rc = p0(rcSpec({})).remote_control!;
   expect(rc.resources.memory_high).toBeUndefined();
   expect(rc.resources.memory_max).toBeUndefined();
+});
+
+test("remote control units default to OOMPolicy continue", () => {
+  expect(p0(rcSpec({})).remote_control!.resources.oom_policy).toBe("continue");
+});
+
+test("a project may override the oom policy", () => {
+  const s = rcSpec({}, { remote_control: { resources: { oom_policy: "stop" } } });
+  expect(p0(s).remote_control!.resources.oom_policy).toBe("stop");
+});
+
+test("a box-wide memory ceiling reaches a project that declares nothing", () => {
+  const s = rcSpec({ resources: { memory_max: "7G" } });
+  expect(p0(s).remote_control!.resources.memory_max).toBe("7G");
+});
+
+test("a project ceiling wins over the box-wide one", () => {
+  const s = rcSpec(
+    { resources: { memory_max: "7G" } },
+    { remote_control: { resources: { memory_max: "9G" } } },
+  );
+  expect(p0(s).remote_control!.resources.memory_max).toBe("9G");
 });
 
 test("access defaults name every private path that exists, and none that don't", () => {

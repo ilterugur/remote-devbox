@@ -23,6 +23,10 @@ devbox_host:
   hide_pids: false
   github_cli: true
   umask: "077"
+  oomd:
+    enabled: false
+    memory_pressure_limit: 60%
+    memory_pressure_duration_sec: 20
 devbox_operator:
   user: devbox-admin
   ssh_authorized_keys:
