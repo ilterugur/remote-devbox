@@ -155,8 +155,10 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
         issues.push(err("host.oomd.enabled", "must be true or false"));
       }
       const limit = oomd.memory_pressure_limit;
-      if (limit !== undefined && !(typeof limit === "string" && /^\d{1,3}%$/.test(String(limit)))) {
-        issues.push(err("host.oomd.memory_pressure_limit", "must be a percentage like '60%'"));
+      const pct =
+        typeof limit === "string" && /^\d{1,3}%$/.test(limit) ? Number.parseInt(limit, 10) : NaN;
+      if (limit !== undefined && !(pct >= 1 && pct <= 99)) {
+        issues.push(err("host.oomd.memory_pressure_limit", "must be a percentage in 1%..99%"));
       }
       const d = oomd.memory_pressure_duration_sec;
       if (d !== undefined && !(typeof d === "number" && Number.isInteger(d) && d > 0)) {

@@ -253,9 +253,10 @@ export type RcSpawn = "worktree" | "same-dir" | "session";
 export type OomPolicy = "continue" | "stop" | "kill";
 
 /**
- * Resource knobs for one Remote Control unit. Extends the slice knobs with the three
- * systemd properties that only mean something on a service: build niceness, the OOM
- * preference, and an absolute CPU cap.
+ * Resource knobs for one Remote Control unit. Extends the slice knobs with the four
+ * systemd properties that only mean something on a service: build niceness, the
+ * kernel OOM bias (`oom_score_adjust`), an absolute CPU cap, and the OOM kill policy
+ * (`oom_policy`).
  */
 export interface RcResourceSpec extends ResourceSpec {
   nice?: number;

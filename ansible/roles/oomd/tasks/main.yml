@@ -18,6 +18,22 @@
   ansible.builtin.getent:
     database: passwd
 
+# resource_limits also creates this directory, but this role must stand alone under
+# its own `oomd` tag (see ansible/playbook.yml) — a `--tags oomd` run that never
+# touches resource_limits would otherwise template into a directory that does not
+# exist yet. ansible.builtin.template does not create parent directories itself.
+- name: Create the slice drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+
 - name: Write each developer's managed-OOM drop-in
   ansible.builtin.template:
     src: slice-oomd.conf.j2
@@ -42,9 +58,11 @@
   notify: Reload systemd
 
 # daemon-reload alone only affects slices started afterwards (and, on a failed later
-# role, might never run at all — handlers fire at the end of the whole play). Flushing
-# here, before oomd is enabled/started below and before the set-property reconcile,
-# means the drop-in is loaded before the daemon that reads it comes up.
+# role, might never run at all — handlers fire at the end of the whole play). systemd-oomd
+# is already enabled and started by its own postinst once the apt task above runs, so
+# flushing here does not happen before the daemon starts. What it guarantees is that the
+# drop-in is loaded before any cgroup is handed to the daemon with a kill policy: the
+# set-property reconcile below is what actually arms monitoring, and it runs after this.
 - name: Apply the systemd change now
   ansible.builtin.meta: flush_handlers
 
@@ -75,8 +93,11 @@
 # policy from /etc/systemd/system.control forever, and anything that later starts
 # systemd-oomd (manual triage, a dependency, an operator unaware Ansible turned it
 # off) silently re-arms a policy that was explicitly turned off. systemd's own
-# defaults for these two properties are "auto" — restating them here is what actually
-# clears the override.
+# defaults for ManagedOOMSwap and ManagedOOMMemoryPressure are "auto" — restating them
+# here is what actually clears the override. The limit and duration are named too, so
+# no value from the enabled path is left stranded in /etc/systemd/system.control —
+# harmless while pressure monitoring is auto, but the point is that nothing outlives
+# the config that asked for it, on this branch same as the enable branch above.
 - name: Reconcile the running slice back to the systemd defaults
   ansible.builtin.command:
     argv:
@@ -85,6 +106,8 @@
       - "user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice"
       - "ManagedOOMSwap=auto"
       - "ManagedOOMMemoryPressure=auto"
+      - "ManagedOOMMemoryPressureLimit=0%"
+      - "ManagedOOMMemoryPressureDurationSec=0s"
   loop: "{{ devbox_developers }}"
   loop_control:
     label: "{{ item.user }}"

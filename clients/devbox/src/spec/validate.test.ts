@@ -533,6 +533,21 @@ test("host.oomd pressure limit must be a percentage", () => {
   );
 });
 
+test("host.oomd pressure limit is bounded to 1..99", () => {
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "0%" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "100%" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "999%" } } })).toContain(
+    "error:host.oomd.memory_pressure_limit",
+  );
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "1%" } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "60%" } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { oomd: { memory_pressure_limit: "99%" } } })).toEqual([]);
+});
+
 test("host.oomd pressure duration must be a positive integer", () => {
   expect(paths({ ...minimal(), host: { oomd: { memory_pressure_duration_sec: 0 } } })).toContain(
     "error:host.oomd.memory_pressure_duration_sec",
