@@ -8,11 +8,8 @@
     devbox_host:
       oomd:
         enabled: true
-        memory_pressure_limit: "60%"
-        memory_pressure_duration_sec: 20
-    devbox_developers:
-      - user: dev-a
-        resources: {}
+        memory_pressure_limit: "35%"
+        memory_pressure_duration_sec: 45
 
   tasks:
     - name: Render and verify the slice drop-in in an isolated directory
@@ -39,8 +36,8 @@
             that:
               - "'ManagedOOMSwap=kill' in slice_dropin.content | b64decode"
               - "'ManagedOOMMemoryPressure=kill' in slice_dropin.content | b64decode"
-              - "'ManagedOOMMemoryPressureLimit=60%' in slice_dropin.content | b64decode"
-              - "'ManagedOOMMemoryPressureDurationSec=20s' in slice_dropin.content | b64decode"
+              - "'ManagedOOMMemoryPressureLimit=35%' in slice_dropin.content | b64decode"
+              - "'ManagedOOMMemoryPressureDurationSec=45s' in slice_dropin.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:
