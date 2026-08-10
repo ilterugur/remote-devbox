@@ -110,6 +110,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_memory_high_weight_total: memoryHighWeightTotal,
     devbox_browser: {
       enabled: resolved.browser?.enabled ?? true,
+      mcp_port: resolved.browser?.mcp_port ?? 9522,
       failover: {
         enabled: resolved.browser?.failover?.enabled ?? false,
         // Named, never inferred: this account's Chrome is the one the endpoint serves.

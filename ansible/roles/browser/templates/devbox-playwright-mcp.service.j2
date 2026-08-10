@@ -1,0 +1,25 @@
+{# Managed by Ansible (remote-devbox). One shared MCP server for every session.
+   Claude Code spawns a stdio MCP server per session, so N sessions produced N copies
+   of this process; over HTTP one process serves them all. #}
+[Unit]
+Description=Shared playwright MCP server (HTTP, port {{ devbox_browser.mcp_port }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ devbox_browser.failover.chrome_user }}
+Environment=HOME=/home/{{ devbox_browser.failover.chrome_user }}
+{# The cap that upstream advises putting on every spawned MCP child. There is only
+   one child now, so it goes here and covers every session at once. #}
+Environment=NODE_OPTIONS=--max-old-space-size=512
+ExecStart=/usr/bin/env npx -y @playwright/mcp@latest --port {{ devbox_browser.mcp_port }} --cdp-endpoint http://127.0.0.1:{{ devbox_browser.failover.cdp_port }}
+Restart=on-failure
+RestartSec=10
+{# A shared server is not an agent session: if it overruns it should die alone and be
+   restarted, never take anything with it. #}
+MemoryMax=1G
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

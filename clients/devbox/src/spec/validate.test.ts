@@ -607,6 +607,13 @@ test("browser ports must be valid ports", () => {
   expect(paths(spec)).toContain("error:browser.failover.cdp_port");
 });
 
+test("browser.mcp_port must be a valid port", () => {
+  expect(paths({ ...minimal(), browser: { mcp_port: 9522 } })).toEqual([]);
+  expect(paths({ ...minimal(), browser: { mcp_port: 0 } })).toContain("error:browser.mcp_port");
+  expect(paths({ ...minimal(), browser: { mcp_port: 70000 } })).toContain("error:browser.mcp_port");
+  expect(paths({ ...minimal(), browser: { mcp_port: "9522" } })).toContain("error:browser.mcp_port");
+});
+
 test("browser autobind must be a boolean", () => {
   const spec = { ...minimal(), browser: { failover: { enabled: true, chrome_user: "dev-a", autobind: "yes" } } };
   expect(paths(spec)).toContain("error:browser.failover.autobind");

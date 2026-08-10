@@ -55,6 +55,32 @@
               - cfg.mcpServers['some-other-server'].command == 'uvx'
               - cfg.unrelatedTopLevelKey.keep
 
+        - name: Run the wiring script in shared-server mode
+          ansible.builtin.command:
+            argv:
+              - "{{ playbook_dir }}/../roles/browser/files/wire-browser-mcp.py"
+              - --config
+              - "{{ work_dir.path }}/claude.json"
+              - --playwright-url
+              - http://127.0.0.1:9522/mcp
+          changed_when: false
+
+        - name: Read the config again
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/claude.json"
+          register: shared
+
+        - name: Assert the shared server replaces the spawned one
+          vars:
+            cfg: "{{ shared.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - cfg.mcpServers.playwright.type == 'http'
+              - cfg.mcpServers.playwright.url == 'http://127.0.0.1:9522/mcp'
+              - "'command' not in cfg.mcpServers.playwright"
+              - "'chrome-devtools' not in cfg.mcpServers"
+              - "'some-other-server' in cfg.mcpServers"
+
         - name: Seed a second config for the self-launch (no failover) mode
           ansible.builtin.copy:
             dest: "{{ work_dir.path }}/claude-self-launch.json"
@@ -93,6 +119,29 @@
               - "'chrome' in cfg_self_launch.mcpServers.playwright.args"
               - "'--headless' in cfg_self_launch.mcpServers.playwright.args"
               - "'--no-sandbox' in cfg_self_launch.mcpServers.playwright.args"
+
+        - name: Render the shared server unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/browser/templates/devbox-playwright-mcp.service.j2"
+            dest: "{{ work_dir.path }}/unit.service"
+            mode: "0600"
+          vars:
+            devbox_browser:
+              mcp_port: 9522
+              failover: { chrome_user: dev-a, cdp_port: 9222 }
+
+        - name: Read the rendered unit
+          ansible.builtin.slurp:
+            src: "{{ work_dir.path }}/unit.service"
+          register: unit
+
+        - name: Assert the unit carries the port and the heap cap
+          ansible.builtin.assert:
+            that:
+              - "'--port 9522' in unit.content | b64decode"
+              - "'--cdp-endpoint http://127.0.0.1:9222' in unit.content | b64decode"
+              - "'NODE_OPTIONS=--max-old-space-size=512' in unit.content | b64decode"
+              - "'OOMPolicy=continue' in unit.content | b64decode"
       always:
         - name: Remove the isolated working directory
           ansible.builtin.file:

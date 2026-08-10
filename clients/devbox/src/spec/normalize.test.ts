@@ -378,6 +378,15 @@ test("browser defaults are concrete, and failover is off until asked for", () =>
   });
 });
 
+test("browser.mcp_port is always emitted, defaulted to 9522", () => {
+  expect(normalize(resolved).devbox_browser).toMatchObject({ mcp_port: 9522 });
+});
+
+test("browser.mcp_port can be overridden", () => {
+  const out = normalize({ ...resolved, browser: { mcp_port: 9600 } });
+  expect(out.devbox_browser).toMatchObject({ mcp_port: 9600 });
+});
+
 test("browser failover preserves an explicit autobind setting", () => {
   const out = normalize({
     ...resolved,

@@ -109,6 +109,10 @@ shared_services:
 # browser supervisor.
 # browser:
 #   enabled: true
+#   # One shared MCP server for every session, instead of one spawned per session per
+#   # developer. Claude Code starts a stdio MCP server per session, so N sessions used
+#   # to mean N copies of this process; over HTTP one process serves them all.
+#   mcp_port: 9522
 #   failover:
 #     enabled: false
 #     chrome_user: dev-a

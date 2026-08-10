@@ -51,15 +51,34 @@
     group: root
     mode: "0755"
 
+- name: Install the shared playwright MCP service
+  ansible.builtin.template:
+    src: devbox-playwright-mcp.service.j2
+    dest: /etc/systemd/system/devbox-playwright-mcp.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: devbox_browser.enabled
+  notify: Reload systemd
+
+- name: Apply the systemd change now
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the shared playwright MCP service
+  ansible.builtin.systemd_service:
+    name: devbox-playwright-mcp
+    enabled: true
+    state: started
+  when: devbox_browser.enabled
+
 # Reconciles only the browser entries in each developer's agent config; every other
-# mcpServers entry is preserved. The mode follows the failover setting: attached to
-# the shared CDP endpoint when it is on, self-launching when it is off.
+# mcpServers entry is preserved. Every session attaches to the one shared HTTP server
+# instead of spawning its own.
 - name: Wire the browser MCP server into each profile
   ansible.builtin.command:
     argv: >-
-      {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ item.user ~ '/.claude.json']
-         + (['--cdp-endpoint', 'http://127.0.0.1:' ~ devbox_browser.failover.cdp_port]
-            if devbox_browser.failover.enabled else []) }}
+      {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ item.user ~ '/.claude.json',
+          '--playwright-url', 'http://127.0.0.1:' ~ devbox_browser.mcp_port ~ '/mcp'] }}
   become: true
   become_user: "{{ item.user }}"
   environment:

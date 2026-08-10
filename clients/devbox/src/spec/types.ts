@@ -309,6 +309,9 @@ export interface ProjectRemoteControlSpec {
 /** Chrome and the browser MCP servers. Chrome is installed once for the whole box. */
 export interface BrowserSpec {
   enabled?: boolean;
+  /** Port the shared playwright MCP server listens on. One server serves every
+   *  session; the alternative is one spawned process per session per developer. */
+  mcp_port?: number;
   failover?: BrowserFailoverSpec;
 }
 
