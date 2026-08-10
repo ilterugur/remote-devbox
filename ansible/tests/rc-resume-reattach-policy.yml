@@ -13,6 +13,8 @@
       ansible.builtin.set_fact:
         role_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_remote/tasks/main.yml') | from_yaml }}"
         monitor_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/agent-rc-monitor.sh') }}"
+        resume_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/agent-rc-resume.sh') }}"
+        exec_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/agent-rc-resume-exec.sh') }}"
 
     - name: Find the task that deploys the snapshotter
       ansible.builtin.set_fact:
@@ -40,3 +42,16 @@
           the monitor must call it from inside the tmux-alive loop so it runs
           every ~30s while a session is active; every resumed session without
           this wiring will mint a second claude.ai card
+
+    - name: Assert the pointer is read back and handed to the resumed process
+      ansible.builtin.assert:
+        that:
+          - "'bridge-map-' in resume_src"
+          - "'CLAUDE_BRIDGE_REATTACH_SESSION' in exec_src"
+          # A resumed session has to accept input from the phone. The CLI's own
+          # helper sets outbound-only unless told otherwise, so an assignment here
+          # would hand the user a card they cannot type into. Matching on the "="
+          # keeps the prose in the surrounding comment from tripping this.
+          - "'CLAUDE_BRIDGE_REATTACH_OUTBOUND_ONLY=' not in exec_src"
+        fail_msg: >-
+          the resumed session no longer reattaches to its own card

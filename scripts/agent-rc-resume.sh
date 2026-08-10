@@ -38,6 +38,7 @@ EXEC="/usr/local/bin/agent-rc-resume-exec"
 SYSFILE="/usr/local/share/agent-devbox/agent-rc-resume-sys.txt"
 RUNDIR="${HOME}/.cache/agent-devbox/resume"
 STATE="${RUNDIR}/attempts.json"
+BRIDGE_MAP="${RUNDIR}/bridge-map-${ID}.json"
 mkdir -p "${RUNDIR}"
 
 log() { echo "[agent-rc-resume] $*" >&2; }
@@ -67,8 +68,11 @@ PLAN="$(adapter_resume_scan "${DIR}" "${LOOKBACK_H}")"
 LAUNCH_TSV="$(
   RC_PLAN="${PLAN}" RC_RUNDIR="${RUNDIR}" RC_STATE="${STATE}" \
   RC_MAX_ATTEMPTS="${MAX_ATTEMPTS}" RC_PROJECT="${PROJECT_NAME}" \
+  RC_BRIDGE_MAP="${BRIDGE_MAP}" \
   "${PYBIN}" - <<'PY'
-import os, json, time
+import os, json, time, re
+
+BRIDGE_RE = re.compile(r"^session_[A-Za-z0-9_-]{6,128}$")
 plan = json.loads(os.environ["RC_PLAN"])
 rundir = os.environ["RC_RUNDIR"]; statef = os.environ["RC_STATE"]
 maxatt = int(os.environ["RC_MAX_ATTEMPTS"]); project = os.environ["RC_PROJECT"]
@@ -77,6 +81,11 @@ try:
     state = json.load(open(statef))
 except Exception:
     state = {}
+
+try:
+    bmap = json.load(open(os.environ.get("RC_BRIDGE_MAP", "")))
+except Exception:
+    bmap = {}
 
 out = []
 for p in plan:
@@ -117,7 +126,20 @@ for p in plan:
     cf = os.path.join(rundir, uuid + ".notice")
     open(nf, "w").write(name)
     open(cf, "w").write(notice)
-    out.append("\t".join([uuid, perm, nf, cf, wt]))
+
+    # Hand back the card this conversation already owns, when its identity was
+    # captured before the crash. Without it the CLI mints a second card and the
+    # original is orphaned for good.
+    bf = os.path.join(rundir, uuid + ".bridge")
+    bid = str((bmap.get(uuid) or {}).get("bridge") or "")
+    if BRIDGE_RE.match(bid):
+        open(bf, "w").write(bid)
+    else:
+        try:
+            os.remove(bf)
+        except OSError:
+            pass
+    out.append("\t".join([uuid, perm, nf, cf, wt, bf]))
 
 json.dump(state, open(statef, "w"), indent=2)
 for line in out:
@@ -125,8 +147,19 @@ for line in out:
 PY
 )"
 
+# The reattach variable is read out of the CLI bundle, not a documented API. If an
+# upgrade drops it, resumes silently go back to minting a second card per session --
+# so say so in the journal instead of letting it rot unnoticed.
+if ls "${RUNDIR}"/*.bridge >/dev/null 2>&1; then
+  CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+  if [ -n "${CLAUDE_BIN}" ] && \
+     ! grep -qa CLAUDE_BRIDGE_REATTACH_SESSION "$(readlink -f "${CLAUDE_BIN}")" 2>/dev/null; then
+    log "WARNING: installed claude no longer references CLAUDE_BRIDGE_REATTACH_SESSION — resumed sessions will mint new claude.ai cards"
+  fi
+fi
+
 launched=0
-while IFS=$'\t' read -r uuid perm namefile noticefile worktree; do
+while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
   [ -z "${uuid:-}" ] && continue
   case "${uuid}" in \#*) log "${uuid} ${perm}"; continue;; esac
 
@@ -140,7 +173,7 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree; do
   # directly without a second shell parse, so on-disk values can't be re-split or
   # interpreted as shell metacharacters.
   tmux -L "${SOCKET}" new-window -t "${SOCKET}:" -n "${win}" \
-    "${EXEC}" "${uuid}" "${perm}" "${worktree}" "${namefile}" "${noticefile}" "${SYSFILE}"
+    "${EXEC}" "${uuid}" "${perm}" "${worktree}" "${namefile}" "${noticefile}" "${SYSFILE}" "${bridgefile}"
   launched=$((launched + 1))
   log "launched ${uuid} (perm=${perm})"
 
