@@ -92,10 +92,12 @@
               - "'MemoryMax=12G' in plain_unit.content | b64decode"
               - "'MemorySwapMax=1G' in plain_unit.content | b64decode"
               - "'OOMPolicy=continue' in plain_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in plain_unit.content | b64decode"
               - "'MemoryHigh=28G' in heavy_unit.content | b64decode"
               - "'MemoryMax=34G' in heavy_unit.content | b64decode"
               - "'MemorySwapMax=2G' in heavy_unit.content | b64decode"
               - "'OOMPolicy=continue' in heavy_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in heavy_unit.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

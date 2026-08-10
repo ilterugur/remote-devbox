@@ -1,0 +1,15 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+# MemoryHigh throttles and reclaims but never kills, so a slice parked above its high
+# watermark stalls indefinitely rather than failing. These properties turn that stall
+# into a failure the box recovers from on its own.
+#
+# The duration is the window the slice must hold above the pressure limit before
+# anything dies: long enough that an ordinary build spike is not mistaken for a runaway,
+# short enough that the host is not already unusable by the time oomd acts.
+#
+# Swap-based killing needs no threshold here — it fires at oomd's daemon-wide default.
+[Slice]
+ManagedOOMSwap=kill
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit={{ devbox_host.oomd.memory_pressure_limit }}
+ManagedOOMMemoryPressureDurationSec={{ devbox_host.oomd.memory_pressure_duration_sec }}s

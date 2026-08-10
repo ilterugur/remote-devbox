@@ -1,0 +1,48 @@
+---
+# systemd-oomd is the net for work that runs outside a Remote Control unit — login
+# shells, the editor server, the desktop session. Those have no unit ceiling of their
+# own, so without this a runaway there still parks the host in swap thrash.
+#
+# Remote Control units carry ManagedOOMPreference=avoid: they are already bounded by
+# their own MemoryMax, and that bound kills the build rather than the session. A
+# neighbour's overrun must not take out a live agent session.
+
+- name: Install systemd-oomd
+  ansible.builtin.apt:
+    name: systemd-oomd
+    state: present
+    update_cache: true
+  when: devbox_host.oomd.enabled
+
+- name: Look up developer uids
+  ansible.builtin.getent:
+    database: passwd
+  when: devbox_host.oomd.enabled
+
+- name: Write each developer's managed-OOM drop-in
+  ansible.builtin.template:
+    src: slice-oomd.conf.j2
+    dest: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+  notify: Reload systemd
+
+- name: Enable and start systemd-oomd
+  ansible.builtin.systemd_service:
+    name: systemd-oomd
+    enabled: true
+    state: started
+  when: devbox_host.oomd.enabled
+
+- name: Stop and disable systemd-oomd when it is turned off
+  ansible.builtin.systemd_service:
+    name: systemd-oomd
+    enabled: false
+    state: stopped
+  when: not devbox_host.oomd.enabled
+  failed_when: false
