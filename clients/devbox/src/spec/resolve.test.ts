@@ -267,6 +267,19 @@ test("a project may override the oom policy", () => {
   expect(p0(s).remote_control!.resources.oom_policy).toBe("stop");
 });
 
+test("a box-wide memory ceiling reaches a project that declares nothing", () => {
+  const s = rcSpec({ resources: { memory_max: "7G" } });
+  expect(p0(s).remote_control!.resources.memory_max).toBe("7G");
+});
+
+test("a project ceiling wins over the box-wide one", () => {
+  const s = rcSpec(
+    { resources: { memory_max: "7G" } },
+    { remote_control: { resources: { memory_max: "9G" } } },
+  );
+  expect(p0(s).remote_control!.resources.memory_max).toBe("9G");
+});
+
 test("access defaults name every private path that exists, and none that don't", () => {
   expect(defaultDesktopAccess(true)).toEqual(["tunnel", "tailnet"]);
   expect(defaultDesktopAccess(false)).toEqual(["tunnel"]);
