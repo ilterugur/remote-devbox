@@ -1,0 +1,24 @@
+---
+# The reattach path is a chain across four files: the snapshotter is deployed, the
+# monitor refreshes the map, the orchestrator reads it back, and the launcher hands
+# it to the process. Break any link and a resumed session silently mints a second
+# claude.ai card again -- which nothing else in the suite would catch.
+- name: Verify the resume reattach wiring stays intact
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Read the files that carry the reattach contract
+      ansible.builtin.set_fact:
+        monitor_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/agent-rc-monitor.sh') }}"
+        role_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_remote/tasks/main.yml') }}"
+
+    - name: Assert the snapshotter is deployed and driven from the monitor loop
+      ansible.builtin.assert:
+        that:
+          - "'agent-rc-bridge-snapshot' in role_src"
+          - "'agent-rc-bridge-snapshot' in monitor_src"
+        fail_msg: >-
+          the bridge identity is no longer captured while sessions live; every
+          resumed session will mint a second claude.ai card

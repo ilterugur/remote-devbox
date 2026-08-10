@@ -20,8 +20,17 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-# Block while the session lives.
+# Block while the session lives. Every sixth tick (~30s) also snapshot the bridge
+# identity of this unit's sessions: it exists only in a pid-keyed state file while
+# the process runs, and the resume path needs it AFTER that process is gone. A
+# session id never changes mid-session, so this cadence loses nothing.
+SNAPSHOT=/usr/local/bin/agent-rc-bridge-snapshot
+tick=0
 while tmux -L "${SOCKET}" has-session -t "${SOCKET}" 2>/dev/null; do
+  if [ $((tick % 6)) -eq 0 ] && [ -x "${SNAPSHOT}" ]; then
+    "${SNAPSHOT}" "${ID}" >/dev/null 2>&1 || true
+  fi
+  tick=$((tick + 1))
   sleep 5
 done
 

@@ -21,6 +21,14 @@
     group: root
     mode: "0755"
 
+- name: Deploy the bridge-identity snapshotter (python, driven by the monitor loop)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/agent-rc-bridge-snapshot.py"
+    dest: /usr/local/bin/agent-rc-bridge-snapshot
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Ensure shared data + adapters dir
   ansible.builtin.file:
     path: "{{ item }}"
