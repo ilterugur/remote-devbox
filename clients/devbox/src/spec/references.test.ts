@@ -159,3 +159,45 @@ test("browser.failover.chrome_user must name a real developer", () => {
   expect(msgs(withFailover("dev-a"))).toEqual([]);
   expect(msgs(withFailover("nobody"))).toContain("error:browser.failover.chrome_user");
 });
+
+/** `count` developers, all of whom asked for a browser. */
+const browserTeam = (count: number) =>
+  Array.from({ length: count }, (_, i) => ({ user: `dev-${i}`, login_ssh_keys: [], browser: true }));
+
+test("one MCP server per browser-enabled developer does not collide at the default base", () => {
+  expect(msgs(spec(browserTeam(5)))).toEqual([]);
+});
+
+test("an MCP range that reaches a port the browser stack owns is an error", () => {
+  // 9420, 9421, 9422 — the third developer's server would land on the fallback Chrome.
+  const out = validateReferences(spec(browserTeam(3), { browser: { mcp_port: 9420 } }));
+  expect(out.map((i) => `${i.severity}:${i.path}`)).toContain("error:browser.mcp_port");
+  expect(out[0]!.message).toContain("dev-2");
+  expect(out[0]!.message).toContain("browser.failover.fallback_chrome_port");
+});
+
+test("the MCP range is checked against the failover ports as configured, not as defaulted", () => {
+  const moved = { browser: { mcp_port: 9522, failover: { enabled: false, cdp_port: 9523 } } };
+  expect(msgs(spec(browserTeam(2), moved))).toContain("error:browser.mcp_port");
+  expect(msgs(spec(browserTeam(1), moved))).toEqual([]);
+});
+
+test("developers who did not ask for a browser claim no MCP port", () => {
+  const mixed = [
+    { user: "dev-a", login_ssh_keys: [], browser: true },
+    { user: "dev-b", login_ssh_keys: [] },
+    { user: "dev-c", login_ssh_keys: [], browser: true },
+  ];
+  // Two servers, on 9420 and 9421. A third would take 9422 — the fallback Chrome — so
+  // this base is only safe because dev-b claims nothing.
+  expect(msgs(spec(mixed, { browser: { mcp_port: 9420 } }))).toEqual([]);
+  expect(msgs(spec(browserTeam(3), { browser: { mcp_port: 9420 } }))).toContain("error:browser.mcp_port");
+});
+
+test("a range running past the last valid port is an error", () => {
+  expect(msgs(spec(browserTeam(4), { browser: { mcp_port: 65534 } }))).toContain("error:browser.mcp_port");
+});
+
+test("browser.enabled: false claims no ports at all", () => {
+  expect(msgs(spec(browserTeam(3), { browser: { enabled: false, mcp_port: 9420 } }))).toEqual([]);
+});

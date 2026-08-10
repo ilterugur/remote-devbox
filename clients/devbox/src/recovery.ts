@@ -56,6 +56,7 @@ const REGISTRY: RegisteredPattern[] = [
   ),
   registration("browser.proxy", /^browser\.proxy$/, "automatic", "box-systemd", UNIT_FAILURES),
   registration("browser.fallback", /^browser\.fallback$/, "automatic", "box-systemd", UNIT_FAILURES),
+  registration("browser.mcp.*", /^browser\.mcp\.[a-z_][a-z0-9_-]{0,31}$/, "automatic", "box-systemd", UNIT_FAILURES),
   registration("memory.*", /^memory\.[a-z_][a-z0-9_-]{0,31}\.[a-z0-9][a-z0-9_-]*$/, "manual", "box-systemd", [
     ...UNIT_FAILURES, "process_missing",
   ]),

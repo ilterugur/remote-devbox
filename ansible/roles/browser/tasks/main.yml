@@ -1,9 +1,9 @@
 ---
-# Server-side, headless browser use for the agent: install Google Chrome once, and wire
-# the Playwright MCP server (navigate/click/snapshot, console + network) into the agent
-# config of every developer that asked for it (developers[].browser). Runs against the
-# system Chrome headless. This is NOT "Claude in Chrome" (that extension is client-side,
-# on your client).
+# Server-side, headless browser use for the agent: install Google Chrome once, run one
+# Playwright MCP server (navigate/click/snapshot, console + network) per developer that
+# asked for it (developers[].browser), and wire each of them into their own. Runs against
+# the system Chrome headless. This is NOT "Claude in Chrome" (that extension is
+# client-side, on your client).
 #
 # chrome-devtools-mcp is retired — see wire-browser-mcp.py for why.
 
@@ -51,50 +51,83 @@
     group: root
     mode: "0755"
 
-- name: Install the shared playwright MCP service
-  ansible.builtin.template:
-    src: devbox-playwright-mcp.service.j2
-    dest: /etc/systemd/system/devbox-playwright-mcp.service
-    owner: root
-    group: root
-    mode: "0644"
-  when: devbox_browser.enabled
-  # A changed unit definition (port, failover mode, ...) has to actually reach the
-  # running process, not just sit on disk until someone restarts it by hand — hence
-  # both handlers, reload before restart, only firing when the file really changed.
-  notify:
-    - Reload systemd
-    - Restart the shared playwright MCP service
-
-- name: Apply the systemd change now
-  ansible.builtin.meta: flush_handlers
-
-- name: Enable and start the shared playwright MCP service
-  ansible.builtin.systemd_service:
-    name: devbox-playwright-mcp
-    enabled: true
-    state: started
-  when: devbox_browser.enabled
-
-# Reconciles only the browser entries in each developer's agent config; every other
-# mcpServers entry is preserved. Every session attaches to the one shared HTTP server
-# instead of spawning its own. The URL says "localhost", not an IP literal, because
-# playwright-mcp itself only accepts requests whose Host header is "localhost:<port>"
-# (see devbox-playwright-mcp.service.j2) — the unit's --host and this URL must agree.
-- name: Wire the browser MCP server into each profile
-  ansible.builtin.command:
-    argv: >-
-      {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ item.user ~ '/.claude.json',
-          '--playwright-url', 'http://localhost:' ~ devbox_browser.mcp_port ~ '/mcp'] }}
-  become: true
-  become_user: "{{ item.user }}"
-  environment:
-    HOME: "/home/{{ item.user }}"
-  loop: "{{ devbox_developers | selectattr('browser') | list }}"
-  loop_control:
-    label: "{{ item.user }}"
-  changed_when: false
-
 - name: Set up the CDP failover endpoint (HAProxy + fallback Chrome)
   ansible.builtin.include_tasks: failover.yml
   when: devbox_browser.failover.enabled
+
+# Everything below runs AFTER the failover include on purpose: with failover on, each
+# MCP server is started with --cdp-endpoint pointing at the endpoint that include puts
+# there. On a fresh box HAProxy is not installed until it runs, so a server started
+# first would attach to nothing.
+
+# A box that ran an earlier revision of this role has one box-wide unit holding the
+# base port. Left in place it would keep running and the first developer's server
+# would fail to bind.
+- name: Retire the box-wide playwright MCP service if present
+  ansible.builtin.systemd_service:
+    name: devbox-playwright-mcp.service
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Delete the box-wide unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/devbox-playwright-mcp.service
+    state: absent
+  notify: Reload systemd
+
+# One unit per browser-enabled developer, each running as that developer on the port
+# the generator assigned them (devbox_browser.servers) — see browser-ports.ts for why
+# the account and the port are decided there and not here.
+- name: Install a playwright MCP service per browser-enabled developer
+  ansible.builtin.template:
+    src: devbox-playwright-mcp.service.j2
+    dest: "/etc/systemd/system/devbox-playwright-mcp-{{ server.user }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_browser.servers }}"
+  loop_control:
+    loop_var: server
+    label: "{{ server.user }}"
+  register: mcp_units
+  when: devbox_browser.enabled
+
+# A changed unit definition (port, failover mode, ...) has to actually reach the running
+# process, not just sit on disk until someone restarts it by hand — so a unit whose file
+# changed is restarted, and only that one. daemon_reload rides in the same task rather
+# than in a separately notified handler: handler order is not guaranteed, and a restart
+# that runs before the reload silently keeps the old command line running.
+- name: Enable and start each developer's playwright MCP service
+  ansible.builtin.systemd_service:
+    name: "devbox-playwright-mcp-{{ unit.server.user }}.service"
+    enabled: true
+    state: "{{ 'restarted' if unit.changed else 'started' }}"
+    daemon_reload: true
+  loop: "{{ mcp_units.results }}"
+  loop_control:
+    loop_var: unit
+    label: "{{ unit.server.user }}"
+  when: devbox_browser.enabled
+
+# Reconciles only the browser entries in each developer's agent config; every other
+# mcpServers entry is preserved. Every session that developer runs attaches to their own
+# HTTP server instead of spawning one per session — their own, not a shared one, because
+# the server reads and writes files as the account it runs as. The URL says "localhost",
+# not an IP literal, because playwright-mcp itself only accepts requests whose Host
+# header is "localhost:<port>" (see devbox-playwright-mcp.service.j2) — the unit's --host
+# and this URL must agree.
+- name: Wire each developer into their own browser MCP server
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/local/bin/wire-browser-mcp', '--config', '/home/' ~ server.user ~ '/.claude.json',
+          '--playwright-url', 'http://localhost:' ~ server.port ~ '/mcp'] }}
+  become: true
+  become_user: "{{ server.user }}"
+  environment:
+    HOME: "/home/{{ server.user }}"
+  loop: "{{ devbox_browser.servers }}"
+  loop_control:
+    loop_var: server
+    label: "{{ server.user }}"
+  changed_when: false

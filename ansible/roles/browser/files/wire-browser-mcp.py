@@ -17,6 +17,7 @@ transport that lets one server serve every session.
 import argparse
 import json
 import os
+import stat
 import sys
 import tempfile
 
@@ -60,6 +61,11 @@ def main():
                 # Content that fails to parse might still be worth something to
                 # someone; only a genuinely empty file is safe to treat as absent.
                 sys.exit(f"{path}: exists but is not valid JSON, refusing to overwrite ({exc})")
+            # `null`, a list and a bare number all parse. None of them is an agent
+            # config, and all of them belong to someone, so they are refused the same
+            # way unparseable content is rather than silently replaced.
+            if not isinstance(config, dict):
+                sys.exit(f"{path}: exists but is not a JSON object, refusing to overwrite")
         else:
             config = {}
     else:
@@ -74,13 +80,23 @@ def main():
     # leaves either the old config or the new one — never a truncated file. This
     # config is shared with the agent and the developer; it is not ours to lose.
     directory = os.path.dirname(path) or "."
-    with tempfile.NamedTemporaryFile("w", dir=directory, delete=False) as handle:
-        json.dump(config, handle, indent=2)
-        handle.write("\n")
-        temp_path = handle.name
-    if original_mode is not None:
-        os.chmod(temp_path, original_mode)
-    os.replace(temp_path, path)
+    handle = tempfile.NamedTemporaryFile("w", dir=directory, delete=False)
+    temp_path = handle.name
+    try:
+        with handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+        # S_IMODE, not the raw st_mode: the rest of st_mode is the file type, which
+        # chmod would reject or misread.
+        if original_mode is not None:
+            os.chmod(temp_path, stat.S_IMODE(original_mode))
+        os.replace(temp_path, path)
+    except BaseException:
+        # delete=False means nothing else takes this file back. A full disk mid-dump,
+        # a chmod that is refused, an interrupt — each would otherwise leave a stray
+        # tmpXXXXXX next to the config in someone's home, forever.
+        os.unlink(temp_path)
+        raise
     return 0
 
 

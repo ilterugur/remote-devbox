@@ -387,6 +387,56 @@ test("browser.mcp_port can be overridden", () => {
   expect(out.devbox_browser).toMatchObject({ mcp_port: 9600 });
 });
 
+/** Two browser-enabled developers around one that opted out, to pin the order. */
+const browserResolved = (over: Partial<ResolvedSpec> = {}): ResolvedSpec => ({
+  ...resolved,
+  developers: [
+    { ...resolved.developers[0]!, user: "dev-a", browser: true },
+    { ...resolved.developers[0]!, user: "dev-b" },
+    { ...resolved.developers[0]!, user: "dev-c", browser: true },
+  ],
+  ...over,
+});
+
+test("no browser-enabled developer means no MCP servers", () => {
+  expect(normalize(resolved).devbox_browser).toMatchObject({ servers: [] });
+});
+
+test("each browser-enabled developer gets a server on their own port, in declaration order", () => {
+  expect(normalize(browserResolved()).devbox_browser).toMatchObject({
+    servers: [
+      { user: "dev-a", port: 9522 },
+      { user: "dev-c", port: 9523 },
+    ],
+  });
+});
+
+test("the MCP servers are assigned from the stated base port", () => {
+  expect(normalize(browserResolved({ browser: { mcp_port: 9600 } })).devbox_browser).toMatchObject({
+    mcp_port: 9600,
+    servers: [
+      { user: "dev-a", port: 9600 },
+      { user: "dev-c", port: 9601 },
+    ],
+  });
+});
+
+// The unit's User= comes from the server row, never from chrome_user: on a box where
+// failover is off that key is null, and on one where it is on it names a single account.
+test("chrome_user does not decide who the MCP servers run as", () => {
+  const withFailover = normalize(
+    browserResolved({ browser: { failover: { enabled: true, chrome_user: "dev-c" } } }),
+  ).devbox_browser as Record<string, any>;
+  expect(withFailover.servers.map((s: { user: string }) => s.user)).toEqual(["dev-a", "dev-c"]);
+  expect(normalize(browserResolved()).devbox_browser).toMatchObject({
+    failover: expect.objectContaining({ chrome_user: null }),
+    servers: [
+      { user: "dev-a", port: 9522 },
+      { user: "dev-c", port: 9523 },
+    ],
+  });
+});
+
 test("browser failover preserves an explicit autobind setting", () => {
   const out = normalize({
     ...resolved,

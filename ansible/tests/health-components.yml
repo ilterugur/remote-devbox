@@ -9,6 +9,10 @@
     devbox_memory_base_port: 9077
     devbox_browser:
       enabled: true
+      mcp_port: 9522
+      servers:
+        - {user: dev-a, port: 9522}
+        - {user: dev-b, port: 9523}
       failover:
         enabled: true
         chrome_user: dev-a
@@ -30,6 +34,12 @@
               engine: hindsight
               llm_provider: openrouter
               api_key_env: "{{ marker }}"
+      - user: dev-b
+        desktop:
+          enabled: false
+          access: []
+        memory:
+          enabled: false
     ansible_facts:
       tailscale0:
         ipv4:
@@ -102,6 +112,24 @@
                 | map(attribute='listeners') | first
                 | map(attribute='path') | first
                 == 'sesman.socket'
+              # One component per developer's own MCP unit, carrying that developer's
+              # name in both the unit and the profile.
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'browser.mcp.dev-b')
+                | map(attribute='unit') | first
+                == 'devbox-playwright-mcp-dev-b.service'
+              - >-
+                health.components
+                | selectattr('id', 'equalto', 'browser.mcp.dev-b')
+                | map(attribute='profile') | first
+                == 'dev-b'
+              # By unit only, never by listener: the servers bind localhost as [::1], so
+              # a declared 127.0.0.1 listener would report listener_missing forever.
+              - >-
+                health.components
+                | selectattr('id', 'match', '^browser\\.mcp\\.')
+                | selectattr('listeners', 'defined') | list | length == 0
               - marker not in (rendered.content | b64decode)
               - "'RuntimeDirectoryPreserve=yes' in rendered_service.content | b64decode"
           vars:
@@ -110,6 +138,8 @@
               - desktop.xrdp-sesman
               - browser.proxy
               - browser.fallback
+              - browser.mcp.dev-a
+              - browser.mcp.dev-b
               - memory.dev-a.primary
               - remote-control.agent-rc-claude-dev-a-app.service
       always:

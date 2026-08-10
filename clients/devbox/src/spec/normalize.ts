@@ -9,6 +9,14 @@
  *     in a template is a real bug rather than a silent policy decision.
  */
 import { assignClientPorts } from "./client-ports";
+import {
+  assignMcpPorts,
+  browserUsers,
+  DEFAULT_CDP_PORT,
+  DEFAULT_CLIENT_TUNNEL_PORT,
+  DEFAULT_FALLBACK_CHROME_PORT,
+  DEFAULT_MCP_PORT,
+} from "./browser-ports";
 import { DEFAULT_CLI_TARGETS, SERVICE_RESOURCE_KEYS, SLICE_RESOURCE_KEYS } from "./types";
 import type {
   ClientFacts,
@@ -42,6 +50,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     const memoryHigh = developer.resources?.memory_high;
     return total + (isMemoryWeight(memoryHigh) ? memoryHigh.weight : 0);
   }, 0);
+  const mcpBasePort = resolved.browser?.mcp_port ?? DEFAULT_MCP_PORT;
   const clientPorts = assignClientPorts(
     resolved.developers.map((d) => ({
       user: d.user,
@@ -110,14 +119,21 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_memory_high_weight_total: memoryHighWeightTotal,
     devbox_browser: {
       enabled: resolved.browser?.enabled ?? true,
-      mcp_port: resolved.browser?.mcp_port ?? 9522,
+      mcp_port: mcpBasePort,
+      // One row per browser-enabled developer, each naming the account its server runs
+      // as and the port that server owns. The role loops this directly: the unit's
+      // `User=` and the URL each developer is wired with both come from the same row,
+      // so a session can never be pointed at a server running as someone else.
+      servers: assignMcpPorts(browserUsers(resolved.developers), mcpBasePort),
       failover: {
         enabled: resolved.browser?.failover?.enabled ?? false,
         // Named, never inferred: this account's Chrome is the one the endpoint serves.
+        // It says who runs the fallback browser and nothing else — the MCP servers run
+        // as their own developer, whether or not failover is on.
         chrome_user: resolved.browser?.failover?.chrome_user ?? null,
-        cdp_port: resolved.browser?.failover?.cdp_port ?? 9222,
-        fallback_chrome_port: resolved.browser?.failover?.fallback_chrome_port ?? 9422,
-        client_tunnel_port: resolved.browser?.failover?.client_tunnel_port ?? 9322,
+        cdp_port: resolved.browser?.failover?.cdp_port ?? DEFAULT_CDP_PORT,
+        fallback_chrome_port: resolved.browser?.failover?.fallback_chrome_port ?? DEFAULT_FALLBACK_CHROME_PORT,
+        client_tunnel_port: resolved.browser?.failover?.client_tunnel_port ?? DEFAULT_CLIENT_TUNNEL_PORT,
         autobind: resolved.browser?.failover?.autobind ?? false,
       },
     },

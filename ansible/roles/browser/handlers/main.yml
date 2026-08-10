@@ -7,13 +7,8 @@
     name: haproxy
     state: reloaded
 
-- name: Restart the shared playwright MCP service
-  # daemon_reload here, not just in the separately-notified "Reload systemd" handler:
-  # handler notification order is not guaranteed, so a restart could run before that
-  # reload has picked up the changed unit file — which restarts the process against
-  # the stale definition and silently keeps the old command line running. Doing both
-  # atomically in the same task is the only way this handler is guaranteed correct.
-  ansible.builtin.systemd_service:
-    name: devbox-playwright-mcp
-    daemon_reload: true
-    state: restarted
+# There is no MCP restart handler: the units are per developer, and a handler cannot
+# see which one changed, so it would have to restart everybody's server whenever any
+# one unit file moved. main.yml restarts exactly the changed ones instead, with the
+# daemon-reload in the same task (handler order is not guaranteed, and a restart that
+# runs before the reload silently keeps the old command line running).

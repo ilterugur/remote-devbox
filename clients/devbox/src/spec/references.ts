@@ -6,6 +6,15 @@
  * same host port. Runs on a structurally valid spec, so it can index freely.
  */
 import { type Issue, err, warn } from "./issues";
+import {
+  assignMcpPorts,
+  browserUsers,
+  DEFAULT_CDP_PORT,
+  DEFAULT_CLIENT_TUNNEL_PORT,
+  DEFAULT_FALLBACK_CHROME_PORT,
+  DEFAULT_MCP_PORT,
+  MAX_PORT,
+} from "./browser-ports";
 import type { DevboxSpec } from "./types";
 
 /** Ports the box itself owns: sshd, Eternal Terminal, xRDP. */
@@ -140,7 +149,45 @@ export function validateReferences(spec: DevboxSpec): Issue[] {
     );
   }
 
+  issues.push(...mcpPortIssues(spec));
+
   return issues;
+}
+
+/**
+ * The MCP servers claim a range, not a port: one per browser-enabled developer, from
+ * `browser.mcp_port` upward. The range therefore grows with the team, and can grow into
+ * a port the browser stack already owns — a collision that would otherwise show up as
+ * one of two services failing to bind, with which one loses decided by start order.
+ * Cross-section (browser ports × how many developers opted in), so it belongs here.
+ */
+function mcpPortIssues(spec: DevboxSpec): Issue[] {
+  if (spec.browser?.enabled === false) return [];
+  const users = browserUsers(spec.developers);
+  if (!users.length) return [];
+
+  const base = spec.browser?.mcp_port ?? DEFAULT_MCP_PORT;
+  const servers = assignMcpPorts(users, base);
+  const last = servers[servers.length - 1]!.port;
+  const range = `${base}..${last}`;
+  const need = `${users.length} browser-enabled developer${users.length === 1 ? "" : "s"} need${users.length === 1 ? "s" : ""} one MCP server each, on ports ${range}`;
+
+  if (last > MAX_PORT) {
+    return [err("browser.mcp_port", `${need}, which runs past the last valid port (${MAX_PORT}) — lower browser.mcp_port`)];
+  }
+
+  const failover = spec.browser?.failover ?? {};
+  const claimed = [
+    { port: failover.cdp_port ?? DEFAULT_CDP_PORT, path: "browser.failover.cdp_port" },
+    { port: failover.client_tunnel_port ?? DEFAULT_CLIENT_TUNNEL_PORT, path: "browser.failover.client_tunnel_port" },
+    { port: failover.fallback_chrome_port ?? DEFAULT_FALLBACK_CHROME_PORT, path: "browser.failover.fallback_chrome_port" },
+  ];
+  return claimed.flatMap((claim) => {
+    const hit = servers.find((server) => server.port === claim.port);
+    return hit
+      ? [err("browser.mcp_port", `${need}, but ${hit.user}'s ${hit.port} is already ${claim.path} — move browser.mcp_port`)]
+      : [];
+  });
 }
 
 /** `none` is a literal, not a lookup — it means "off" everywhere it is accepted. */

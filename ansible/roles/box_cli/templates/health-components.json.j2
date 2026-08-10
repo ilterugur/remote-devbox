@@ -48,6 +48,19 @@
          'process': 'chrome'}],
        'recovery': 'automatic'}) %}
 {% endif %}
+{# One MCP server per browser-enabled developer, registered by unit only: the servers
+   bind localhost as [::1], so a declared 127.0.0.1 listener would be a permanent false
+   listener_missing. StartLimitBurst parks a crash-looping unit in `failed` for good,
+   which is precisely what a unit check catches. #}
+{% if devbox_browser.enabled %}
+{%   for server in devbox_browser.servers %}
+{%     set _ = components.append({
+         'id': 'browser.mcp.' ~ server.user,
+         'profile': server.user,
+         'unit': 'devbox-playwright-mcp-' ~ server.user ~ '.service',
+         'recovery': 'automatic'}) %}
+{%   endfor %}
+{% endif %}
 {% set memory = namespace(port=devbox_memory_base_port) %}
 {% for dev in devbox_developers if dev.memory.enabled %}
 {%   for name, instance in dev.memory.instances.items() %}
