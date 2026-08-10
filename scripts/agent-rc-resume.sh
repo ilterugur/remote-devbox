@@ -64,7 +64,7 @@ PLAN="$(adapter_resume_scan "${DIR}" "${LOOKBACK_H}")"
 
 # Planner: read the scan plan + attempt state, write per-session name/notice files,
 # apply the quarantine cap, and emit a launch list (one TSV line per session:
-# uuid <TAB> perm <TAB> namefile <TAB> noticefile <TAB> worktree).
+# uuid <TAB> perm <TAB> namefile <TAB> noticefile <TAB> worktree <TAB> bridgefile).
 LAUNCH_TSV="$(
   RC_PLAN="${PLAN}" RC_RUNDIR="${RUNDIR}" RC_STATE="${STATE}" \
   RC_MAX_ATTEMPTS="${MAX_ATTEMPTS}" RC_PROJECT="${PROJECT_NAME}" \
