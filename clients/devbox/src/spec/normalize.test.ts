@@ -127,6 +127,8 @@ test("codex code-mode hosts inherit resolved RC defaults, not only explicitly st
   expect(units).toEqual([
     {
       user: "dev-a",
+      profile: "codex-main",
+      codex_home: "/home/dev-a/.agent-profiles/codex-main",
       resources: {
         memory_high: "8G",
         memory_max: "12G",
@@ -140,12 +142,12 @@ test("codex code-mode hosts inherit resolved RC defaults, not only explicitly st
   ]);
 });
 
-test("two codex profiles share one desktop-owned code-mode host policy per Linux user", () => {
+test("two codex profiles still produce one code-mode host per Linux user", () => {
   const spec = codexResolved();
   spec.developers[0]!.agent_profiles!["codex-work"] = { provider: "codex" };
   const units = normalize(spec).devbox_codex_units as Record<string, unknown>[];
   expect(units).toHaveLength(1);
-  expect(units[0]?.user).toBe("dev-a");
+  expect(units[0]).toMatchObject({ user: "dev-a", profile: "codex-main" });
 });
 
 test("a developer with no codex profile contributes no codex unit", () => {

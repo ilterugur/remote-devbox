@@ -213,9 +213,9 @@ developers:
         provider: claude
         # An agent profile may pin its own memory space.
         memory_space: personal
-      # Codex Desktop owns one transient code-mode host per Linux user. Provisioning
-      # adds resource policy to that unit without starting a competing app-server;
-      # the policy inherits `remote_control.resources` below.
+      # One managed code-mode host per Linux user pre-owns the socket Codex Desktop
+      # expects, so Desktop connects to the bounded host instead of launching an
+      # unbounded transient process. It inherits `remote_control.resources` below.
       codex-work:
         provider: codex
     default_agent_profile: claude-work

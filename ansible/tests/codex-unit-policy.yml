@@ -1,9 +1,8 @@
 ---
-# Codex Desktop owns a transient `codex-code-mode-host.service` and reconnects through
-# its control socket. Provisioning a second app-server races that owner and fails with
-# "control socket is already in use". The durable contract is therefore a drop-in on
-# the desktop-owned unit: resource policy only, never a competing ExecStart.
-- name: Verify codex code-mode host drop-in rendering
+# The managed service runs the exact code-mode command Desktop otherwise launches via
+# systemd-run. Pre-owning the expected socket makes Desktop connect to this bounded host;
+# the official remote-control profile remains a separate service and socket.
+- name: Verify codex code-mode host service rendering
   hosts: localhost
   connection: local
   gather_facts: false
@@ -14,6 +13,8 @@
         dev-a: ["x", "1004"]
     codex_row:
       user: dev-a
+      profile: codex-main
+      codex_home: /home/dev-a/.agent-profiles/codex-main
       resources:
         memory_high: "8G"
         memory_max: "12G"
@@ -33,37 +34,36 @@
             prefix: remote-devbox-codex-unit-policy-
           register: render_dir
 
-        - name: Render the code-mode host drop-in
+        - name: Render the code-mode host service
           ansible.builtin.template:
-            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-code-mode-host.conf.j2"
-            dest: "{{ render_dir.path }}/50-remote-devbox.conf"
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-code-mode-host.service.j2"
+            dest: "{{ render_dir.path }}/codex-code-mode-host.service"
             mode: "0600"
           vars:
             row: "{{ codex_row }}"
 
-        - name: Read the code-mode host drop-in
+        - name: Read the code-mode host service
           ansible.builtin.slurp:
-            src: "{{ render_dir.path }}/50-remote-devbox.conf"
-          register: codex_dropin
+            src: "{{ render_dir.path }}/codex-code-mode-host.service"
+          register: codex_unit
 
         - name: Assert the ceilings and the OOM hardening reach the unit file
           ansible.builtin.assert:
             that:
-              - "'MemoryHigh=8G' in codex_dropin.content | b64decode"
-              - "'MemoryMax=12G' in codex_dropin.content | b64decode"
-              - "'MemorySwapMax=1G' in codex_dropin.content | b64decode"
-              - "'OOMPolicy=continue' in codex_dropin.content | b64decode"
-              - "'ManagedOOMPreference=avoid' in codex_dropin.content | b64decode"
-              - "'TimeoutStopSec=30' in codex_dropin.content | b64decode"
+              - "'MemoryHigh=8G' in codex_unit.content | b64decode"
+              - "'MemoryMax=12G' in codex_unit.content | b64decode"
+              - "'MemorySwapMax=1G' in codex_unit.content | b64decode"
+              - "'OOMPolicy=continue' in codex_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in codex_unit.content | b64decode"
+              - "'TimeoutStopSec=30' in codex_unit.content | b64decode"
 
-        - name: Assert provisioning does not compete with the desktop-owned daemon
+        - name: Assert the service owns Desktop's code-mode socket, not official RC
           ansible.builtin.assert:
             that:
-              - "'ExecStart=' not in codex_dropin.content | b64decode"
-              - "'Environment=CODEX_HOME' not in codex_dropin.content | b64decode"
-              - "'codex app-server --remote-control' not in codex_dropin.content | b64decode"
-              - "'User=' not in codex_dropin.content | b64decode"
-              - "'Slice=' not in codex_dropin.content | b64decode"
+              - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
+              - "'ExecStart=/home/dev-a/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://' in codex_unit.content | b64decode"
+              - "'app-server --remote-control' not in codex_unit.content | b64decode"
+              - "'Restart=always' in codex_unit.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

@@ -1,9 +1,20 @@
-{# Managed by Ansible (remote-devbox). Persistent resource policy for the transient
-   user unit Codex Desktop owns. Desktop owns ExecStart, CODEX_HOME, the control
-   socket, and lifecycle; starting another app-server races that owner. #}
+{# Managed by Ansible (remote-devbox). This is the exact code-mode host Codex
+   Desktop otherwise launches as a transient unit. The official Remote Control
+   daemon has a different CODEX_HOME and control socket. #}
 {% set L = row.resources %}
+[Unit]
+Description=Managed Codex Desktop code-mode host ({{ row.profile }})
+After=network-online.target
+Wants=network-online.target
+
 [Service]
+Type=simple
+Environment=CODEX_HOME={{ row.codex_home }}
+ExecStart=/home/{{ row.user }}/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://
+Restart=always
+RestartSec=5
 TimeoutStopSec=30
+KillMode=control-group
 {% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
 {% endif %}
 {%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
@@ -23,3 +34,6 @@ TimeoutStopSec=30
 {%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
 {% endif %}
 ManagedOOMPreference=avoid
+
+[Install]
+WantedBy=default.target

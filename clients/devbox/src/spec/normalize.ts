@@ -200,9 +200,10 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
 }
 
 /**
- * Codex Desktop owns one transient code-mode host per Linux user. It is distinct from
- * the optional official remote-control daemon, and its control socket is Desktop-owned;
- * provisioning supplies only a persistent resource-policy drop-in for that host.
+ * Codex Desktop needs one code-mode host per Linux user. It is distinct from the
+ * optional official remote-control daemon. A managed user service pre-owns Desktop's
+ * expected control socket, so Desktop connects instead of creating an unbounded
+ * transient unit (or falling back to an SSH session scope).
  *
  * They exist for the reason Remote Control units do: everything a session spawns lands
  * in this cgroup, so it is where a runaway build is contained and what has to carry
@@ -219,9 +220,12 @@ function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] 
     { ...RC_DEFAULTS.resources, ...(resolved.remote_control?.resources ?? {}) },
     true,
   );
-  return resolved.developers
-    .filter((dev) => Object.values(dev.agent_profiles ?? {}).some((profile) => profile.provider === "codex"))
-    .map((dev) => ({ user: dev.user, resources }));
+  return resolved.developers.flatMap((dev) => {
+    const profile = Object.entries(dev.agent_profiles ?? {}).find(([, value]) => value.provider === "codex")?.[0];
+    return profile
+      ? [{ user: dev.user, profile, codex_home: `/home/${dev.user}/.agent-profiles/${profile}`, resources }]
+      : [];
+  });
 }
 
 function normalizeDeveloper(
