@@ -139,6 +139,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     },
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),
+    devbox_codex_units: normalizeCodexUnits(resolved),
     devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client, clientPorts)),
   };
 }
@@ -195,6 +196,36 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
         },
       ];
     }),
+  );
+}
+
+/**
+ * Codex's remote control is a per-PROFILE daemon, not a per-project session host: its
+ * CLI takes no name/spawn/capacity, and one daemon serves every project that profile
+ * opens. So codex units are keyed by agent profile while Claude's stay keyed by
+ * project — the same containment policy, a different unit shape.
+ *
+ * They exist for the reason Remote Control units do: everything a session spawns lands
+ * in this cgroup, so it is where a runaway build is contained and what has to carry
+ * `ManagedOOMPreference=avoid`. A codex daemon started outside Ansible does not: one
+ * run by hand on 2026-08-12 sat at the oomd default and was killed with all 25
+ * processes in it eighteen times, taking every live session down each time.
+ *
+ * Limits come from the box-wide `remote_control.resources` because a codex daemon
+ * competes for the same host as the Claude units and should be bounded like them; a
+ * profile has no resources block of its own to read.
+ */
+function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
+  const resources = normalizeDirectMemoryResources(resolved.remote_control?.resources ?? {}, true);
+  return resolved.developers.flatMap((dev) =>
+    Object.entries(dev.agent_profiles ?? {})
+      .filter(([, profile]) => profile.provider === "codex")
+      .map(([profile]) => ({
+        user: dev.user,
+        profile,
+        codex_home: `/home/${dev.user}/.agent-profiles/${profile}`,
+        resources,
+      })),
   );
 }
 

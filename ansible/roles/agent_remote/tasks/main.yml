@@ -75,6 +75,34 @@
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   notify: Reload systemd
 
+- name: Generate a systemd unit per codex agent profile
+  ansible.builtin.template:
+    src: codex-app-server.service.j2
+    dest: "/etc/systemd/system/codex-app-server-{{ row.user }}-{{ row.profile }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_codex_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}-{{ row.profile }}"
+  notify: Reload systemd
+
+# The daemon was started by hand before it had a unit — as a `systemd-run` transient
+# scope, or a per-user codex-remote-control.service. Both must be gone before the
+# managed unit starts: two app-servers on one CODEX_HOME fight over the same control
+# socket. Best-effort, since neither exists on a box provisioned from scratch.
+- name: Retire hand-started codex daemons
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ item.0 }}@ {{ item.1 }}"
+  loop: "{{ devbox_codex_units | map(attribute='user') | unique | list
+            | product(['stop codex-code-mode-host.service',
+                       'disable --now codex-remote-control.service']) | list }}"
+  loop_control:
+    label: "{{ item.0 }}: {{ item.1 }}"
+  failed_when: false
+  changed_when: false
+
 - name: Generate a boot/recovery resume companion unit per Remote Control server
   ansible.builtin.template:
     src: agent-rc-resume.service.j2
@@ -154,6 +182,29 @@
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   notify: Reload systemd
+
+- name: Drop ad-hoc set-property overrides on codex units
+  ansible.builtin.file:
+    path: "/etc/systemd/system.control/codex-app-server-{{ row.user }}-{{ row.profile }}.service.d"
+    state: absent
+  loop: "{{ devbox_codex_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}-{{ row.profile }}"
+  notify: Reload systemd
+
+- name: Enable and start each codex app-server
+  ansible.builtin.systemd_service:
+    name: "codex-app-server-{{ row.user }}-{{ row.profile }}.service"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ devbox_codex_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}-{{ row.profile }}"
+  # Like the Remote Control units, this self-heals: without credentials the daemon
+  # exits and StartLimitBurst caps the retries until `sudo remote-devbox-login` runs.
 
 - name: Enable and start each Remote Control service
   ansible.builtin.systemd_service:

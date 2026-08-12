@@ -104,6 +104,48 @@ test("a project with no unit contributes nothing to the list", () => {
   expect(normalize(resolved).devbox_rc_units).toEqual([]);
 });
 
+/** `resolved`, with agent profiles: one codex login, one claude login. */
+const codexResolved = (): ResolvedSpec => ({
+  ...resolved,
+  remote_control: { resources: { memory_high: "8G", memory_max: "12G", oom_policy: "continue" } },
+  developers: [
+    {
+      ...resolved.developers[0]!,
+      agent_profiles: {
+        "codex-main": { provider: "codex" },
+        "claude-main": { provider: "claude" },
+      },
+    },
+  ],
+});
+
+test("codex units are keyed by agent profile, not by project, and inherit the RC limits", () => {
+  const units = normalize(codexResolved()).devbox_codex_units as Record<string, unknown>[];
+  expect(units).toEqual([
+    {
+      user: "dev-a",
+      profile: "codex-main",
+      codex_home: "/home/dev-a/.agent-profiles/codex-main",
+      resources: { memory_high: "8G", memory_max: "12G", oom_policy: "continue" },
+    },
+  ]);
+});
+
+test("two codex logins get one unit each, so they never share a control socket", () => {
+  const spec = codexResolved();
+  spec.developers[0]!.agent_profiles!["codex-work"] = { provider: "codex" };
+  const units = normalize(spec).devbox_codex_units as Record<string, unknown>[];
+  expect(units.map((u) => u.profile)).toEqual(["codex-main", "codex-work"]);
+  expect(units.map((u) => u.codex_home)).toEqual([
+    "/home/dev-a/.agent-profiles/codex-main",
+    "/home/dev-a/.agent-profiles/codex-work",
+  ]);
+});
+
+test("a developer with no codex profile contributes no codex unit", () => {
+  expect(normalize(resolved).devbox_codex_units).toEqual([]);
+});
+
 test("absent optionals become concrete values, never undefined", () => {
   const dev = dev0();
   expect(dev.adopt_existing).toBe(false);

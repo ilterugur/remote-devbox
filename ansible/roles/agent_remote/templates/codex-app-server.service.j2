@@ -1,0 +1,70 @@
+{# Managed by Ansible (remote-devbox). One unit per (developer, codex agent profile).
+   Codex has no per-project remote-control server to host, so unlike agent-rc.service.j2
+   there is no tmux session and no name/spawn/capacity: one daemon per profile serves
+   every project that profile opens. Values come from devbox_codex_units /
+   devbox_remote_control — no default() here, a missing key is a generator bug. #}
+{% set ID = row.user ~ '-' ~ row.profile %}
+{% set L = row.resources %}
+{% set RC = devbox_remote_control %}
+[Unit]
+Description=codex app-server ({{ ID }})
+After=network-online.target
+Wants=network-online.target
+{% if RC.autorestart.enabled %}
+{# Also the brake on a not-yet-logged-in profile: the daemon exits immediately without
+   credentials, and this stops that from becoming an endless restart loop. #}
+StartLimitIntervalSec={{ RC.autorestart.interval }}
+StartLimitBurst={{ RC.autorestart.burst }}
+{% endif %}
+
+[Service]
+{# The foreground app-server is the daemon itself, so systemd owns the process directly:
+   no oneshot+RemainAfterExit unit that would go to "failed (oom-kill)" and stay down,
+   and no separate liveness monitor to keep it honest. `codex remote-control start`
+   would fork and return, which is exactly that flawed shape. #}
+Type=simple
+{# A login shell is required — codex reads its environment (mise shims, PATH) from the
+   profile, and a direct exec gives "connection is errored". `exec` then replaces bash
+   so systemd tracks codex itself and Restart= reacts to the daemon's own exit. #}
+ExecStart=/bin/bash -lc "exec codex app-server --remote-control --listen unix://"
+{% if RC.autorestart.enabled %}
+Restart=on-failure
+RestartSec={{ RC.autorestart.restart_sec }}
+{% endif %}
+User={{ row.user }}
+{# The developer's whole footprint shares one slice, so the ceiling in devbox.yml means
+   what it says. Without this the unit lands in system.slice, out of reach of it. #}
+Slice=user-{{ ansible_facts.getent_passwd[row.user][1] }}.slice
+Environment=HOME=/home/{{ row.user }}
+Environment=PATH=/home/{{ row.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+{# The whole point of a profile: CODEX_HOME redirects config and credentials, so two
+   codex logins can run side by side as separate units. #}
+Environment=CODEX_HOME={{ row.codex_home }}
+{# ── Resource control (systemd cgroup) ──────────────────────────────────────────
+   Everything a codex session spawns — shells, builds, sandboxed commands — inherits
+   this cgroup, so this is where a runaway build is contained. #}
+{% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
+{% endif %}
+{%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
+{% endif %}
+{%- if 'memory_swap_max' in L %}MemorySwapMax={{ L.memory_swap_max }}
+{% endif %}
+{%- if 'cpu_weight' in L %}CPUWeight={{ L.cpu_weight }}
+{% endif %}
+{%- if 'cpu_quota' in L %}CPUQuota={{ L.cpu_quota }}
+{% endif %}
+{%- if 'io_weight' in L %}IOWeight={{ L.io_weight }}
+{% endif %}
+{%- if 'nice' in L %}Nice={{ L.nice }}
+{% endif %}
+{%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
+{% endif %}
+{%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
+{% endif %}
+{# The two properties a hand-started daemon never gets. Bounded by MemoryMax above, and
+   OOMPolicy=continue makes that bound kill the build rather than the daemon; oomd must
+   not pick this unit when a neighbour in the same slice is the one overrunning. Without
+   it, oomd killed every process in the codex cgroup — and every live session with them. #}
+ManagedOOMPreference=avoid
+[Install]
+WantedBy=multi-user.target
