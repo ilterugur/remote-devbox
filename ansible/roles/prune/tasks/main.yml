@@ -16,9 +16,7 @@
 - name: Find existing agent-rc unit files (ours, by naming convention)
   ansible.builtin.find:
     paths: /etc/systemd/system
-    patterns:
-      - "agent-rc-*.service"
-      - "codex-app-server-*.service"
+    patterns: "agent-rc-*.service"
   register: existing_units
 
 # devbox_rc_units is already the flat, fully-resolved list agent_remote generates its
@@ -34,18 +32,6 @@
   loop_control:
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
-
-# Codex units are keyed by agent profile rather than project, so they need their own
-# pass — without it every codex unit reads as orphaned and prune would delete them all.
-- name: Add the declared codex unit names
-  ansible.builtin.set_fact:
-    declared_units: >-
-      {{ declared_units | default([])
-         + ['codex-app-server-' ~ row.user ~ '-' ~ row.profile ~ '.service'] }}
-  loop: "{{ devbox_codex_units }}"
-  loop_control:
-    loop_var: row
-    label: "{{ row.user }}-{{ row.profile }}"
 
 - name: Determine orphaned services
   ansible.builtin.set_fact:

@@ -213,10 +213,9 @@ developers:
         provider: claude
         # An agent profile may pin its own memory space.
         memory_space: personal
-      # A codex profile also gets its own always-on daemon unit. Codex has no
-      # per-project remote-control server — one app-server per profile serves every
-      # project it opens — so these units are keyed by profile, not by project, and
-      # inherit the ceilings from `remote_control.resources` below.
+      # Codex Desktop owns one transient code-mode host per Linux user. Provisioning
+      # adds resource policy to that unit without starting a competing app-server;
+      # the policy inherits `remote_control.resources` below.
       codex-work:
         provider: codex
     default_agent_profile: claude-work

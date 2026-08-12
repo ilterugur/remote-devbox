@@ -107,7 +107,10 @@ test("a project with no unit contributes nothing to the list", () => {
 /** `resolved`, with agent profiles: one codex login, one claude login. */
 const codexResolved = (): ResolvedSpec => ({
   ...resolved,
-  remote_control: { resources: { memory_high: "8G", memory_max: "12G", oom_policy: "continue" } },
+  // Deliberately state only the ceilings. The code-mode host must still receive the
+  // same safe service defaults as project RC units; reading this raw mapping would
+  // silently drop OOMPolicy=continue and make oomd protection incomplete.
+  remote_control: { resources: { memory_high: "8G", memory_max: "12G" } },
   developers: [
     {
       ...resolved.developers[0]!,
@@ -119,27 +122,30 @@ const codexResolved = (): ResolvedSpec => ({
   ],
 });
 
-test("codex units are keyed by agent profile, not by project, and inherit the RC limits", () => {
+test("codex code-mode hosts inherit resolved RC defaults, not only explicitly stated limits", () => {
   const units = normalize(codexResolved()).devbox_codex_units as Record<string, unknown>[];
   expect(units).toEqual([
     {
       user: "dev-a",
-      profile: "codex-main",
-      codex_home: "/home/dev-a/.agent-profiles/codex-main",
-      resources: { memory_high: "8G", memory_max: "12G", oom_policy: "continue" },
+      resources: {
+        memory_high: "8G",
+        memory_max: "12G",
+        cpu_weight: 80,
+        io_weight: 80,
+        nice: 5,
+        oom_score_adjust: 300,
+        oom_policy: "continue",
+      },
     },
   ]);
 });
 
-test("two codex logins get one unit each, so they never share a control socket", () => {
+test("two codex profiles share one desktop-owned code-mode host policy per Linux user", () => {
   const spec = codexResolved();
   spec.developers[0]!.agent_profiles!["codex-work"] = { provider: "codex" };
   const units = normalize(spec).devbox_codex_units as Record<string, unknown>[];
-  expect(units.map((u) => u.profile)).toEqual(["codex-main", "codex-work"]);
-  expect(units.map((u) => u.codex_home)).toEqual([
-    "/home/dev-a/.agent-profiles/codex-main",
-    "/home/dev-a/.agent-profiles/codex-work",
-  ]);
+  expect(units).toHaveLength(1);
+  expect(units[0]?.user).toBe("dev-a");
 });
 
 test("a developer with no codex profile contributes no codex unit", () => {

@@ -8,7 +8,7 @@
  *     `{}` or `[]` — so no role ever needs a Jinja `| default(...)`, and a missing key
  *     in a template is a real bug rather than a silent policy decision.
  */
-import { assignClientPorts } from "./client-ports";
+import { payloadBasename, resolveEntry } from "../app-configs/registry";
 import {
   assignMcpPorts,
   browserUsers,
@@ -17,7 +17,10 @@ import {
   DEFAULT_FALLBACK_CHROME_PORT,
   DEFAULT_MCP_PORT,
 } from "./browser-ports";
-import { DEFAULT_CLI_TARGETS, SERVICE_RESOURCE_KEYS, SLICE_RESOURCE_KEYS } from "./types";
+import { assignClientPorts } from "./client-ports";
+import { canonicalMemorySize, isMemoryWeight } from "./memory-limit";
+import { rdpLayoutId } from "./rdp-layouts";
+import { defaultDesktopAccess, defaultSshAccess, RC_DEFAULTS } from "./resolve";
 import type {
   ClientFacts,
   GitIdentity,
@@ -28,11 +31,8 @@ import type {
   ResolvedSpec,
   ResourceSpec,
 } from "./types";
-import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
-import { rdpLayoutId } from "./rdp-layouts";
+import { DEFAULT_CLI_TARGETS, SERVICE_RESOURCE_KEYS, SLICE_RESOURCE_KEYS } from "./types";
 import { toYaml } from "./yaml";
-import { payloadBasename, resolveEntry } from "../app-configs/registry";
-import { canonicalMemorySize, isMemoryWeight } from "./memory-limit";
 
 const GENERATED_HEADER = [
   "---",
@@ -200,10 +200,9 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
 }
 
 /**
- * Codex's remote control is a per-PROFILE daemon, not a per-project session host: its
- * CLI takes no name/spawn/capacity, and one daemon serves every project that profile
- * opens. So codex units are keyed by agent profile while Claude's stay keyed by
- * project — the same containment policy, a different unit shape.
+ * Codex Desktop owns one transient code-mode host per Linux user. It is distinct from
+ * the optional official remote-control daemon, and its control socket is Desktop-owned;
+ * provisioning supplies only a persistent resource-policy drop-in for that host.
  *
  * They exist for the reason Remote Control units do: everything a session spawns lands
  * in this cgroup, so it is where a runaway build is contained and what has to carry
@@ -211,22 +210,18 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
  * run by hand on 2026-08-12 sat at the oomd default and was killed with all 25
  * processes in it eighteen times, taking every live session down each time.
  *
- * Limits come from the box-wide `remote_control.resources` because a codex daemon
- * competes for the same host as the Claude units and should be bounded like them; a
- * profile has no resources block of its own to read.
+ * Limits come from the fully resolved box-wide RC resources because the host competes
+ * for the same machine as Claude units and must receive the same safe defaults even
+ * when devbox.yml states only memory ceilings.
  */
 function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
-  const resources = normalizeDirectMemoryResources(resolved.remote_control?.resources ?? {}, true);
-  return resolved.developers.flatMap((dev) =>
-    Object.entries(dev.agent_profiles ?? {})
-      .filter(([, profile]) => profile.provider === "codex")
-      .map(([profile]) => ({
-        user: dev.user,
-        profile,
-        codex_home: `/home/${dev.user}/.agent-profiles/${profile}`,
-        resources,
-      })),
+  const resources = normalizeDirectMemoryResources(
+    { ...RC_DEFAULTS.resources, ...(resolved.remote_control?.resources ?? {}) },
+    true,
   );
+  return resolved.developers
+    .filter((dev) => Object.values(dev.agent_profiles ?? {}).some((profile) => profile.provider === "codex"))
+    .map((dev) => ({ user: dev.user, resources }));
 }
 
 function normalizeDeveloper(

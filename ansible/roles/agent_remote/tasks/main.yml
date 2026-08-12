@@ -75,33 +75,49 @@
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   notify: Reload systemd
 
-- name: Generate a systemd unit per codex agent profile
-  ansible.builtin.template:
-    src: codex-app-server.service.j2
-    dest: "/etc/systemd/system/codex-app-server-{{ row.user }}-{{ row.profile }}.service"
-    owner: root
-    group: root
-    mode: "0644"
+- name: Create the Codex Desktop code-mode host drop-in directory
+  ansible.builtin.file:
+    path: "/home/{{ row.user }}/.config/systemd/user/codex-code-mode-host.service.d"
+    state: directory
+    owner: "{{ row.user }}"
+    group: "{{ row.user }}"
+    mode: "0700"
   loop: "{{ devbox_codex_units }}"
   loop_control:
     loop_var: row
-    label: "{{ row.user }}-{{ row.profile }}"
-  notify: Reload systemd
+    label: "{{ row.user }}"
 
-# The daemon was started by hand before it had a unit — as a `systemd-run` transient
-# scope, or a per-user codex-remote-control.service. Both must be gone before the
-# managed unit starts: two app-servers on one CODEX_HOME fight over the same control
-# socket. Best-effort, since neither exists on a box provisioned from scratch.
-- name: Retire hand-started codex daemons
-  ansible.builtin.command:
-    cmd: "systemctl --user --machine={{ item.0 }}@ {{ item.1 }}"
-  loop: "{{ devbox_codex_units | map(attribute='user') | unique | list
-            | product(['stop codex-code-mode-host.service',
-                       'disable --now codex-remote-control.service']) | list }}"
+- name: Write the Codex Desktop code-mode host resource policy
+  ansible.builtin.template:
+    src: codex-code-mode-host.conf.j2
+    dest: "/home/{{ row.user }}/.config/systemd/user/codex-code-mode-host.service.d/50-remote-devbox.conf"
+    owner: "{{ row.user }}"
+    group: "{{ row.user }}"
+    mode: "0600"
+  loop: "{{ devbox_codex_units }}"
   loop_control:
-    label: "{{ item.0 }}: {{ item.1 }}"
+    loop_var: row
+    label: "{{ row.user }}"
+  register: codex_policy
+
+- name: Reload each Codex developer's user manager after policy changes
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ item.row.user }}@ daemon-reload"
+  loop: "{{ codex_policy.results | default([]) }}"
+  loop_control:
+    label: "{{ item.row.user }}"
+  when: item.changed
+  changed_when: true
+
+- name: Restart a running Codex Desktop code-mode host onto the new policy
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ item.row.user }}@ try-restart codex-code-mode-host.service"
+  loop: "{{ codex_policy.results | default([]) }}"
+  loop_control:
+    label: "{{ item.row.user }}"
+  when: item.changed
+  changed_when: true
   failed_when: false
-  changed_when: false
 
 - name: Generate a boot/recovery resume companion unit per Remote Control server
   ansible.builtin.template:
@@ -182,29 +198,6 @@
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   notify: Reload systemd
-
-- name: Drop ad-hoc set-property overrides on codex units
-  ansible.builtin.file:
-    path: "/etc/systemd/system.control/codex-app-server-{{ row.user }}-{{ row.profile }}.service.d"
-    state: absent
-  loop: "{{ devbox_codex_units }}"
-  loop_control:
-    loop_var: row
-    label: "{{ row.user }}-{{ row.profile }}"
-  notify: Reload systemd
-
-- name: Enable and start each codex app-server
-  ansible.builtin.systemd_service:
-    name: "codex-app-server-{{ row.user }}-{{ row.profile }}.service"
-    enabled: true
-    state: started
-    daemon_reload: true
-  loop: "{{ devbox_codex_units }}"
-  loop_control:
-    loop_var: row
-    label: "{{ row.user }}-{{ row.profile }}"
-  # Like the Remote Control units, this self-heals: without credentials the daemon
-  # exits and StartLimitBurst caps the retries until `sudo remote-devbox-login` runs.
 
 - name: Enable and start each Remote Control service
   ansible.builtin.systemd_service:

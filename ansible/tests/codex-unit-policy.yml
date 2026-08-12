@@ -1,9 +1,9 @@
 ---
-# The codex daemon is the cgroup every codex session and everything it spawns lands in.
-# Started by hand it carried the oomd default, and systemd-oomd killed all 25 processes
-# in it eighteen times in three days — taking every live session down with them. These
-# assertions are that incident written down: the hardening must reach the unit file.
-- name: Verify codex app-server unit rendering
+# Codex Desktop owns a transient `codex-code-mode-host.service` and reconnects through
+# its control socket. Provisioning a second app-server races that owner and fails with
+# "control socket is already in use". The durable contract is therefore a drop-in on
+# the desktop-owned unit: resource policy only, never a competing ExecStart.
+- name: Verify codex code-mode host drop-in rendering
   hosts: localhost
   connection: local
   gather_facts: false
@@ -12,13 +12,8 @@
     ansible_facts:
       getent_passwd:
         dev-a: ["x", "1004"]
-    devbox_remote_control:
-      autorestart: { enabled: true, restart_sec: 10, burst: 10, interval: 600 }
-      resume: { on_boot: false }
     codex_row:
       user: dev-a
-      profile: codex-main
-      codex_home: /home/dev-a/.agent-profiles/codex-main
       resources:
         memory_high: "8G"
         memory_max: "12G"
@@ -38,42 +33,37 @@
             prefix: remote-devbox-codex-unit-policy-
           register: render_dir
 
-        - name: Render the codex unit
+        - name: Render the code-mode host drop-in
           ansible.builtin.template:
-            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-app-server.service.j2"
-            dest: "{{ render_dir.path }}/codex.service"
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-code-mode-host.conf.j2"
+            dest: "{{ render_dir.path }}/50-remote-devbox.conf"
             mode: "0600"
           vars:
             row: "{{ codex_row }}"
 
-        - name: Read the codex unit
+        - name: Read the code-mode host drop-in
           ansible.builtin.slurp:
-            src: "{{ render_dir.path }}/codex.service"
-          register: codex_unit
+            src: "{{ render_dir.path }}/50-remote-devbox.conf"
+          register: codex_dropin
 
         - name: Assert the ceilings and the OOM hardening reach the unit file
           ansible.builtin.assert:
             that:
-              - "'MemoryHigh=8G' in codex_unit.content | b64decode"
-              - "'MemoryMax=12G' in codex_unit.content | b64decode"
-              - "'MemorySwapMax=1G' in codex_unit.content | b64decode"
-              - "'OOMPolicy=continue' in codex_unit.content | b64decode"
-              - "'ManagedOOMPreference=avoid' in codex_unit.content | b64decode"
+              - "'MemoryHigh=8G' in codex_dropin.content | b64decode"
+              - "'MemoryMax=12G' in codex_dropin.content | b64decode"
+              - "'MemorySwapMax=1G' in codex_dropin.content | b64decode"
+              - "'OOMPolicy=continue' in codex_dropin.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in codex_dropin.content | b64decode"
+              - "'TimeoutStopSec=30' in codex_dropin.content | b64decode"
 
-        - name: Assert the profile is isolated and the daemon runs in the foreground
+        - name: Assert provisioning does not compete with the desktop-owned daemon
           ansible.builtin.assert:
             that:
-              # Without CODEX_HOME the unit would drive the default config tree, and two
-              # codex logins would collide on one set of credentials.
-              - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
-              # Type=simple over `remote-control start`: a forking daemon behind
-              # oneshot+RemainAfterExit goes to "failed (oom-kill)" and stays down.
-              - "'Type=simple' in codex_unit.content | b64decode"
-              - "'exec codex app-server --remote-control' in codex_unit.content | b64decode"
-              - "'Restart=on-failure' in codex_unit.content | b64decode"
-              # The developer's slice is the shared ceiling; without it the unit lands
-              # in system.slice where no developer limit reaches it.
-              - "'Slice=user-1004.slice' in codex_unit.content | b64decode"
+              - "'ExecStart=' not in codex_dropin.content | b64decode"
+              - "'Environment=CODEX_HOME' not in codex_dropin.content | b64decode"
+              - "'codex app-server --remote-control' not in codex_dropin.content | b64decode"
+              - "'User=' not in codex_dropin.content | b64decode"
+              - "'Slice=' not in codex_dropin.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:
