@@ -6,10 +6,13 @@
 Description=Managed Codex Desktop code-mode host ({{ row.profile }})
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 Environment=CODEX_HOME={{ row.codex_home }}
+Environment=PATH=/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/{{ row.user }}/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://
 Restart=always
 RestartSec=5

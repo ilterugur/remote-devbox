@@ -106,36 +106,27 @@
     label: "{{ row.user }}"
   changed_when: false
 
-- name: Retire an unmanaged code-mode socket owner before first managed start
+- name: Atomically hand the code-mode socket to the managed service
   ansible.builtin.shell:
     cmd: |
       set -eu
-      if systemctl --user --machine={{ row.user }}@ is-active --quiet codex-code-mode-host.service; then
+      systemctl --user --machine={{ item.row.user }}@ enable codex-code-mode-host.service
+      if systemctl --user --machine={{ item.row.user }}@ is-active --quiet codex-code-mode-host.service; then
+        {% if item.changed %}
+        systemctl --user --machine={{ item.row.user }}@ restart codex-code-mode-host.service
+        {% endif %}
         exit 0
       fi
-      socket={{ row.codex_home }}/app-server-control/app-server-control.sock
+      socket={{ item.row.codex_home }}/app-server-control/app-server-control.sock
       if [ -S "$socket" ]; then
         fuser -k "$socket" || true
-        for ignored in 1 2 3 4 5; do
-          [ ! -S "$socket" ] && exit 0
-          sleep 1
-        done
       fi
+      systemctl --user --machine={{ item.row.user }}@ start codex-code-mode-host.service
   args:
     executable: /bin/bash
-  loop: "{{ devbox_codex_units }}"
+  loop: "{{ codex_service.results | default([]) }}"
   loop_control:
-    loop_var: row
-    label: "{{ row.user }}"
-  changed_when: false
-
-- name: Enable and start each managed Codex Desktop code-mode host
-  ansible.builtin.command:
-    cmd: "systemctl --user --machine={{ row.user }}@ enable --now codex-code-mode-host.service"
-  loop: "{{ devbox_codex_units }}"
-  loop_control:
-    loop_var: row
-    label: "{{ row.user }}"
+    label: "{{ item.row.user }}"
   changed_when: false
 
 - name: Generate a boot/recovery resume companion unit per Remote Control server
