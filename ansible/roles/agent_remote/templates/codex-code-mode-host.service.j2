@@ -1,0 +1,42 @@
+{# Managed by Ansible (remote-devbox). This is the exact code-mode host Codex
+   Desktop otherwise launches as a transient unit. The official Remote Control
+   daemon has a different CODEX_HOME and control socket. #}
+{% set L = row.resources %}
+[Unit]
+Description=Managed Codex Desktop code-mode host ({{ row.profile }})
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=CODEX_HOME={{ row.codex_home }}
+Environment=PATH=/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/{{ row.user }}/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+{% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
+{% endif %}
+{%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
+{% endif %}
+{%- if 'memory_swap_max' in L %}MemorySwapMax={{ L.memory_swap_max }}
+{% endif %}
+{%- if 'cpu_weight' in L %}CPUWeight={{ L.cpu_weight }}
+{% endif %}
+{%- if 'cpu_quota' in L %}CPUQuota={{ L.cpu_quota }}
+{% endif %}
+{%- if 'io_weight' in L %}IOWeight={{ L.io_weight }}
+{% endif %}
+{%- if 'nice' in L %}Nice={{ L.nice }}
+{% endif %}
+{%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
+{% endif %}
+{%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
+{% endif %}
+ManagedOOMPreference=avoid
+
+[Install]
+WantedBy=default.target

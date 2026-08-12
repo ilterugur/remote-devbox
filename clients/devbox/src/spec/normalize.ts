@@ -8,7 +8,7 @@
  *     `{}` or `[]` — so no role ever needs a Jinja `| default(...)`, and a missing key
  *     in a template is a real bug rather than a silent policy decision.
  */
-import { assignClientPorts } from "./client-ports";
+import { payloadBasename, resolveEntry } from "../app-configs/registry";
 import {
   assignMcpPorts,
   browserUsers,
@@ -17,7 +17,10 @@ import {
   DEFAULT_FALLBACK_CHROME_PORT,
   DEFAULT_MCP_PORT,
 } from "./browser-ports";
-import { DEFAULT_CLI_TARGETS, SERVICE_RESOURCE_KEYS, SLICE_RESOURCE_KEYS } from "./types";
+import { assignClientPorts } from "./client-ports";
+import { canonicalMemorySize, isMemoryWeight } from "./memory-limit";
+import { rdpLayoutId } from "./rdp-layouts";
+import { defaultDesktopAccess, defaultSshAccess, RC_DEFAULTS } from "./resolve";
 import type {
   ClientFacts,
   GitIdentity,
@@ -28,11 +31,8 @@ import type {
   ResolvedSpec,
   ResourceSpec,
 } from "./types";
-import { defaultDesktopAccess, defaultSshAccess } from "./resolve";
-import { rdpLayoutId } from "./rdp-layouts";
+import { DEFAULT_CLI_TARGETS, SERVICE_RESOURCE_KEYS, SLICE_RESOURCE_KEYS } from "./types";
 import { toYaml } from "./yaml";
-import { payloadBasename, resolveEntry } from "../app-configs/registry";
-import { canonicalMemorySize, isMemoryWeight } from "./memory-limit";
 
 const GENERATED_HEADER = [
   "---",
@@ -139,6 +139,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     },
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),
+    devbox_codex_units: normalizeCodexUnits(resolved),
     devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client, clientPorts)),
   };
 }
@@ -196,6 +197,35 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
       ];
     }),
   );
+}
+
+/**
+ * Codex Desktop needs one code-mode host per Linux user. It is distinct from the
+ * optional official remote-control daemon. A managed user service pre-owns Desktop's
+ * expected control socket, so Desktop connects instead of creating an unbounded
+ * transient unit (or falling back to an SSH session scope).
+ *
+ * They exist for the reason Remote Control units do: everything a session spawns lands
+ * in this cgroup, so it is where a runaway build is contained and what has to carry
+ * `ManagedOOMPreference=avoid`. A codex daemon started outside Ansible does not: one
+ * run by hand on 2026-08-12 sat at the oomd default and was killed with all 25
+ * processes in it eighteen times, taking every live session down each time.
+ *
+ * Limits come from the fully resolved box-wide RC resources because the host competes
+ * for the same machine as Claude units and must receive the same safe defaults even
+ * when devbox.yml states only memory ceilings.
+ */
+function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
+  const resources = normalizeDirectMemoryResources(
+    { ...RC_DEFAULTS.resources, ...(resolved.remote_control?.resources ?? {}) },
+    true,
+  );
+  return resolved.developers.flatMap((dev) => {
+    const profile = Object.entries(dev.agent_profiles ?? {}).find(([, value]) => value.provider === "codex")?.[0];
+    return profile
+      ? [{ user: dev.user, profile, codex_home: `/home/${dev.user}/.agent-profiles/${profile}`, resources }]
+      : [];
+  });
 }
 
 function normalizeDeveloper(

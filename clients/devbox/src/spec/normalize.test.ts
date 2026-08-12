@@ -104,6 +104,56 @@ test("a project with no unit contributes nothing to the list", () => {
   expect(normalize(resolved).devbox_rc_units).toEqual([]);
 });
 
+/** `resolved`, with agent profiles: one codex login, one claude login. */
+const codexResolved = (): ResolvedSpec => ({
+  ...resolved,
+  // Deliberately state only the ceilings. The code-mode host must still receive the
+  // same safe service defaults as project RC units; reading this raw mapping would
+  // silently drop OOMPolicy=continue and make oomd protection incomplete.
+  remote_control: { resources: { memory_high: "8G", memory_max: "12G" } },
+  developers: [
+    {
+      ...resolved.developers[0]!,
+      agent_profiles: {
+        "codex-main": { provider: "codex" },
+        "claude-main": { provider: "claude" },
+      },
+    },
+  ],
+});
+
+test("codex code-mode hosts inherit resolved RC defaults, not only explicitly stated limits", () => {
+  const units = normalize(codexResolved()).devbox_codex_units as Record<string, unknown>[];
+  expect(units).toEqual([
+    {
+      user: "dev-a",
+      profile: "codex-main",
+      codex_home: "/home/dev-a/.agent-profiles/codex-main",
+      resources: {
+        memory_high: "8G",
+        memory_max: "12G",
+        cpu_weight: 80,
+        io_weight: 80,
+        nice: 5,
+        oom_score_adjust: 300,
+        oom_policy: "continue",
+      },
+    },
+  ]);
+});
+
+test("two codex profiles still produce one code-mode host per Linux user", () => {
+  const spec = codexResolved();
+  spec.developers[0]!.agent_profiles!["codex-work"] = { provider: "codex" };
+  const units = normalize(spec).devbox_codex_units as Record<string, unknown>[];
+  expect(units).toHaveLength(1);
+  expect(units[0]).toMatchObject({ user: "dev-a", profile: "codex-main" });
+});
+
+test("a developer with no codex profile contributes no codex unit", () => {
+  expect(normalize(resolved).devbox_codex_units).toEqual([]);
+});
+
 test("absent optionals become concrete values, never undefined", () => {
   const dev = dev0();
   expect(dev.adopt_existing).toBe(false);

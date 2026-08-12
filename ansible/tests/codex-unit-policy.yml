@@ -1,0 +1,75 @@
+---
+# The managed service runs the exact code-mode command Desktop otherwise launches via
+# systemd-run. Pre-owning the expected socket makes Desktop connect to this bounded host;
+# the official remote-control profile remains a separate service and socket.
+- name: Verify codex code-mode host service rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_facts:
+      getent_passwd:
+        dev-a: ["x", "1004"]
+    codex_row:
+      user: dev-a
+      profile: codex-main
+      codex_home: /home/dev-a/.agent-profiles/codex-main
+      resources:
+        memory_high: "8G"
+        memory_max: "12G"
+        memory_swap_max: "1G"
+        cpu_weight: 80
+        io_weight: 80
+        nice: 5
+        oom_score_adjust: 300
+        oom_policy: continue
+
+  tasks:
+    - name: Render and assert
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-codex-unit-policy-
+          register: render_dir
+
+        - name: Render the code-mode host service
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-code-mode-host.service.j2"
+            dest: "{{ render_dir.path }}/codex-code-mode-host.service"
+            mode: "0600"
+          vars:
+            row: "{{ codex_row }}"
+
+        - name: Read the code-mode host service
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/codex-code-mode-host.service"
+          register: codex_unit
+
+        - name: Assert the ceilings and the OOM hardening reach the unit file
+          ansible.builtin.assert:
+            that:
+              - "'MemoryHigh=8G' in codex_unit.content | b64decode"
+              - "'MemoryMax=12G' in codex_unit.content | b64decode"
+              - "'MemorySwapMax=1G' in codex_unit.content | b64decode"
+              - "'OOMPolicy=continue' in codex_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in codex_unit.content | b64decode"
+              - "'TimeoutStopSec=30' in codex_unit.content | b64decode"
+
+        - name: Assert the service owns Desktop's code-mode socket, not official RC
+          ansible.builtin.assert:
+            that:
+              - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
+              - "'Environment=PATH=/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_unit.content | b64decode"
+              - "'ExecStart=/home/dev-a/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://' in codex_unit.content | b64decode"
+              - "'app-server --remote-control' not in codex_unit.content | b64decode"
+              - "'Restart=always' in codex_unit.content | b64decode"
+              - "'StartLimitIntervalSec=60' in codex_unit.content | b64decode"
+              - "'StartLimitBurst=5' in codex_unit.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

@@ -126,7 +126,7 @@ export function resolveMemorySpace(
  * belongs here for the same reason: it decides what happens when a ceiling is crossed, not
  * where the ceiling sits.
  */
-const RC_DEFAULTS = {
+export const RC_DEFAULTS = {
   spawn: "worktree" as RcSpawn,
   capacity: 4,
   resources: {
