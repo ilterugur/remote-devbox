@@ -12,6 +12,7 @@
     - agent-rc-monitor        # self-heal: blocking liveness monitor (Type=simple)
     - agent-rc-resume         # boot/recovery orchestrator
     - agent-rc-resume-exec    # per-session resume launcher (file-based prompts)
+    - codex-host-reconcile    # fail-closed managed host adoption without session kills
 
 - name: Deploy the resume scanner (python, deterministic — no LLM/network)
   ansible.builtin.copy:
@@ -106,24 +107,13 @@
     label: "{{ row.user }}"
   changed_when: false
 
-- name: Atomically hand the code-mode socket to the managed service
-  ansible.builtin.shell:
-    cmd: |
-      set -eu
-      systemctl --user --machine={{ item.row.user }}@ enable codex-code-mode-host.service
-      if systemctl --user --machine={{ item.row.user }}@ is-active --quiet codex-code-mode-host.service; then
-        {% if item.changed %}
-        systemctl --user --machine={{ item.row.user }}@ restart codex-code-mode-host.service
-        {% endif %}
-        exit 0
-      fi
-      socket={{ item.row.codex_home }}/app-server-control/app-server-control.sock
-      if [ -S "$socket" ]; then
-        fuser -k "$socket" || true
-      fi
-      systemctl --user --machine={{ item.row.user }}@ start codex-code-mode-host.service
-  args:
-    executable: /bin/bash
+- name: Reconcile the managed Codex host without interrupting live sessions
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/codex-host-reconcile
+      - "{{ item.row.user }}"
+      - "{{ item.row.codex_home }}/app-server-control/app-server-control.sock"
+      - "{{ item.changed | bool | ternary('true', 'false') }}"
   loop: "{{ codex_service.results | default([]) }}"
   loop_control:
     label: "{{ item.row.user }}"

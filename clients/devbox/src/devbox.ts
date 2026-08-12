@@ -45,7 +45,8 @@ import { runSyncUp, runSyncDown, runSyncStatus, runSyncPause } from "./sync";
 import { runConfigLink, runConfigStatus, runConfigUnlink } from "./app-configs/run";
 import { runEditors } from "./editors";
 import { runUi } from "./ui";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { formatIssues, hasErrors } from "./spec/issues";
 import { loadSpec, secretsPathFor, writeGeneratedVars } from "./spec/load";
@@ -57,6 +58,21 @@ import { renderPlan } from "./spec/plan";
 import { describePhases, tagsFor } from "./spec/phases";
 import { runDoctor } from "./health";
 import { runRecover } from "./recovery";
+import { applyLockFiles, runWithApplyLocks } from "./apply-lock";
+
+const LOCKED_APPLY_SCRIPT = `set -eu
+staging=$1
+generated=$2
+marker=$3
+shift 3
+: > "$marker"
+mkdir -p "$generated"
+install -m 0644 "$staging/ansible/.generated/all.yml" "$generated/all.yml.next.$$"
+install -m 0600 "$staging/ansible/.generated/secrets.yml" "$generated/secrets.yml.next.$$"
+mv -f "$generated/all.yml.next.$$" "$generated/all.yml"
+mv -f "$generated/secrets.yml.next.$$" "$generated/secrets.yml"
+rm -rf "$staging/ansible"
+exec "$@"`;
 
 function newHelp(prof: string) {
   const lines = [
@@ -412,6 +428,19 @@ cli
     const path = resolvePath(opts.config);
     const root = dirname(path);
 
+    let tags: string[] | null;
+    try {
+      tags = tagsFor(phase);
+    } catch (e) {
+      return die((e as Error).message);
+    }
+
+    const inventory = resolvePath(opts.inventory);
+    const args = ["-i", inventory, "playbook.yml"];
+    if (tags) args.push("--tags", tags.join(","));
+    if (opts.check) args.push("--check", "--diff");
+    const cwd = join(root, "ansible");
+
     // Apply always re-derives the vars first. A playbook run against a stale
     // .generated/all.yml is the one failure mode that looks like it worked.
     const spec = loadSpec(path);
@@ -424,39 +453,58 @@ cli
     if (issues.length) process.stderr.write(`${formatIssues(issues)}\n\n`);
     if (!spec.resolved || hasErrors(issues)) die("apply refused — fix the errors above");
 
-    writeGeneratedVars(spec.resolved, root, { keyboard: detectClientKeyboard() });
-    writeGeneratedSecrets(secrets, root);
-
-    let tags: string[] | null;
-    try {
-      tags = tagsFor(phase);
-    } catch (e) {
-      return die((e as Error).message);
-    }
-
-    const args = ["-i", resolvePath(opts.inventory), "playbook.yml"];
-    if (tags) args.push("--tags", tags.join(","));
-    if (opts.check) args.push("--check", "--diff");
-
-    const cwd = join(root, "ansible");
     if (process.env.DEVBOX_DRYRUN) {
       return void process.stdout.write(JSON.stringify(["ansible-playbook", ...args, `(cwd ${cwd})`]) + "\n");
     }
+
+    let lockFiles: string[];
+    try {
+      lockFiles = applyLockFiles(inventory, root);
+    } catch (error) {
+      return die((error as Error).message);
+    }
+    // Normalize into a private staging tree. Shared generated inputs are only
+    // replaced by the command that already owns every workspace/host lock.
+    const staging = mkdtempSync(join(tmpdir(), "devbox-apply-stage-"));
+    writeGeneratedVars(spec.resolved, staging, { keyboard: detectClientKeyboard() });
+    writeGeneratedSecrets(secrets, staging);
+    const acquiredMarker = join(staging, "lock-acquired");
     console.log(`devbox: ${phase ?? "all"} -> ansible-playbook ${args.join(" ")}\n`);
-    // Ansible refuses to run against non-blocking stdio, which is what inheriting a
-    // pipe (CI, a wrapper script, an agent harness) hands it. Only inherit on a real
-    // terminal; otherwise capture and relay, losing live progress but not the run.
     const piped = !process.stdout.isTTY;
-    const r = spawnSync("ansible-playbook", args, {
-      cwd,
-      stdio: piped ? ["ignore", "pipe", "pipe"] : "inherit",
-      encoding: piped ? "utf8" : undefined,
-      maxBuffer: 64 * 1024 * 1024,
-      env: childProcessEnv(),
-    });
+    const { r, lockAcquired } = (() => {
+      try {
+        const r = runWithApplyLocks(lockFiles, {
+          command: "/bin/sh",
+          args: [
+            "-c",
+            LOCKED_APPLY_SCRIPT,
+            "devbox-apply-locked",
+            staging,
+            join(root, "ansible", ".generated"),
+            acquiredMarker,
+            "ansible-playbook",
+            ...args,
+          ],
+          options: {
+            cwd,
+            stdio: piped ? ["ignore", "pipe", "pipe"] : "inherit",
+            encoding: piped ? "utf8" : undefined,
+            maxBuffer: 64 * 1024 * 1024,
+            env: childProcessEnv(),
+          },
+        });
+        return { r, lockAcquired: existsSync(acquiredMarker) };
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
+      }
+    })();
     if (piped) {
       if (r.stdout) process.stdout.write(r.stdout);
       if (r.stderr) process.stderr.write(r.stderr);
+    }
+    if (r.error) return die(`could not run locked apply: ${r.error.message}`);
+    if (r.status === 75 && !lockAcquired) {
+      return die("apply already running for this workspace or target host");
     }
     process.exit(r.status ?? 0);
   });
