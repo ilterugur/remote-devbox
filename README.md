@@ -18,6 +18,11 @@ Nothing is implied by anything else: the agent driving a project does not decide
 account the commit is attributed to, and two agent profiles of the same person can share
 one memory or keep separate ones.
 
+Codex Desktop's managed code-mode host aggregates every Codex project for one developer.
+When its measured peak needs more headroom than a single Remote Control server, set
+`developers[].codex_host_resources`; it overrides only that developer's host and leaves
+the per-project `remote_control.resources` limits unchanged.
+
 Developers cannot read each other's homes, secrets, git keys, container sockets or even
 each other's process command lines, and none of them can escalate to root.
 

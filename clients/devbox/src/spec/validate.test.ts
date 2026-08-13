@@ -415,6 +415,21 @@ test("remote_control.resources reuses the systemd size rules", () => {
   expect(paths(spec)).toContain("error:remote_control.resources.memory_high");
 });
 
+test("developers[].codex_host_resources reuses the service resource rules", () => {
+  const spec = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        codex_host_resources: { memory_high: "lots", oom_policy: "restart" },
+      },
+    ],
+  };
+  expect(paths(spec)).toContain("error:developers[0].codex_host_resources.memory_high");
+  expect(paths(spec)).toContain("error:developers[0].codex_host_resources.oom_policy");
+});
+
 test("memory sizes accept systemd units, B aliases and bounded percentages", () => {
   for (const value of ["32G", "32GB", "20%", "1%", "100%", ""]) {
     expect(

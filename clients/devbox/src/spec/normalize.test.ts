@@ -142,6 +142,38 @@ test("codex code-mode hosts inherit resolved RC defaults, not only explicitly st
   ]);
 });
 
+test("codex host resources override only the code-mode host ceilings", () => {
+  const spec = codexResolved();
+  spec.remote_control = { resources: { memory_high: "8G", memory_max: "12G", memory_swap_max: "1G" } };
+  spec.developers[0]!.codex_host_resources = { memory_high: "12GB", memory_max: "16GB" };
+
+  const codexUnits = normalize(spec).devbox_codex_units as Record<string, unknown>[];
+  expect(codexUnits[0]?.resources).toEqual({
+    memory_high: "12G",
+    memory_max: "16G",
+    memory_swap_max: "1G",
+    cpu_weight: 80,
+    io_weight: 80,
+    nice: 5,
+    oom_score_adjust: 300,
+    oom_policy: "continue",
+  });
+
+  const projectSpec = rcResolved();
+  projectSpec.remote_control = spec.remote_control;
+  projectSpec.developers[0]!.projects[0]!.remote_control!.resources = {
+    memory_high: "8G",
+    memory_max: "12G",
+    memory_swap_max: "1G",
+  };
+  const rcUnits = normalize(projectSpec).devbox_rc_units as Record<string, unknown>[];
+  expect(rcUnits[0]?.resources).toMatchObject({
+    memory_high: "8G",
+    memory_max: "12G",
+    memory_swap_max: "1G",
+  });
+});
+
 test("two codex profiles still produce one code-mode host per Linux user", () => {
   const spec = codexResolved();
   spec.developers[0]!.agent_profiles!["codex-work"] = { provider: "codex" };

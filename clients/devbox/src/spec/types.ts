@@ -363,6 +363,9 @@ export interface DeveloperSpec {
   adopt_existing?: boolean;
   login_ssh_keys: string[];
   resources?: ResourceSpec;
+  /** Resource overrides for this developer's Codex Desktop code-mode host. The host
+   * aggregates every Codex project, so it may need more headroom than one RC unit. */
+  codex_host_resources?: RcResourceSpec;
   container_engine?: EngineId;
   git_identities?: Record<string, GitIdentity>;
   default_git_identity?: string;

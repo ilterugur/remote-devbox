@@ -387,6 +387,7 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   }
 
   validateResources(d.resources, `${base}.resources`, issues, { allowMemoryHighWeight: true });
+  validateResources(d.codex_host_resources, `${base}.codex_host_resources`, issues, { allowServiceKnobs: true });
   if (d.browser !== undefined && typeof d.browser !== "boolean") {
     issues.push(err(`${base}.browser`, "must be true or false"));
   }

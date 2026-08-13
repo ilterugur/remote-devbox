@@ -211,17 +211,22 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
  * run by hand on 2026-08-12 sat at the oomd default and was killed with all 25
  * processes in it eighteen times, taking every live session down each time.
  *
- * Limits come from the fully resolved box-wide RC resources because the host competes
- * for the same machine as Claude units and must receive the same safe defaults even
- * when devbox.yml states only memory ceilings.
+ * Limits start from the fully resolved box-wide RC resources because the host competes
+ * for the same machine as Claude units. Per-developer `codex_host_resources` can then
+ * add headroom without widening every project Remote Control unit: unlike one RC unit,
+ * this host aggregates every Codex project for the Linux user.
  */
 function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
-  const resources = normalizeDirectMemoryResources(
-    { ...RC_DEFAULTS.resources, ...(resolved.remote_control?.resources ?? {}) },
-    true,
-  );
   return resolved.developers.flatMap((dev) => {
     const profile = Object.entries(dev.agent_profiles ?? {}).find(([, value]) => value.provider === "codex")?.[0];
+    const resources = normalizeDirectMemoryResources(
+      {
+        ...RC_DEFAULTS.resources,
+        ...(resolved.remote_control?.resources ?? {}),
+        ...(dev.codex_host_resources ?? {}),
+      },
+      true,
+    );
     return profile
       ? [{ user: dev.user, profile, codex_home: `/home/${dev.user}/.agent-profiles/${profile}`, resources }]
       : [];
