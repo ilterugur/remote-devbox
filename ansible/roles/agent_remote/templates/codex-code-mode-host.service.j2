@@ -12,7 +12,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 Environment=CODEX_HOME={{ row.codex_home }}
-Environment=PATH={% if row.heavy_job_gate_enabled %}/usr/local/lib/agent-devbox/heavy-command-gate:{% endif %}/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH={% if row.heavy_job_gate_enabled | default(true) %}/usr/local/lib/agent-devbox/heavy-command-gate:{% endif %}/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/{{ row.user }}/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://
 Restart=always
 RestartSec=5

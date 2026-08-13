@@ -23,7 +23,7 @@ fi
 
 # All agents owned by this developer share one heavy build/typecheck/generate/test
 # slot. Keep this after mise activation so the gate stays ahead of mise's shims.
-{% if item.heavy_job_gate_enabled %}
+{% if item.heavy_job_gate_enabled | default(true) %}
 export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"
 {% endif %}
 

@@ -9,7 +9,6 @@
       name: codex-main
       provider: codex
       user: dev-a
-      heavy_job_gate_enabled: true
     devbox_agent_adapters:
       codex:
         config_env: CODEX_HOME

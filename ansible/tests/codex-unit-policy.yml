@@ -15,7 +15,6 @@
       user: dev-a
       profile: codex-main
       codex_home: /home/dev-a/.agent-profiles/codex-main
-      heavy_job_gate_enabled: true
       resources:
         memory_high: "8G"
         memory_max: "12G"
