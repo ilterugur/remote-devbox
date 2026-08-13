@@ -61,7 +61,7 @@
           ansible.builtin.assert:
             that:
               - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
-              - "'Environment=PATH=/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_unit.content | b64decode"
+              - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_unit.content | b64decode"
               - "'ExecStart=/home/dev-a/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://' in codex_unit.content | b64decode"
               - "'app-server --remote-control' not in codex_unit.content | b64decode"
               - "'Restart=always' in codex_unit.content | b64decode"

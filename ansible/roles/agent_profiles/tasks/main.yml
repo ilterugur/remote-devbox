@@ -9,6 +9,7 @@
 - name: Flatten the declared agent profiles
   ansible.builtin.set_fact:
     _devbox_agent_profiles: "{{ _raw__devbox_agent_profiles | from_json }}"
+  tags: [heavy_gate]
   vars:
     _raw__devbox_agent_profiles: >-
       {%- set out = [] -%}
@@ -22,6 +23,82 @@
         {%- endfor -%}
       {%- endfor -%}
       {{ out | to_json }}
+
+- name: Install the shared heavy-command gate
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-heavy-command.sh"
+    dest: /usr/local/bin/devbox-heavy-command
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [heavy_gate]
+
+- name: Create the heavy-command PATH shim directory
+  ansible.builtin.file:
+    path: /usr/local/lib/agent-devbox/heavy-command-gate
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [heavy_gate]
+
+- name: Inspect heavy-command shim paths before linking
+  ansible.builtin.stat:
+    path: "/usr/local/lib/agent-devbox/heavy-command-gate/{{ item }}"
+    follow: false
+  loop:
+    - bun
+    - bunx
+    - node
+    - npm
+    - npx
+    - pnpm
+    - prisma
+    - tsc
+    - turbo
+    - next
+    - yarn
+  register: heavy_command_shims
+  tags: [heavy_gate]
+
+- name: Refuse to replace a foreign heavy-command shim
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.stat.exists or
+        (item.stat.islnk and
+         item.stat.lnk_source == '/usr/local/bin/devbox-heavy-command')
+    fail_msg: >-
+      Refusing to replace foreign path
+      /usr/local/lib/agent-devbox/heavy-command-gate/{{ item.item }}.
+  loop: "{{ heavy_command_shims.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [heavy_gate]
+
+- name: Route memory-heavy toolchain commands through the shared gate
+  ansible.builtin.file:
+    src: /usr/local/bin/devbox-heavy-command
+    dest: "/usr/local/lib/agent-devbox/heavy-command-gate/{{ item }}"
+    state: link
+    owner: root
+    group: root
+    # The preceding copy is intentionally not materialized by --check. Allow a
+    # dangling link only in that dry-run; the stat/assert above still blocks collisions.
+    force: "{{ ansible_check_mode }}"
+  loop:
+    - bun
+    - bunx
+    - node
+    - npm
+    - npx
+    - pnpm
+    - prisma
+    - tsc
+    - turbo
+    - next
+    - yarn
+  tags: [heavy_gate]
 
 - name: Reject a profile whose provider has no adapter
   ansible.builtin.assert:
@@ -103,6 +180,7 @@
   loop: "{{ _devbox_agent_profiles }}"
   loop_control:
     label: "{{ item.user }}/{{ item.name }}"
+  tags: [heavy_gate]
 
 - name: Pre-accept Claude's first-run dialogs so headless launches don't block
   # An untrusted workspace or the first-run Remote Control prompt makes a non-interactive

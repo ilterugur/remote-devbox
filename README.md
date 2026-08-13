@@ -23,6 +23,11 @@ When its measured peak needs more headroom than a single Remote Control server, 
 `developers[].codex_host_resources`; it overrides only that developer's host and leaves
 the per-project `remote_control.resources` limits unchanged.
 
+Every agent owned by the same developer also shares one kernel-backed heavy-command
+slot. Build, typecheck, generate and test commands queue instead of running in parallel;
+lightweight toolchain commands remain concurrent. The gate is stale-lock safe because
+the kernel releases its `flock` descriptor when the owning process exits.
+
 Developers cannot read each other's homes, secrets, git keys, container sockets or even
 each other's process command lines, and none of them can escalate to root.
 

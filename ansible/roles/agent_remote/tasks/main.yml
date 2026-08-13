@@ -97,6 +97,7 @@
     loop_var: row
     label: "{{ row.user }}"
   register: codex_service
+  tags: [heavy_gate]
 
 - name: Reload each Codex developer's user manager
   ansible.builtin.command:
@@ -106,6 +107,7 @@
     loop_var: row
     label: "{{ row.user }}"
   changed_when: false
+  tags: [heavy_gate]
 
 - name: Reconcile the managed Codex host without interrupting live sessions
   ansible.builtin.command:
@@ -118,6 +120,7 @@
   loop_control:
     label: "{{ item.row.user }}"
   changed_when: false
+  tags: [heavy_gate]
 
 - name: Generate a boot/recovery resume companion unit per Remote Control server
   ansible.builtin.template:

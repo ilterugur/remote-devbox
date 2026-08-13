@@ -21,4 +21,8 @@ if command -v mise >/dev/null 2>&1; then
   eval "$(mise activate bash --shims 2>/dev/null || true)"
 fi
 
+# All agents owned by this developer share one heavy build/typecheck/generate/test
+# slot. Keep this after mise activation so the gate stays ahead of mise's shims.
+export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"
+
 exec "{{ '/home/' ~ item.user ~ '/' ~ devbox_agent_adapters[item.provider].bin_path }}" "$@"

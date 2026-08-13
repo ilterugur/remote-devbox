@@ -1,0 +1,51 @@
+---
+- name: Verify every agent profile inherits the shared heavy-command gate
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    item:
+      name: codex-main
+      provider: codex
+      user: dev-a
+    devbox_agent_adapters:
+      codex:
+        config_env: CODEX_HOME
+        bin_path: .local/bin/codex
+
+  tasks:
+    - name: Render and assert
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-heavy-command-gate-policy-
+          register: render_dir
+
+        - name: Render the agent wrapper
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_profiles/templates/agent-wrapper.sh.j2"
+            dest: "{{ render_dir.path }}/agent-wrapper"
+            mode: "0755"
+
+        - name: Read the agent wrapper
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/agent-wrapper"
+          register: agent_wrapper
+
+        - name: Assert the gate wins after mise modifies PATH
+          ansible.builtin.assert:
+            that:
+              - >-
+                'export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"'
+                in agent_wrapper.content | b64decode
+              - >-
+                (agent_wrapper.content | b64decode).rfind('mise activate bash --shims')
+                < (agent_wrapper.content | b64decode).rfind('heavy-command-gate:$PATH')
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined
