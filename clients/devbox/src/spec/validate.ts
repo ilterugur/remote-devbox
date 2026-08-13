@@ -409,8 +409,30 @@ function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): vo
     issues.push(err(path, "must be a mapping"));
     return;
   }
-  if (typeof value.enabled !== "boolean") {
+  const allowedFields = new Set(["enabled", "categories", "wait_timeout_sec", "warn_after_sec"]);
+  for (const key of Object.keys(value)) {
+    if (!allowedFields.has(key)) issues.push(err(`${path}.${key}`, "unknown heavy-job gate field"));
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
     issues.push(err(`${path}.enabled`, "must be true or false"));
+  }
+  const categories = value.categories;
+  if (categories !== undefined) {
+    if (!isRecord(categories)) {
+      issues.push(err(`${path}.categories`, "must be a mapping"));
+    } else {
+      const allowed = new Set(["build", "typecheck", "generate", "test"]);
+      for (const [category, enabled] of Object.entries(categories)) {
+        if (!allowed.has(category)) issues.push(err(`${path}.categories.${category}`, "is not a known heavy-job category"));
+        else if (typeof enabled !== "boolean") issues.push(err(`${path}.categories.${category}`, "must be true or false"));
+      }
+    }
+  }
+  for (const key of ["wait_timeout_sec", "warn_after_sec"] as const) {
+    const setting = value[key];
+    if (setting !== undefined && !(typeof setting === "number" && Number.isInteger(setting) && setting >= 0)) {
+      issues.push(err(`${path}.${key}`, "must be a non-negative integer"));
+    }
   }
 }
 

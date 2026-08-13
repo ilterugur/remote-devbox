@@ -88,5 +88,5 @@ test("the plan shows each developer's effective heavy job gate", () => {
 
   const text = renderPlan(spec, []);
   expect(text).toMatch(/developer dev-a[\s\S]*?heavy jobs  off/);
-  expect(text).toMatch(/developer dev-b[\s\S]*?heavy jobs  on/);
+  expect(text).toMatch(/developer dev-b[\s\S]*?heavy jobs  on · build,typecheck,generate,test · timeout 1800s · warn 5s/);
 });

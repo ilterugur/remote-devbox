@@ -15,6 +15,9 @@
       user: dev-a
       profile: codex-main
       codex_home: /home/dev-a/.agent-profiles/codex-main
+      heavy_job_gate_categories: [build, typecheck, generate, test]
+      heavy_job_gate_wait_timeout_sec: 1800
+      heavy_job_gate_warn_after_sec: 5
       resources:
         memory_high: "8G"
         memory_max: "12G"
@@ -62,6 +65,9 @@
             that:
               - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
               - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in codex_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=1800' in codex_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=5' in codex_unit.content | b64decode"
               - "'ExecStart=/home/dev-a/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://' in codex_unit.content | b64decode"
               - "'app-server --remote-control' not in codex_unit.content | b64decode"
               - "'Restart=always' in codex_unit.content | b64decode"

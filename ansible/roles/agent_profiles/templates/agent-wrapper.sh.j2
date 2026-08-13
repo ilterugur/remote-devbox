@@ -25,6 +25,9 @@ fi
 # slot. Keep this after mise activation so the gate stays ahead of mise's shims.
 {% if item.heavy_job_gate_enabled | default(true) %}
 export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"
+export DEVBOX_HEAVY_JOB_CATEGORIES="{{ item.heavy_job_gate_categories | default(['build', 'typecheck', 'generate', 'test']) | join(',') }}"
+export DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC="{{ item.heavy_job_gate_wait_timeout_sec | default(1800) }}"
+export DEVBOX_HEAVY_JOB_WARN_AFTER_SEC="{{ item.heavy_job_gate_warn_after_sec | default(5) }}"
 {% endif %}
 
 exec "{{ '/home/' ~ item.user ~ '/' ~ devbox_agent_adapters[item.provider].bin_path }}" "$@"

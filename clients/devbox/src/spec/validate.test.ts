@@ -93,6 +93,34 @@ test("heavy_job_gate toggles accept only enabled booleans", () => {
   ).toContain("error:developers[0].heavy_job_gate.enabled");
 });
 
+test("heavy_job_gate accepts bounded categories and wait controls", () => {
+  expect(
+    paths({
+      ...minimal(),
+      host: {
+        heavy_job_gate: {
+          enabled: true,
+          categories: { build: true, typecheck: true, generate: false, test: false },
+          wait_timeout_sec: 1800,
+          warn_after_sec: 5,
+        },
+      },
+    }),
+  ).toEqual([]);
+  expect(paths({ ...minimal(), host: { heavy_job_gate: { enabled: true, categories: { deploy: true } } } })).toContain(
+    "error:host.heavy_job_gate.categories.deploy",
+  );
+  expect(paths({ ...minimal(), host: { heavy_job_gate: { enabled: true, wait_timeout_sec: -1 } } })).toContain(
+    "error:host.heavy_job_gate.wait_timeout_sec",
+  );
+  expect(paths({ ...minimal(), host: { heavy_job_gate: { enabled: true, warn_after_sec: 1.5 } } })).toContain(
+    "error:host.heavy_job_gate.warn_after_sec",
+  );
+  expect(paths({ ...minimal(), host: { heavy_job_gate: { wait_timout_sec: 10 } } })).toContain(
+    "error:host.heavy_job_gate.wait_timout_sec",
+  );
+});
+
 test("default_engine must be installed", () => {
   expect(
     paths({ ...minimal(), container: { default_engine: "docker-rootless", install_engines: ["podman-rootless"] } }),

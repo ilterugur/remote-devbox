@@ -26,9 +26,16 @@ host:
   # Weight-mode arithmetic subtracts this from physical RAM before dividing the pool.
   # It does not enforce an OS/systemd/cgroup reservation by itself.
   memory_reserve: 4G
-  # Serialize build/typecheck/generate/test commands per Linux developer. Defaults true.
+  # Serialize selected heavy command families per Linux developer.
   heavy_job_gate:
     enabled: true
+    categories:
+      build: true
+      typecheck: true
+      generate: true
+      test: true
+    wait_timeout_sec: 1800 # 0 waits forever; timeout exits the queued command with status 75.
+    warn_after_sec: 5     # 0 reports queuing immediately.
   swap_size: 8G
   zram:
     enabled: true
@@ -218,7 +225,9 @@ developers:
 
     # Optional per-developer override of host.heavy_job_gate.
     # heavy_job_gate:
-    #   enabled: false
+    #   categories:
+    #     test: false
+    #   wait_timeout_sec: 900
 
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:

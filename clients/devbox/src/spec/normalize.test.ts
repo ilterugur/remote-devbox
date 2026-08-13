@@ -130,6 +130,9 @@ test("codex code-mode hosts inherit resolved RC defaults, not only explicitly st
       profile: "codex-main",
       codex_home: "/home/dev-a/.agent-profiles/codex-main",
       heavy_job_gate_enabled: true,
+      heavy_job_gate_categories: ["build", "typecheck", "generate", "test"],
+      heavy_job_gate_wait_timeout_sec: 1800,
+      heavy_job_gate_warn_after_sec: 5,
       resources: {
         memory_high: "8G",
         memory_max: "12G",
@@ -246,18 +249,73 @@ test("host memory reserve is emitted in canonical systemd form", () => {
 
 test("heavy job gate defaults on and supports global and developer overrides", () => {
   const defaulted = normalize(resolved);
-  expect((defaulted.devbox_host as any).heavy_job_gate).toEqual({ enabled: true });
-  expect((defaulted.devbox_developers as any[])[0].heavy_job_gate).toEqual({ enabled: true });
+  expect((defaulted.devbox_host as any).heavy_job_gate).toEqual({
+    enabled: true,
+    categories: { build: true, typecheck: true, generate: true, test: true },
+    wait_timeout_sec: 1800,
+    warn_after_sec: 5,
+  });
+  expect((defaulted.devbox_developers as any[])[0].heavy_job_gate).toEqual(
+    (defaulted.devbox_host as any).heavy_job_gate,
+  );
 
   const globallyOff = normalize({ ...resolved, host: { heavy_job_gate: { enabled: false } } } as ResolvedSpec);
-  expect((globallyOff.devbox_developers as any[])[0].heavy_job_gate).toEqual({ enabled: false });
+  expect((globallyOff.devbox_developers as any[])[0].heavy_job_gate).toEqual({
+    enabled: false,
+    categories: { build: true, typecheck: true, generate: true, test: true },
+    wait_timeout_sec: 1800,
+    warn_after_sec: 5,
+  });
 
   const overridden = normalize({
     ...resolved,
     host: { heavy_job_gate: { enabled: false } },
     developers: [{ ...resolved.developers[0]!, heavy_job_gate: { enabled: true } }],
   } as ResolvedSpec);
-  expect((overridden.devbox_developers as any[])[0].heavy_job_gate).toEqual({ enabled: true });
+  expect((overridden.devbox_developers as any[])[0].heavy_job_gate).toEqual({
+    enabled: true,
+    categories: { build: true, typecheck: true, generate: true, test: true },
+    wait_timeout_sec: 1800,
+    warn_after_sec: 5,
+  });
+});
+
+test("all heavy job categories can be disabled without falling back to defaults", () => {
+  const out = normalize({
+    ...codexResolved(),
+    host: {
+      heavy_job_gate: {
+        categories: { build: false, typecheck: false, generate: false, test: false },
+      },
+    },
+  } as ResolvedSpec);
+  expect((out.devbox_codex_units as any[])[0].heavy_job_gate_categories).toEqual([]);
+});
+
+test("developer heavy job settings merge over host settings field by field", () => {
+  const out = normalize({
+    ...resolved,
+    host: {
+      heavy_job_gate: {
+        enabled: true,
+        categories: { test: false },
+        wait_timeout_sec: 900,
+        warn_after_sec: 10,
+      },
+    },
+    developers: [{
+      ...resolved.developers[0]!,
+      heavy_job_gate: { categories: { test: true, generate: false }, warn_after_sec: 2 },
+    }],
+  } as ResolvedSpec);
+  const gate = (out.devbox_developers as any[])[0].heavy_job_gate;
+  expect(gate).toEqual({
+    enabled: true,
+    categories: { build: true, typecheck: true, generate: false, test: true },
+    wait_timeout_sec: 900,
+    warn_after_sec: 2,
+  });
+  expect((out.devbox_codex_units as any[])).toEqual([]);
 });
 
 test("host.oomd is always emitted, fully defaulted", () => {

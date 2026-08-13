@@ -11,9 +11,10 @@ import { assignClientPorts } from "./client-ports";
 import { formatMemoryLimit, isMemoryWeight } from "./memory-limit";
 import { resolveEntry } from "../app-configs/registry";
 import { DEFAULT_CLI_TARGETS } from "./types";
-import type { ClientFacts, ResolvedDeveloper, ResolvedSpec } from "./types";
+import type { ClientFacts, HeavyJobGateSpec, ResolvedDeveloper, ResolvedSpec } from "./types";
 
 const LABEL_WIDTH = 12;
+const HEAVY_JOB_CATEGORIES = ["build", "typecheck", "generate", "test"] as const;
 
 const row = (label: string, value: string, indent = ""): string =>
   `${indent}${label.padEnd(LABEL_WIDTH)}${value}`;
@@ -75,7 +76,7 @@ export function renderPlan(
         resolved.network.tailscale.enabled,
         client,
         clientPorts.get(dev.user),
-        resolved.host?.heavy_job_gate?.enabled ?? true,
+        resolved.host?.heavy_job_gate,
       ),
     );
   }
@@ -94,13 +95,23 @@ function developerLines(
   tailscale: boolean,
   client: ClientFacts,
   clientPort?: number,
-  hostHeavyJobGateEnabled = true,
+  hostHeavyJobGate: HeavyJobGateSpec = {},
 ): string[] {
   const lines = [`developer ${dev.user}${dev.adopt_existing ? "  (adopt existing account)" : ""}`];
   const indent = "  ";
 
   lines.push(row("login keys", String(dev.login_ssh_keys.length), indent));
-  lines.push(row("heavy jobs", (dev.heavy_job_gate?.enabled ?? hostHeavyJobGateEnabled) ? "on" : "off", indent));
+  const gateEnabled = dev.heavy_job_gate?.enabled ?? hostHeavyJobGate?.enabled ?? true;
+  if (gateEnabled) {
+    const categories = HEAVY_JOB_CATEGORIES.filter(
+      (category) => dev.heavy_job_gate?.categories?.[category] ?? hostHeavyJobGate?.categories?.[category] ?? true,
+    );
+    const wait = dev.heavy_job_gate?.wait_timeout_sec ?? hostHeavyJobGate?.wait_timeout_sec ?? 1800;
+    const warn = dev.heavy_job_gate?.warn_after_sec ?? hostHeavyJobGate?.warn_after_sec ?? 5;
+    lines.push(row("heavy jobs", `on · ${categories.join(",")} · timeout ${wait}s · warn ${warn}s`, indent));
+  } else {
+    lines.push(row("heavy jobs", "off", indent));
+  }
 
   const memoryHigh = dev.resources?.memory_high;
   const limits = [

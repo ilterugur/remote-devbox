@@ -27,21 +27,30 @@ Every agent owned by the same developer also shares one kernel-backed heavy-comm
 slot. Build, typecheck, generate and test commands queue instead of running in parallel;
 lightweight toolchain commands remain concurrent. The gate is stale-lock safe because
 the kernel releases its `flock` descriptor when the owning process exits. It defaults
-on, can be disabled box-wide with `host.heavy_job_gate.enabled: false`, and can be
-overridden for one Linux account with `developers[].heavy_job_gate.enabled`. A changed
-toggle applies to newly launched agent processes. Claude profile launchers pick it up on
-the next launch; an already-running managed Codex code-mode host needs an explicit
-service restart before its inherited PATH changes.
+on and can be overridden field-by-field for one Linux account. `categories` controls
+which command families use the slot, `wait_timeout_sec: 0` waits forever (the default is
+1800 seconds), and `warn_after_sec: 0` reports queuing immediately (the default is 5
+seconds). Changed settings apply to newly launched agent processes. Claude profile
+launchers pick them up on the next launch; an already-running managed Codex code-mode
+host needs an explicit service restart before its inherited environment changes.
 
 ```yaml
 host:
   heavy_job_gate:
     enabled: true
+    categories:
+      build: true
+      typecheck: true
+      generate: true
+      test: true
+    wait_timeout_sec: 1800
+    warn_after_sec: 5
 
 developers:
   - user: dev-a
     heavy_job_gate:
-      enabled: false # this developer may run heavy jobs concurrently
+      categories:
+        test: false # tests may run concurrently; other categories inherit host settings
 ```
 
 Developers cannot read each other's homes, secrets, git keys, container sockets or even

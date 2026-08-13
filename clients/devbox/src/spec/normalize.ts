@@ -24,6 +24,7 @@ import { defaultDesktopAccess, defaultSshAccess, RC_DEFAULTS } from "./resolve";
 import type {
   ClientFacts,
   GitIdentity,
+  HeavyJobGateSpec,
   MemoryInstance,
   MemorySpace,
   ResolvedDeveloper,
@@ -43,10 +44,36 @@ const GENERATED_HEADER = [
 
 /** No client facts is the honest default: detection is best-effort and may find nothing. */
 const NO_CLIENT_FACTS: ClientFacts = { keyboard: null };
+const HEAVY_JOB_CATEGORIES = ["build", "typecheck", "generate", "test"] as const;
+
+type NormalizedHeavyJobGate = {
+  enabled: boolean;
+  categories: Record<(typeof HEAVY_JOB_CATEGORIES)[number], boolean>;
+  wait_timeout_sec: number;
+  warn_after_sec: number;
+};
+
+function normalizeHeavyJobGate(
+  host: HeavyJobGateSpec | undefined,
+  developer?: HeavyJobGateSpec,
+): NormalizedHeavyJobGate {
+  const categories = Object.fromEntries(
+    HEAVY_JOB_CATEGORIES.map((category) => [
+      category,
+      developer?.categories?.[category] ?? host?.categories?.[category] ?? true,
+    ]),
+  ) as NormalizedHeavyJobGate["categories"];
+  return {
+    enabled: developer?.enabled ?? host?.enabled ?? true,
+    categories,
+    wait_timeout_sec: developer?.wait_timeout_sec ?? host?.wait_timeout_sec ?? 1800,
+    warn_after_sec: developer?.warn_after_sec ?? host?.warn_after_sec ?? 5,
+  };
+}
 
 export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIENT_FACTS): Record<string, unknown> {
   const tailscale = resolved.network.tailscale.enabled;
-  const heavyJobGateEnabled = resolved.host?.heavy_job_gate?.enabled ?? true;
+  const hostHeavyJobGate = normalizeHeavyJobGate(resolved.host?.heavy_job_gate);
   const memoryHighWeightTotal = resolved.developers.reduce((total, developer) => {
     const memoryHigh = developer.resources?.memory_high;
     return total + (isMemoryWeight(memoryHigh) ? memoryHigh.weight : 0);
@@ -85,7 +112,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       github_cli: resolved.host?.github_cli ?? true,
       umask: resolved.host?.umask ?? "077",
       swappiness: resolved.host?.swappiness ?? null,
-      heavy_job_gate: { enabled: heavyJobGateEnabled },
+      heavy_job_gate: hostHeavyJobGate,
       oomd: {
         enabled: resolved.host?.oomd?.enabled ?? true,
         memory_pressure_limit: resolved.host?.oomd?.memory_pressure_limit ?? "60%",
@@ -141,9 +168,9 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     },
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),
-    devbox_codex_units: normalizeCodexUnits(resolved, heavyJobGateEnabled),
+    devbox_codex_units: normalizeCodexUnits(resolved, hostHeavyJobGate),
     devbox_developers: resolved.developers.map((dev) =>
-      normalizeDeveloper(dev, tailscale, client, clientPorts, heavyJobGateEnabled),
+      normalizeDeveloper(dev, tailscale, client, clientPorts, hostHeavyJobGate),
     ),
   };
 }
@@ -220,7 +247,7 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
  * add headroom without widening every project Remote Control unit: unlike one RC unit,
  * this host aggregates every Codex project for the Linux user.
  */
-function normalizeCodexUnits(resolved: ResolvedSpec, hostHeavyJobGateEnabled: boolean): Record<string, unknown>[] {
+function normalizeCodexUnits(resolved: ResolvedSpec, hostHeavyJobGate: NormalizedHeavyJobGate): Record<string, unknown>[] {
   return resolved.developers.flatMap((dev) => {
     const profile = Object.entries(dev.agent_profiles ?? {}).find(([, value]) => value.provider === "codex")?.[0];
     const resources = normalizeDirectMemoryResources(
@@ -231,12 +258,17 @@ function normalizeCodexUnits(resolved: ResolvedSpec, hostHeavyJobGateEnabled: bo
       },
       true,
     );
+    const heavyJobGate = normalizeHeavyJobGate(hostHeavyJobGate, dev.heavy_job_gate);
+    const enabledCategories = HEAVY_JOB_CATEGORIES.filter((category) => heavyJobGate.categories[category]);
     return profile
       ? [{
           user: dev.user,
           profile,
           codex_home: `/home/${dev.user}/.agent-profiles/${profile}`,
-          heavy_job_gate_enabled: dev.heavy_job_gate?.enabled ?? hostHeavyJobGateEnabled,
+          heavy_job_gate_enabled: heavyJobGate.enabled,
+          heavy_job_gate_categories: enabledCategories,
+          heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
+          heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
           resources,
         }]
       : [];
@@ -248,7 +280,7 @@ function normalizeDeveloper(
   tailscale: boolean,
   client: ClientFacts,
   clientPorts: Map<string, number>,
-  hostHeavyJobGateEnabled: boolean,
+  hostHeavyJobGate: NormalizedHeavyJobGate,
 ): Record<string, unknown> {
   const memoryHigh = dev.resources?.memory_high;
   const { memory_high: _memoryHigh, ...directResources } = normalizeDirectMemoryResources(dev.resources ?? {});
@@ -264,7 +296,7 @@ function normalizeDeveloper(
           ? { memory_high_weight: memoryHigh.weight }
           : {}),
     },
-    heavy_job_gate: { enabled: dev.heavy_job_gate?.enabled ?? hostHeavyJobGateEnabled },
+    heavy_job_gate: normalizeHeavyJobGate(hostHeavyJobGate, dev.heavy_job_gate),
     container_engine: dev.container_engine ?? null,
     git_identities: mapValues(dev.git_identities, normalizeIdentity),
     default_git_identity: dev.default_git_identity ?? null,

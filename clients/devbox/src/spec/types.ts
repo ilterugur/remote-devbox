@@ -41,8 +41,15 @@ export interface OomdSpec {
 }
 
 export interface HeavyJobGateSpec {
-  enabled: boolean;
+  enabled?: boolean;
+  categories?: Partial<Record<HeavyJobCategory, boolean>>;
+  /** Zero waits forever; positive values fail the queued command after this many seconds. */
+  wait_timeout_sec?: number;
+  /** Zero logs immediately; positive values log only after this many seconds in queue. */
+  warn_after_sec?: number;
 }
+
+export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";
 
 /** Host tuning that is not part of the developer model. */
 export interface HostSpec {

@@ -39,19 +39,24 @@ process_start_time() {
   printf '%s\n' "${20}"
 }
 
+category_enabled() {
+  [[ ",${DEVBOX_HEAVY_JOB_CATEGORIES-build,typecheck,generate,test}," == *",$1,"* ]]
+}
+
 is_heavy_token() {
   case "$1" in
-    build | build:* | *:build | *:build:* | \
-      typecheck | typecheck:* | *:typecheck | *:typecheck:* | \
-      generate | generate:* | *:generate | *:generate:* | \
-      test | test:* | *:test | *:test:*) return 0 ;;
+    build | build:* | *:build | *:build:*) category_enabled build ;;
+    typecheck | typecheck:* | *:typecheck | *:typecheck:*) category_enabled typecheck ;;
+    generate | generate:* | *:generate | *:generate:*) category_enabled generate ;;
+    test | test:* | *:test | *:test:*) category_enabled test ;;
     *) return 1 ;;
   esac
 }
 
 is_heavy_path() {
   case "${1##*/}" in
-    generate-declarations.ts | typecheck-partitions.ts | tsc | tsc.js) return 0 ;;
+    generate-declarations.ts) category_enabled generate ;;
+    typecheck-partitions.ts | tsc | tsc.js) category_enabled typecheck ;;
     *) return 1 ;;
   esac
 }
@@ -60,7 +65,7 @@ is_heavy_command() {
   local arg
   case "$command_name" in
     tsc)
-      return 0
+      category_enabled typecheck
       ;;
     bun | npm | pnpm | yarn)
       for arg in "$@"; do
@@ -71,7 +76,9 @@ is_heavy_command() {
     bunx | npx)
       for arg in "$@"; do
         case "${arg##*/}" in
-          tsc | turbo | next | prisma) return 0 ;;
+          tsc) category_enabled typecheck && return 0 ;;
+          turbo | next) category_enabled build && return 0 ;;
+          prisma) category_enabled generate && return 0 ;;
         esac
         is_heavy_token "$arg" && return 0
         is_heavy_path "$arg" && return 0
@@ -80,8 +87,9 @@ is_heavy_command() {
     node)
       for arg in "$@"; do
         case "$arg" in
-          */typescript/bin/tsc | */typescript/lib/tsc.js | */next/dist/bin/next | \
-            */turbo/bin/turbo | */prisma/build/index.js) return 0 ;;
+          */typescript/bin/tsc | */typescript/lib/tsc.js) category_enabled typecheck && return 0 ;;
+          */next/dist/bin/next | */turbo/bin/turbo) category_enabled build && return 0 ;;
+          */prisma/build/index.js) category_enabled generate && return 0 ;;
         esac
         is_heavy_path "$arg" && return 0
       done
@@ -92,10 +100,10 @@ is_heavy_command() {
       done
       ;;
     next)
-      [[ " ${*} " == *" build "* ]] && return 0
+      category_enabled build && [[ " ${*} " == *" build "* ]] && return 0
       ;;
     prisma)
-      [[ " ${*} " == *" generate "* ]] && return 0
+      category_enabled generate && [[ " ${*} " == *" generate "* ]] && return 0
       ;;
   esac
   return 1
@@ -162,22 +170,45 @@ shopt -u varredir_close 2>/dev/null || true
 exec {slot_fd}>>"$lock_path"
 
 if ! /usr/bin/flock -n "$slot_fd"; then
-  echo "devbox: waiting for the shared heavy-job slot ($command_name $*)" >&2
+  wait_timeout=${DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC:-1800}
+  warn_after=${DEVBOX_HEAVY_JOB_WARN_AFTER_SEC:-5}
   waiter_pid=
+  warning_pid=
+  stop_warning() {
+    [[ -n "$warning_pid" ]] || return 0
+    kill -TERM "$warning_pid" 2>/dev/null || true
+    wait "$warning_pid" 2>/dev/null || true
+    warning_pid=
+  }
   stop_waiter() {
     [[ -z "$waiter_pid" ]] || kill -TERM "$waiter_pid" 2>/dev/null || true
+    stop_warning
     exit 143
   }
   trap stop_waiter HUP INT TERM
-  /usr/bin/flock "$slot_fd" &
+  if (( warn_after == 0 )); then
+    echo "devbox: waiting for the shared heavy-job slot ($command_name $*)" >&2
+  else
+    (sleep "$warn_after"; echo "devbox: waiting for the shared heavy-job slot ($command_name $*)" >&2) &
+    warning_pid=$!
+  fi
+  if (( wait_timeout == 0 )); then
+    /usr/bin/flock "$slot_fd" &
+  else
+    /usr/bin/flock -w "$wait_timeout" "$slot_fd" &
+  fi
   waiter_pid=$!
   set +e
   wait "$waiter_pid"
   wait_status=$?
   set -e
   waiter_pid=
+  stop_warning
   trap - HUP INT TERM
-  [[ $wait_status -eq 0 ]] || exit "$wait_status"
+  if [[ $wait_status -ne 0 ]]; then
+    echo "devbox: timed out waiting for the shared heavy-job slot after ${wait_timeout}s ($command_name $*)" >&2
+    exit 75
+  fi
   echo "devbox: acquired the shared heavy-job slot" >&2
 fi
 

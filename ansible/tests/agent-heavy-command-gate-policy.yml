@@ -9,6 +9,9 @@
       name: codex-main
       provider: codex
       user: dev-a
+      heavy_job_gate_categories: [build, typecheck, generate, test]
+      heavy_job_gate_wait_timeout_sec: 1800
+      heavy_job_gate_warn_after_sec: 5
     devbox_agent_adapters:
       codex:
         config_env: CODEX_HOME
@@ -43,6 +46,9 @@
               - >-
                 (agent_wrapper.content | b64decode).rfind('mise activate bash --shims')
                 < (agent_wrapper.content | b64decode).rfind('heavy-command-gate:$PATH')
+              - "'DEVBOX_HEAVY_JOB_CATEGORIES=\"build,typecheck,generate,test\"' in agent_wrapper.content | b64decode"
+              - "'DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=\"1800\"' in agent_wrapper.content | b64decode"
+              - "'DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=\"5\"' in agent_wrapper.content | b64decode"
 
         - name: Render the agent wrapper with the gate disabled
           ansible.builtin.template:

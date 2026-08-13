@@ -50,7 +50,7 @@ if [[ " $* " == *" build:nested "* ]]; then
     bun ./scripts/generate-declarations.ts
   )
 else
-  sleep 0.35
+  sleep "${DEVBOX_GATE_TEST_SLEEP:-0.35}"
 fi
 
 flock 8
@@ -74,6 +74,7 @@ reset_counter() {
 }
 
 reset_counter
+export DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=0
 bun run build >"$tmp/heavy-a.out" 2>"$tmp/heavy-a.err" &
 heavy_a=$!
 node node_modules/typescript/bin/tsc >"$tmp/heavy-b.out" 2>"$tmp/heavy-b.err" &
@@ -83,6 +84,48 @@ wait "$heavy_b"
 [[ $(cat "$tmp/maximum") == 1 ]] || fail "heavy commands overlapped"
 grep -q "waiting for the shared heavy-job slot" "$tmp/heavy-a.err" "$tmp/heavy-b.err" \
   || fail "queued command did not explain why it was waiting"
+
+reset_counter
+export DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate
+bun run test &
+category_a=$!
+bun run test &
+category_b=$!
+wait "$category_a"
+wait "$category_b"
+[[ $(cat "$tmp/maximum") == 2 ]] || fail "disabled test category was serialized"
+unset DEVBOX_HEAVY_JOB_CATEGORIES
+
+reset_counter
+export DEVBOX_HEAVY_JOB_CATEGORIES=
+bun run build &
+empty_categories_a=$!
+bun run build &
+empty_categories_b=$!
+wait "$empty_categories_a"
+wait "$empty_categories_b"
+[[ $(cat "$tmp/maximum") == 2 ]] || fail "an explicitly empty category set fell back to all categories"
+unset DEVBOX_HEAVY_JOB_CATEGORIES
+
+reset_counter
+export DEVBOX_GATE_TEST_SLEEP=2
+bun run build &
+timeout_holder=$!
+for _ in $(seq 1 50); do
+  [[ $(cat "$tmp/active") == 1 ]] && break
+  sleep 0.02
+done
+[[ $(cat "$tmp/active") == 1 ]] || fail "timeout holder did not acquire the slot"
+set +e
+DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=1 DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=0 \
+  bun run build >"$tmp/timeout.out" 2>"$tmp/timeout.err"
+timeout_status=$?
+set -e
+[[ $timeout_status -eq 75 ]] || fail "wait timeout did not exit 75 (got $timeout_status)"
+grep -q "timed out waiting for the shared heavy-job slot" "$tmp/timeout.err" \
+  || fail "wait timeout did not explain the failure"
+wait "$timeout_holder"
+unset DEVBOX_GATE_TEST_SLEEP
 
 reset_counter
 bun --version &
