@@ -26,6 +26,9 @@ host:
   # Weight-mode arithmetic subtracts this from physical RAM before dividing the pool.
   # It does not enforce an OS/systemd/cgroup reservation by itself.
   memory_reserve: 4G
+  # Serialize build/typecheck/generate/test commands per Linux developer. Defaults true.
+  heavy_job_gate:
+    enabled: true
   swap_size: 8G
   zram:
     enabled: true
@@ -212,6 +215,10 @@ developers:
     # default, a project that doesn't pick one is a validation ERROR (which is
     # what stops a silent push from the wrong account).
     default_git_identity: work
+
+    # Optional per-developer override of host.heavy_job_gate.
+    # heavy_job_gate:
+    #   enabled: false
 
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:

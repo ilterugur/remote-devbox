@@ -15,6 +15,7 @@
       user: dev-a
       profile: codex-main
       codex_home: /home/dev-a/.agent-profiles/codex-main
+      heavy_job_gate_enabled: true
       resources:
         memory_high: "8G"
         memory_max: "12G"
@@ -67,6 +68,24 @@
               - "'Restart=always' in codex_unit.content | b64decode"
               - "'StartLimitIntervalSec=60' in codex_unit.content | b64decode"
               - "'StartLimitBurst=5' in codex_unit.content | b64decode"
+
+        - name: Render the code-mode host with the gate disabled
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-code-mode-host.service.j2"
+            dest: "{{ render_dir.path }}/codex-code-mode-host-disabled.service"
+            mode: "0600"
+          vars:
+            row: "{{ codex_row | combine({'heavy_job_gate_enabled': false}) }}"
+
+        - name: Read the disabled code-mode host
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/codex-code-mode-host-disabled.service"
+          register: disabled_codex_unit
+
+        - name: Assert a disabled code-mode host bypasses the gate
+          ansible.builtin.assert:
+            that:
+              - "'heavy-command-gate' not in disabled_codex_unit.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

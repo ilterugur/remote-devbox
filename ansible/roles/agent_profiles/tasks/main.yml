@@ -19,6 +19,7 @@
                 'user': dev.user,
                 'name': name,
                 'provider': profile.provider,
+                'heavy_job_gate_enabled': dev.heavy_job_gate.enabled,
                 'is_default': name == dev.default_agent_profile}) or '' -}}
         {%- endfor -%}
       {%- endfor -%}

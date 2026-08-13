@@ -40,6 +40,10 @@ export interface OomdSpec {
   memory_pressure_duration_sec?: number;
 }
 
+export interface HeavyJobGateSpec {
+  enabled: boolean;
+}
+
 /** Host tuning that is not part of the developer model. */
 export interface HostSpec {
   swap_size?: string;
@@ -56,6 +60,8 @@ export interface HostSpec {
   umask?: string;
   /** Left at the kernel default when unset. */
   swappiness?: number;
+  /** Serialize memory-heavy agent commands per Linux developer. Defaults on. */
+  heavy_job_gate?: HeavyJobGateSpec;
 }
 
 export interface NetworkSpec {
@@ -366,6 +372,8 @@ export interface DeveloperSpec {
   /** Resource overrides for this developer's Codex Desktop code-mode host. The host
    * aggregates every Codex project, so it may need more headroom than one RC unit. */
   codex_host_resources?: RcResourceSpec;
+  /** Overrides host.heavy_job_gate for this Linux developer. */
+  heavy_job_gate?: HeavyJobGateSpec;
   container_engine?: EngineId;
   git_identities?: Record<string, GitIdentity>;
   default_git_identity?: string;

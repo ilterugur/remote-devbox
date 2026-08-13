@@ -79,3 +79,14 @@ test("the plan distinguishes a proportional memory_high weight from a direct lim
   expect(renderPlan(withMemoryHigh({ weight: 5 }), [])).toContain("memory_high weight 5");
   expect(renderPlan(withMemoryHigh("32GB"), [])).toContain("memory_high 32G");
 });
+
+test("the plan shows each developer's effective heavy job gate", () => {
+  const { resolved } = loadSpec(EXAMPLE_CONFIG);
+  const spec = resolved!;
+  spec.host = { ...spec.host, heavy_job_gate: { enabled: false } };
+  spec.developers[1]!.heavy_job_gate = { enabled: true };
+
+  const text = renderPlan(spec, []);
+  expect(text).toMatch(/developer dev-a[\s\S]*?heavy jobs  off/);
+  expect(text).toMatch(/developer dev-b[\s\S]*?heavy jobs  on/);
+});

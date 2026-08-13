@@ -9,6 +9,7 @@
       name: codex-main
       provider: codex
       user: dev-a
+      heavy_job_gate_enabled: true
     devbox_agent_adapters:
       codex:
         config_env: CODEX_HOME
@@ -43,6 +44,28 @@
               - >-
                 (agent_wrapper.content | b64decode).rfind('mise activate bash --shims')
                 < (agent_wrapper.content | b64decode).rfind('heavy-command-gate:$PATH')
+
+        - name: Render the agent wrapper with the gate disabled
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_profiles/templates/agent-wrapper.sh.j2"
+            dest: "{{ render_dir.path }}/agent-wrapper-disabled"
+            mode: "0755"
+          vars:
+            item:
+              name: codex-main
+              provider: codex
+              user: dev-a
+              heavy_job_gate_enabled: false
+
+        - name: Read the disabled agent wrapper
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/agent-wrapper-disabled"
+          register: disabled_agent_wrapper
+
+        - name: Assert a disabled profile bypasses the gate
+          ansible.builtin.assert:
+            that:
+              - "'heavy-command-gate' not in disabled_agent_wrapper.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

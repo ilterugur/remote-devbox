@@ -129,6 +129,7 @@ test("codex code-mode hosts inherit resolved RC defaults, not only explicitly st
       user: "dev-a",
       profile: "codex-main",
       codex_home: "/home/dev-a/.agent-profiles/codex-main",
+      heavy_job_gate_enabled: true,
       resources: {
         memory_high: "8G",
         memory_max: "12G",
@@ -241,6 +242,22 @@ test("declared resources survive normalization", () => {
 test("host memory reserve is emitted in canonical systemd form", () => {
   const out = normalize({ ...resolved, host: { memory_reserve: "4GB" } });
   expect(out.devbox_host).toMatchObject({ memory_reserve: "4G" });
+});
+
+test("heavy job gate defaults on and supports global and developer overrides", () => {
+  const defaulted = normalize(resolved);
+  expect((defaulted.devbox_host as any).heavy_job_gate).toEqual({ enabled: true });
+  expect((defaulted.devbox_developers as any[])[0].heavy_job_gate).toEqual({ enabled: true });
+
+  const globallyOff = normalize({ ...resolved, host: { heavy_job_gate: { enabled: false } } } as ResolvedSpec);
+  expect((globallyOff.devbox_developers as any[])[0].heavy_job_gate).toEqual({ enabled: false });
+
+  const overridden = normalize({
+    ...resolved,
+    host: { heavy_job_gate: { enabled: false } },
+    developers: [{ ...resolved.developers[0]!, heavy_job_gate: { enabled: true } }],
+  } as ResolvedSpec);
+  expect((overridden.devbox_developers as any[])[0].heavy_job_gate).toEqual({ enabled: true });
 });
 
 test("host.oomd is always emitted, fully defaulted", () => {

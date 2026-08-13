@@ -26,7 +26,23 @@ the per-project `remote_control.resources` limits unchanged.
 Every agent owned by the same developer also shares one kernel-backed heavy-command
 slot. Build, typecheck, generate and test commands queue instead of running in parallel;
 lightweight toolchain commands remain concurrent. The gate is stale-lock safe because
-the kernel releases its `flock` descriptor when the owning process exits.
+the kernel releases its `flock` descriptor when the owning process exits. It defaults
+on, can be disabled box-wide with `host.heavy_job_gate.enabled: false`, and can be
+overridden for one Linux account with `developers[].heavy_job_gate.enabled`. A changed
+toggle applies to newly launched agent processes. Claude profile launchers pick it up on
+the next launch; an already-running managed Codex code-mode host needs an explicit
+service restart before its inherited PATH changes.
+
+```yaml
+host:
+  heavy_job_gate:
+    enabled: true
+
+developers:
+  - user: dev-a
+    heavy_job_gate:
+      enabled: false # this developer may run heavy jobs concurrently
+```
 
 Developers cannot read each other's homes, secrets, git keys, container sockets or even
 each other's process command lines, and none of them can escalate to root.

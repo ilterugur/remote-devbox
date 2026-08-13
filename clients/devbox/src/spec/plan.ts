@@ -68,7 +68,16 @@ export function renderPlan(
   );
 
   for (const dev of resolved.developers) {
-    lines.push("", ...developerLines(dev, resolved.network.tailscale.enabled, client, clientPorts.get(dev.user)));
+    lines.push(
+      "",
+      ...developerLines(
+        dev,
+        resolved.network.tailscale.enabled,
+        client,
+        clientPorts.get(dev.user),
+        resolved.host?.heavy_job_gate?.enabled ?? true,
+      ),
+    );
   }
 
   const errors = issues.filter((i) => i.severity === "error").length;
@@ -85,11 +94,13 @@ function developerLines(
   tailscale: boolean,
   client: ClientFacts,
   clientPort?: number,
+  hostHeavyJobGateEnabled = true,
 ): string[] {
   const lines = [`developer ${dev.user}${dev.adopt_existing ? "  (adopt existing account)" : ""}`];
   const indent = "  ";
 
   lines.push(row("login keys", String(dev.login_ssh_keys.length), indent));
+  lines.push(row("heavy jobs", (dev.heavy_job_gate?.enabled ?? hostHeavyJobGateEnabled) ? "on" : "off", indent));
 
   const memoryHigh = dev.resources?.memory_high;
   const limits = [

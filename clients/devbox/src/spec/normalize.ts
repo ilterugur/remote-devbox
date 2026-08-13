@@ -46,6 +46,7 @@ const NO_CLIENT_FACTS: ClientFacts = { keyboard: null };
 
 export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIENT_FACTS): Record<string, unknown> {
   const tailscale = resolved.network.tailscale.enabled;
+  const heavyJobGateEnabled = resolved.host?.heavy_job_gate?.enabled ?? true;
   const memoryHighWeightTotal = resolved.developers.reduce((total, developer) => {
     const memoryHigh = developer.resources?.memory_high;
     return total + (isMemoryWeight(memoryHigh) ? memoryHigh.weight : 0);
@@ -84,6 +85,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       github_cli: resolved.host?.github_cli ?? true,
       umask: resolved.host?.umask ?? "077",
       swappiness: resolved.host?.swappiness ?? null,
+      heavy_job_gate: { enabled: heavyJobGateEnabled },
       oomd: {
         enabled: resolved.host?.oomd?.enabled ?? true,
         memory_pressure_limit: resolved.host?.oomd?.memory_pressure_limit ?? "60%",
@@ -139,8 +141,10 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     },
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),
-    devbox_codex_units: normalizeCodexUnits(resolved),
-    devbox_developers: resolved.developers.map((dev) => normalizeDeveloper(dev, tailscale, client, clientPorts)),
+    devbox_codex_units: normalizeCodexUnits(resolved, heavyJobGateEnabled),
+    devbox_developers: resolved.developers.map((dev) =>
+      normalizeDeveloper(dev, tailscale, client, clientPorts, heavyJobGateEnabled),
+    ),
   };
 }
 
@@ -216,7 +220,7 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
  * add headroom without widening every project Remote Control unit: unlike one RC unit,
  * this host aggregates every Codex project for the Linux user.
  */
-function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
+function normalizeCodexUnits(resolved: ResolvedSpec, hostHeavyJobGateEnabled: boolean): Record<string, unknown>[] {
   return resolved.developers.flatMap((dev) => {
     const profile = Object.entries(dev.agent_profiles ?? {}).find(([, value]) => value.provider === "codex")?.[0];
     const resources = normalizeDirectMemoryResources(
@@ -228,7 +232,13 @@ function normalizeCodexUnits(resolved: ResolvedSpec): Record<string, unknown>[] 
       true,
     );
     return profile
-      ? [{ user: dev.user, profile, codex_home: `/home/${dev.user}/.agent-profiles/${profile}`, resources }]
+      ? [{
+          user: dev.user,
+          profile,
+          codex_home: `/home/${dev.user}/.agent-profiles/${profile}`,
+          heavy_job_gate_enabled: dev.heavy_job_gate?.enabled ?? hostHeavyJobGateEnabled,
+          resources,
+        }]
       : [];
   });
 }
@@ -238,6 +248,7 @@ function normalizeDeveloper(
   tailscale: boolean,
   client: ClientFacts,
   clientPorts: Map<string, number>,
+  hostHeavyJobGateEnabled: boolean,
 ): Record<string, unknown> {
   const memoryHigh = dev.resources?.memory_high;
   const { memory_high: _memoryHigh, ...directResources } = normalizeDirectMemoryResources(dev.resources ?? {});
@@ -253,6 +264,7 @@ function normalizeDeveloper(
           ? { memory_high_weight: memoryHigh.weight }
           : {}),
     },
+    heavy_job_gate: { enabled: dev.heavy_job_gate?.enabled ?? hostHeavyJobGateEnabled },
     container_engine: dev.container_engine ?? null,
     git_identities: mapValues(dev.git_identities, normalizeIdentity),
     default_git_identity: dev.default_git_identity ?? null,

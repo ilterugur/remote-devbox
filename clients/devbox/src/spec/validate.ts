@@ -179,6 +179,7 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   if (h.locales !== undefined && !(Array.isArray(h.locales) && h.locales.every(isNonEmptyString))) {
     issues.push(err("host.locales", "must be a list of locale names"));
   }
+  validateHeavyJobGate(h.heavy_job_gate, "host.heavy_job_gate", issues);
   const z = h.zram;
   if (z !== undefined) {
     if (!isRecord(z)) {
@@ -388,6 +389,7 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
 
   validateResources(d.resources, `${base}.resources`, issues, { allowMemoryHighWeight: true });
   validateResources(d.codex_host_resources, `${base}.codex_host_resources`, issues, { allowServiceKnobs: true });
+  validateHeavyJobGate(d.heavy_job_gate, `${base}.heavy_job_gate`, issues);
   if (d.browser !== undefined && typeof d.browser !== "boolean") {
     issues.push(err(`${base}.browser`, "must be true or false"));
   }
@@ -399,6 +401,17 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   validateFileBridge(d.file_bridge, `${base}.file_bridge`, issues);
   validateAppConfigs(d, base, issues);
   validateProjects(d.projects, `${base}.projects`, issues);
+}
+
+function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push(err(path, "must be a mapping"));
+    return;
+  }
+  if (typeof value.enabled !== "boolean") {
+    issues.push(err(`${path}.enabled`, "must be true or false"));
+  }
 }
 
 function validateAppConfigs(d: Record<string, unknown>, base: string, issues: Issue[]): void {

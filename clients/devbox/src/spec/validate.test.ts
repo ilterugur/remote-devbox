@@ -80,6 +80,19 @@ test("a public-only sshd without tailscale is fine", () => {
   ).toEqual([]);
 });
 
+test("heavy_job_gate toggles accept only enabled booleans", () => {
+  expect(paths({ ...minimal(), host: { heavy_job_gate: { enabled: false } } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { heavy_job_gate: { enabled: "no" } } })).toContain(
+    "error:host.heavy_job_gate.enabled",
+  );
+  expect(
+    paths({
+      ...minimal(),
+      developers: [{ user: "dev-a", login_ssh_keys: [KEY], heavy_job_gate: { enabled: "yes" } }],
+    }),
+  ).toContain("error:developers[0].heavy_job_gate.enabled");
+});
+
 test("default_engine must be installed", () => {
   expect(
     paths({ ...minimal(), container: { default_engine: "docker-rootless", install_engines: ["podman-rootless"] } }),
