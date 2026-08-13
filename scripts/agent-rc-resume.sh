@@ -33,9 +33,9 @@ MAX_ATTEMPTS="${RC_RESUME_MAX_ATTEMPTS:-3}"
 MIN_FREE_MB="${RC_RESUME_MIN_FREE_MB:-1200}"
 SETTLE_MAX_SEC="${RC_RESUME_SETTLE_MAX_SEC:-180}"
 
-SCAN="/usr/local/bin/agent-rc-resume-scan"
-EXEC="/usr/local/bin/agent-rc-resume-exec"
-SYSFILE="/usr/local/share/agent-devbox/agent-rc-resume-sys.txt"
+SCAN="${AGENT_RC_SCAN:-/usr/local/bin/agent-rc-resume-scan}"
+EXEC="${AGENT_RC_EXEC:-/usr/local/bin/agent-rc-resume-exec}"
+SYSFILE="${AGENT_RC_SYSFILE:-/usr/local/share/agent-devbox/agent-rc-resume-sys.txt}"
 RUNDIR="${HOME}/.cache/agent-devbox/resume"
 STATE="${RUNDIR}/attempts.json"
 BRIDGE_MAP="${RUNDIR}/bridge-map-${ID}.json"
@@ -52,9 +52,8 @@ export PATH="${HOME}/.local/bin:${PATH}"
 command -v mise >/dev/null 2>&1 && eval "$(mise activate bash --shims)" || true
 PYBIN="$(command -v python3 || echo python3)"
 AGENT="${CLAUDE_RC_AGENT:-claude}"
-ADAPTER="/usr/local/share/agent-devbox/adapters/${AGENT}.sh"
+ADAPTER="${AGENT_RC_ADAPTER_DIR:-/usr/local/share/agent-devbox/adapters}/${AGENT}.sh"
 [ -r "${ADAPTER}" ] && . "${ADAPTER}" || { log "adapter ${ADAPTER} missing"; exit 0; }
-RESUME_PAT="$(adapter_resume_pgrep_pattern '')"
 
 # Wait for the RC tmux session to be ready (the service may still be registering).
 for _ in $(seq 1 60); do
@@ -170,6 +169,7 @@ PY
 )"
 
 launched=0
+batch_launched=0
 warned=0
 while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
   [ -z "${uuid:-}" ] && continue
@@ -210,6 +210,7 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
   tmux -L "${SOCKET}" new-window -t "${SOCKET}:" -n "${win}" \
     "${EXEC}" "${uuid}" "${perm}" "${worktree}" "${namefile}" "${noticefile}" "${SYSFILE}" "${bridgefile}"
   launched=$((launched + 1))
+  batch_launched=$((batch_launched + 1))
   # Say which path the launcher will take, where it can actually be read: the
   # launcher runs under the tmux server, so its own stderr lands in a pane the
   # agent's TUI overwrites within seconds, while this line reaches journald.
@@ -229,16 +230,19 @@ while IFS=$'\t' read -r uuid perm namefile noticefile worktree bridgefile; do
     log "launched ${uuid} (perm=${perm}, no pointer — a fresh claude.ai card will be minted)"
   fi
 
-  # throttle: settle, then wait for memory + concurrency headroom before the next
+  # Throttle this recovery batch, not every long-lived --resume process on the box.
+  # Resumed sessions intentionally stay alive, so counting them as in-flight startup
+  # work makes MAX_CONCURRENT=1 wait until timeout after every successful launch.
   sleep "${SETTLE_SEC}"
+  [ "${batch_launched}" -ge "${MAX_CONCURRENT}" ] || continue
   waited=0
   while :; do
-    running="$(pgrep -fc "${RESUME_PAT% }" 2>/dev/null || echo 0)"
     free_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $7}')"; free_mb="${free_mb:-9999}"
-    { [ "${running}" -lt "${MAX_CONCURRENT}" ] && [ "${free_mb}" -ge "${MIN_FREE_MB}" ]; } && break
-    [ "${waited}" -ge "${SETTLE_MAX_SEC}" ] && { log "settle timeout (running=${running} free=${free_mb}MB) — proceeding"; break; }
+    [ "${free_mb}" -ge "${MIN_FREE_MB}" ] && break
+    [ "${waited}" -ge "${SETTLE_MAX_SEC}" ] && { log "settle timeout (free=${free_mb}MB) — proceeding"; break; }
     sleep 5; waited=$((waited + 5))
   done
+  batch_launched=0
 done <<< "${LAUNCH_TSV}"
 
 log "done — ${launched} session(s) resumed for ${ID}"
