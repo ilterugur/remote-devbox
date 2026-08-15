@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: codex-host-reconcile <user> <socket> <unit-changed:true|false>" >&2
+if [ "$#" -ne 6 ]; then
+  echo "usage: codex-host-reconcile <user> <socket> <unit-changed:true|false> <memory-high> <memory-max> <memory-swap-max>" >&2
   exit 64
 fi
 
 user=$1
 socket=$2
 unit_changed=$3
+memory_high=$4
+memory_max=$5
+memory_swap_max=$6
 service=codex-code-mode-host.service
 
 case "$unit_changed" in
@@ -19,10 +22,14 @@ case "$unit_changed" in
     ;;
 esac
 
-# Apply the exclusion to an already-running host without restarting its sessions.
-# The unit template makes it persistent across boots; this runtime drop-in closes the
-# current-boot gap after daemon-reload when reconciliation intentionally defers restart.
-systemctl --user --machine="$user"@ set-property --runtime "$service" ManagedOOMPreference=omit
+# Mirror the persistent unit policy into the running manager without restarting its
+# sessions. This also overwrites stale incident-time set-property values that would
+# otherwise outrank the newly rendered unit until reboot.
+systemctl --user --machine="$user"@ set-property --runtime "$service" \
+  ManagedOOMPreference=omit \
+  MemoryHigh="$memory_high" \
+  MemoryMax="$memory_max" \
+  MemorySwapMax="$memory_swap_max"
 
 if systemctl --user --machine="$user"@ is-active --quiet "$service"; then
   systemctl --user --machine="$user"@ enable "$service"

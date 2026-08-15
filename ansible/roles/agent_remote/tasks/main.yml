@@ -116,6 +116,9 @@
       - "{{ item.row.user }}"
       - "{{ item.row.codex_home }}/app-server-control/app-server-control.sock"
       - "{{ item.changed | bool | ternary('true', 'false') }}"
+      - "{{ item.row.resources.memory_high | default('infinity', true) }}"
+      - "{{ item.row.resources.memory_max | default('infinity', true) }}"
+      - "{{ item.row.resources.memory_swap_max | default('infinity', true) }}"
   loop: "{{ codex_service.results | default([]) }}"
   loop_control:
     label: "{{ item.row.user }}"

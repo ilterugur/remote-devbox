@@ -53,7 +53,7 @@ run_reconcile() {
     DEVBOX_TEST_FUSER_LOG="$case_dir/fuser.log" \
     DEVBOX_TEST_SERVICE_ACTIVE="$active" \
     DEVBOX_TEST_SOCKET_OWNED="$owned" \
-    "$reconcile" dev-a "$socket" "$changed" >"$case_dir/stdout" 2>"$case_dir/stderr"
+    "$reconcile" dev-a "$socket" "$changed" 15G 16G 1G >"$case_dir/stdout" 2>"$case_dir/stderr"
   RECONCILE_STATUS=$?
   set -e
 }
@@ -92,7 +92,7 @@ assert_status() {
 active_dir="$test_root/active"
 run_reconcile 0 1 true "$test_root/active.sock" "$active_dir"
 assert_status 0 "$active_dir"
-assert_contains "set-property --runtime codex-code-mode-host.service ManagedOOMPreference=omit" "$active_dir/systemctl.log"
+assert_contains "set-property --runtime codex-code-mode-host.service ManagedOOMPreference=omit MemoryHigh=15G MemoryMax=16G MemorySwapMax=1G" "$active_dir/systemctl.log"
 assert_contains "restart deferred" "$active_dir/stdout"
 assert_not_contains " restart " "$active_dir/systemctl.log"
 assert_not_contains " start " "$active_dir/systemctl.log"
