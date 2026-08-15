@@ -203,7 +203,9 @@ developers:
 
     # Codex Desktop aggregates every Codex project for this developer into one
     # code-mode host. Give only that host extra measured headroom without widening
-    # any per-project Remote Control unit.
+    # any per-project Remote Control unit. Keep memory_high close to memory_max: this
+    # host is omitted from parent-slice oomd selection so one pressure event cannot
+    # kill every session; its own hard limit is therefore the containment boundary.
     codex_host_resources:
       memory_high: 12G
       memory_max: 16G

@@ -1,0 +1,37 @@
+---
+- name: Verify temporary-file retention policy rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Render and assert
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-tmpfiles-policy-
+          register: render_dir
+
+        - name: Render the tmpfiles policy
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/oomd/templates/tmp.conf.j2"
+            dest: "{{ render_dir.path }}/tmp.conf"
+            mode: "0644"
+
+        - name: Read the rendered policy
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/tmp.conf"
+          register: tmpfiles_policy
+
+        - name: Assert stale entries are cleaned without changing tmp permissions
+          ansible.builtin.assert:
+            that:
+              - "'q /tmp 1777 root root 3d' in tmpfiles_policy.content | b64decode"
+              - "'10d' not in tmpfiles_policy.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

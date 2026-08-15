@@ -7,6 +7,20 @@
 # their own MemoryMax, and that bound kills the build rather than the session. A
 # neighbour's overrun must not take out a live agent session.
 
+# Ubuntu keeps /tmp entries for 10 days by default. Agent package installs can create
+# hundreds of thousands of files per scratch tree, exhausting tmpfs inodes long before
+# that age even when byte capacity remains. Override the vendor file by basename; the
+# stock daily systemd-tmpfiles-clean.timer then removes only entries inactive for 3 days.
+# Merely deploying the policy does not run an immediate clean, so provisioning never
+# deletes a live operator's temporary work unexpectedly.
+- name: Bound temporary-file retention for agent build workloads
+  ansible.builtin.template:
+    src: tmp.conf.j2
+    dest: /etc/tmpfiles.d/tmp.conf
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: Install systemd-oomd
   ansible.builtin.apt:
     name: systemd-oomd

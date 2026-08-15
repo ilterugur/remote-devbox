@@ -21,7 +21,15 @@ one memory or keep separate ones.
 Codex Desktop's managed code-mode host aggregates every Codex project for one developer.
 When its measured peak needs more headroom than a single Remote Control server, set
 `developers[].codex_host_resources`; it overrides only that developer's host and leaves
-the per-project `remote_control.resources` limits unchanged.
+the per-project `remote_control.resources` limits unchanged. The aggregate host is
+excluded from parent-slice `systemd-oomd` selection because killing that cgroup kills
+every Codex session together; its own `MemoryMax` remains the containment boundary and
+`OOMPolicy=continue` lets the kernel kill a runaway child without stopping the host.
+
+Ubuntu's default ten-day `/tmp` retention is also shortened to three inactive days.
+Agent package installs can create hundreds of thousands of scratch files and exhaust
+tmpfs inodes before byte capacity; the normal daily `systemd-tmpfiles-clean.timer`
+performs the cleanup, and active entries are retained by their timestamps.
 
 Every agent owned by the same developer also shares one kernel-backed heavy-command
 slot. Build, typecheck, generate and test commands queue instead of running in parallel;

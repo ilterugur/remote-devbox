@@ -40,7 +40,13 @@ KillMode=control-group
 {% endif %}
 {%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
 {% endif %}
-ManagedOOMPreference=avoid
+{# The code-mode host already has a hard MemoryMax and OOMPolicy=continue, so the
+   kernel can kill the largest runaway child without taking every session down.
+   `avoid` is only a ranking hint: oomd selected this unit anyway when it was the
+   sole viable reclaim candidate, killing 20-25 session processes at once. `omit`
+   excludes the aggregate host from parent-slice oomd selection; its own hard wall
+   remains the containment boundary. #}
+ManagedOOMPreference=omit
 
 [Install]
 WantedBy=default.target

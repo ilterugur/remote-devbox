@@ -19,6 +19,11 @@ case "$unit_changed" in
     ;;
 esac
 
+# Apply the exclusion to an already-running host without restarting its sessions.
+# The unit template makes it persistent across boots; this runtime drop-in closes the
+# current-boot gap after daemon-reload when reconciliation intentionally defers restart.
+systemctl --user --machine="$user"@ set-property --runtime "$service" ManagedOOMPreference=omit
+
 if systemctl --user --machine="$user"@ is-active --quiet "$service"; then
   systemctl --user --machine="$user"@ enable "$service"
   if [ "$unit_changed" = true ]; then

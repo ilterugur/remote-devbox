@@ -1,0 +1,5 @@
+# Managed by Ansible (remote-devbox). Overrides Ubuntu's vendor tmp.conf, whose
+# 10-day retention can exhaust the tmpfs inode budget under agent build workloads.
+# tmpfiles only removes entries whose access, modification and change timestamps
+# are all older than this age, so active work remains protected.
+q /tmp 1777 root root 3d

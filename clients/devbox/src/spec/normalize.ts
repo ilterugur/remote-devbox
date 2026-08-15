@@ -238,7 +238,10 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
  *
  * They exist for the reason Remote Control units do: everything a session spawns lands
  * in this cgroup, so it is where a runaway build is contained and what has to carry
- * `ManagedOOMPreference=avoid`. A codex daemon started outside Ansible does not: one
+ * `ManagedOOMPreference=omit`. Unlike `avoid`, `omit` is an exclusion rather than a
+ * ranking hint: parent-slice oomd must not kill the aggregate host and every live
+ * session when the unit already has a hard MemoryMax. A codex daemon started outside
+ * Ansible does not carry this protection: one
  * run by hand on 2026-08-12 sat at the oomd default and was killed with all 25
  * processes in it eighteen times, taking every live session down each time.
  *

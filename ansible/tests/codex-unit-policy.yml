@@ -57,7 +57,8 @@
               - "'MemoryMax=12G' in codex_unit.content | b64decode"
               - "'MemorySwapMax=1G' in codex_unit.content | b64decode"
               - "'OOMPolicy=continue' in codex_unit.content | b64decode"
-              - "'ManagedOOMPreference=avoid' in codex_unit.content | b64decode"
+              - "'ManagedOOMPreference=omit' in codex_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' not in codex_unit.content | b64decode"
               - "'TimeoutStopSec=30' in codex_unit.content | b64decode"
 
         - name: Assert the service owns Desktop's code-mode socket, not official RC

@@ -92,6 +92,7 @@ assert_status() {
 active_dir="$test_root/active"
 run_reconcile 0 1 true "$test_root/active.sock" "$active_dir"
 assert_status 0 "$active_dir"
+assert_contains "set-property --runtime codex-code-mode-host.service ManagedOOMPreference=omit" "$active_dir/systemctl.log"
 assert_contains "restart deferred" "$active_dir/stdout"
 assert_not_contains " restart " "$active_dir/systemctl.log"
 assert_not_contains " start " "$active_dir/systemctl.log"
