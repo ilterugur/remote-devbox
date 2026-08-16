@@ -30,10 +30,11 @@ export interface OperatorSpec {
   private_key_path?: string;
 }
 
-/** systemd-oomd thresholds, applied per developer slice. The limit is a percentage
- *  because that is what oomd accepts; the duration is the window a slice must hold above
- *  that limit before anything is killed. Swap-based killing needs no key here: it fires
- *  at oomd's daemon-wide default, which is already the threshold we want. */
+/** systemd-oomd pressure thresholds, applied to each developer's UID-owned user manager.
+ *  The limit is a percentage because that is what oomd accepts; the duration is the
+ *  window the manager must remain above it before an eligible descendant is killed.
+ *  Swap-based oomd killing stays disabled because it cannot safely honor a UID-owned
+ *  child's omit preference; hard MemorySwapMax boundaries still apply. */
 export interface OomdSpec {
   enabled?: boolean;
   memory_pressure_limit?: string;

@@ -53,12 +53,12 @@ host:
   # build heaps then stay resident instead of being paged into zram, which lives in RAM
   # and so would double-count against memory rather than relieve it.
   # swappiness: 10
-  # Kills under sustained memory pressure so the box recovers on its own instead of
-  # parking in swap thrash. Covers work outside a Remote Control unit — login shells,
-  # the editor server, the desktop — where no unit ceiling reaches.
+  # Kills below each developer's user manager under sustained memory pressure so editor
+  # servers and user services cannot park the box in reclaim thrash. Login/desktop
+  # scopes remain contained by the developer slice's hard memory and swap ceilings.
   # oomd:
   #   enabled: true
-  #   memory_pressure_limit: 60%      # per developer slice
+  #   memory_pressure_limit: 60%      # per developer user manager
   #   memory_pressure_duration_sec: 20
 
 # Shared toolchain, installed once via mise and resolved on every developer PATH.
@@ -150,13 +150,13 @@ shared_services:
 #
 # The gap between memory_high and memory_max is also a kill-policy decision, not just
 # a throttle band: a unit sitting between the two is under continuous reclaim, and that
-# pressure propagates to the parent slice. Remote Control units are marked
-# ManagedOOMPreference=avoid, so if that pressure lasts past host.oomd's
-# memory_pressure_duration_sec, systemd-oomd fires at the slice and picks a
-# non-Remote-Control victim instead — a login session scope, or the developer's whole
-# user@.service. Keep memory_high close to memory_max: a narrow band trips the unit's
-# own hard wall quickly and kills the build itself, while a wide one leaves the unit
-# reclaim-thrashing long enough for systemd-oomd to kill an innocent neighbour.
+# pressure propagates to the UID-owned user manager. Remote Control units are marked
+# ManagedOOMPreference=avoid while the aggregate Codex host is omitted from pressure
+# selection. If pressure lasts past host.oomd's memory_pressure_duration_sec, oomd can
+# still select another eligible user-manager descendant. Keep memory_high close to
+# memory_max: a narrow band trips the unit's own hard wall quickly and kills the build
+# itself, while a wide one leaves the unit reclaim-thrashing long enough for oomd to
+# sacrifice a neighbouring user service.
 # remote_control:
 #   spawn: worktree         # worktree | same-dir | session
 #   capacity: 4             # parallel sessions per server

@@ -1,0 +1,160 @@
+---
+- name: Verify managed-OOM ownership migration ordering and convergence
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    enabled_host:
+      oomd:
+        enabled: true
+        memory_pressure_limit: "60%"
+        memory_pressure_duration_sec: 20
+    disabled_host:
+      oomd:
+        enabled: false
+        memory_pressure_limit: "60%"
+        memory_pressure_duration_sec: 20
+    devbox_developers:
+      - user: dev-a
+    ansible_facts:
+      getent_passwd:
+        dev-a: ["x", "1004"]
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.lineinfile:
+        path: "{{ test_root.path }}/events.log"
+        line: daemon-reload
+        create: true
+        mode: "0600"
+
+  tasks:
+    - name: Exercise enable and disable migration
+      block:
+        - name: Create an isolated policy root
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-oomd-role-
+          register: test_root
+
+        - name: Create the fake systemctl directory
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0700"
+          loop:
+            - "{{ test_root.path }}/fake-bin"
+            - "{{ test_root.path }}/bin"
+
+        - name: Install fake systemctl
+          ansible.builtin.copy:
+            dest: "{{ test_root.path }}/fake-bin/systemctl"
+            mode: "0700"
+            content: |
+              #!/usr/bin/env bash
+              printf '%s\n' "$*" >>"$DEVBOX_TEST_SYSTEMCTL_LOG"
+
+        - name: Create the legacy slice drop-in directory
+          ansible.builtin.file:
+            path: "{{ test_root.path }}/systemd/user-1004.slice.d"
+            state: directory
+            mode: "0700"
+
+        - name: Seed the legacy root-slice policy
+          ansible.builtin.copy:
+            dest: "{{ test_root.path }}/systemd/user-1004.slice.d/50-oomd.conf"
+            content: "[Slice]\nManagedOOMMemoryPressure=kill\n"
+            mode: "0600"
+
+        - name: Start the event log
+          ansible.builtin.copy:
+            dest: "{{ test_root.path }}/events.log"
+            content: ""
+            mode: "0600"
+
+        - name: Run the enabled ownership migration
+          ansible.builtin.include_role:
+            name: oomd
+            tasks_from: ownership-boundary
+          vars:
+            devbox_host: "{{ enabled_host }}"
+            oomd_systemd_unit_root: "{{ test_root.path }}/systemd"
+            oomd_reconciler_source_path: "{{ playbook_dir }}/../../scripts/oomd-user-policy-reconcile.sh"
+            oomd_reconciler_install_path: "{{ test_root.path }}/bin/oomd-user-policy-reconcile"
+            oomd_policy_owner: "{{ omit }}"
+            oomd_policy_group: "{{ omit }}"
+            oomd_reconciler_environment:
+              PATH: "{{ test_root.path }}/fake-bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+              DEVBOX_TEST_SYSTEMCTL_LOG: "{{ test_root.path }}/events.log"
+
+        - name: Inspect enabled persistent paths
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ test_root.path }}/systemd/user-1004.slice.d/50-oomd.conf"
+            - "{{ test_root.path }}/systemd/user@1004.service.d/50-oomd.conf"
+          register: enabled_paths
+
+        - name: Read enabled events
+          ansible.builtin.slurp:
+            src: "{{ test_root.path }}/events.log"
+          register: enabled_events
+
+        - name: Assert enable neutralizes the ancestor before exposing the manager policy
+          ansible.builtin.assert:
+            that:
+              - not enabled_paths.results[0].stat.exists
+              - enabled_paths.results[1].stat.exists
+              - (enabled_events.content | b64decode).splitlines()[0] == 'set-property user-1004.slice ManagedOOMSwap=auto ManagedOOMMemoryPressure=auto ManagedOOMMemoryPressureLimit=0% ManagedOOMMemoryPressureDurationSec='
+              - (enabled_events.content | b64decode).splitlines()[1] == 'set-property user@1004.service ManagedOOMSwap=auto ManagedOOMMemoryPressure=kill ManagedOOMMemoryPressureLimit=60% ManagedOOMMemoryPressureDurationSec=20s'
+              - (enabled_events.content | b64decode).splitlines()[2] == 'daemon-reload'
+
+        - name: Reset the event log
+          ansible.builtin.copy:
+            dest: "{{ test_root.path }}/events.log"
+            content: ""
+            mode: "0600"
+
+        - name: Run the disabled ownership migration
+          ansible.builtin.include_role:
+            name: oomd
+            tasks_from: ownership-boundary
+          vars:
+            devbox_host: "{{ disabled_host }}"
+            oomd_systemd_unit_root: "{{ test_root.path }}/systemd"
+            oomd_reconciler_source_path: "{{ playbook_dir }}/../../scripts/oomd-user-policy-reconcile.sh"
+            oomd_reconciler_install_path: "{{ test_root.path }}/bin/oomd-user-policy-reconcile"
+            oomd_policy_owner: "{{ omit }}"
+            oomd_policy_group: "{{ omit }}"
+            oomd_reconciler_environment:
+              PATH: "{{ test_root.path }}/fake-bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+              DEVBOX_TEST_SYSTEMCTL_LOG: "{{ test_root.path }}/events.log"
+
+        - name: Inspect disabled persistent paths
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ test_root.path }}/systemd/user-1004.slice.d/50-oomd.conf"
+            - "{{ test_root.path }}/systemd/user@1004.service.d/50-oomd.conf"
+          register: disabled_paths
+
+        - name: Read disabled events
+          ansible.builtin.slurp:
+            src: "{{ test_root.path }}/events.log"
+          register: disabled_events
+
+        - name: Assert disable clears both live and persistent policy boundaries
+          ansible.builtin.assert:
+            that:
+              - not disabled_paths.results[0].stat.exists
+              - not disabled_paths.results[1].stat.exists
+              - (disabled_events.content | b64decode).splitlines()[0] == 'set-property user-1004.slice ManagedOOMSwap=auto ManagedOOMMemoryPressure=auto ManagedOOMMemoryPressureLimit=0% ManagedOOMMemoryPressureDurationSec='
+              - (disabled_events.content | b64decode).splitlines()[1] == 'set-property user@1004.service ManagedOOMSwap=auto ManagedOOMMemoryPressure=auto ManagedOOMMemoryPressureLimit=0% ManagedOOMMemoryPressureDurationSec='
+              - (disabled_events.content | b64decode).splitlines()[2] == 'daemon-reload'
+      always:
+        - name: Remove the isolated policy root
+          ansible.builtin.file:
+            path: "{{ test_root.path }}"
+            state: absent
+          when: test_root.path is defined

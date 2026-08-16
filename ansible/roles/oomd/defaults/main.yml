@@ -1,0 +1,9 @@
+---
+# Internal filesystem/command seams keep the ownership migration integration-testable
+# without touching the controller's real systemd state.
+oomd_systemd_unit_root: /etc/systemd/system
+oomd_reconciler_source_path: "{{ playbook_dir }}/../scripts/oomd-user-policy-reconcile.sh"
+oomd_reconciler_install_path: /usr/local/bin/oomd-user-policy-reconcile
+oomd_reconciler_environment: {}
+oomd_policy_owner: root
+oomd_policy_group: root

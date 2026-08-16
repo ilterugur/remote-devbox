@@ -1,0 +1,71 @@
+---
+- name: Install the managed-OOM ownership-boundary reconciler
+  ansible.builtin.copy:
+    src: "{{ oomd_reconciler_source_path }}"
+    dest: "{{ oomd_reconciler_install_path }}"
+    owner: "{{ oomd_policy_owner }}"
+    group: "{{ oomd_policy_group }}"
+    mode: "0755"
+
+- name: Remove the legacy root-owned slice pressure monitor
+  ansible.builtin.file:
+    path: "{{ oomd_systemd_unit_root }}/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    state: absent
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  notify: Reload systemd
+
+# This must run before the UID-owned persistent drop-in is exposed to daemon-reload.
+# The helper neutralizes the unsafe root ancestor first, then reconciles the manager.
+- name: Reconcile the managed-OOM ownership boundary
+  ansible.builtin.command:
+    argv:
+      - "{{ oomd_reconciler_install_path }}"
+      - "{{ ansible_facts.getent_passwd[item.user][1] }}"
+      - "{{ devbox_host.oomd.enabled | bool | ternary('true', 'false') }}"
+      - "{{ devbox_host.oomd.memory_pressure_limit }}"
+      - "{{ devbox_host.oomd.memory_pressure_duration_sec | string }}"
+  environment: "{{ oomd_reconciler_environment }}"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  changed_when: false
+
+- name: Create the user-manager drop-in directories
+  ansible.builtin.file:
+    path: "{{ oomd_systemd_unit_root }}/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d"
+    state: directory
+    owner: "{{ oomd_policy_owner }}"
+    group: "{{ oomd_policy_group }}"
+    mode: "0755"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+
+- name: Write each developer's UID-owned managed-OOM drop-in
+  ansible.builtin.template:
+    src: user-manager-oomd.conf.j2
+    dest: "{{ oomd_systemd_unit_root }}/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d/50-oomd.conf"
+    owner: "{{ oomd_policy_owner }}"
+    group: "{{ oomd_policy_group }}"
+    mode: "0644"
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: devbox_host.oomd.enabled
+  notify: Reload systemd
+
+- name: Remove each developer's user-manager drop-in when oomd is turned off
+  ansible.builtin.file:
+    path: "{{ oomd_systemd_unit_root }}/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d/50-oomd.conf"
+    state: absent
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  when: not devbox_host.oomd.enabled
+  notify: Reload systemd
+
+- name: Apply the systemd change now
+  ansible.builtin.meta: flush_handlers

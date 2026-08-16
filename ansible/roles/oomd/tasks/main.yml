@@ -1,11 +1,13 @@
 ---
-# systemd-oomd is the net for work that runs outside a Remote Control unit — login
-# shells, the editor server, the desktop session. Those have no unit ceiling of their
-# own, so without this a runaway there still parks the host in swap thrash.
+# systemd-oomd is the pressure net for processes below each developer's user manager,
+# such as editor servers and user services that have no dedicated hard ceiling. Login
+# and desktop session scopes are siblings of user@.service; the developer slice's hard
+# MemoryMax and MemorySwapMax still contain those without exposing UID-owned children
+# to a root-owned pressure monitor that cannot honor their omit preference.
 #
-# Remote Control units carry ManagedOOMPreference=avoid: they are already bounded by
-# their own MemoryMax, and that bound kills the build rather than the session. A
-# neighbour's overrun must not take out a live agent session.
+# Remote Control units carry ManagedOOMPreference=avoid and the aggregate Codex host
+# carries omit. Each is already bounded by its own MemoryMax, where the kernel can kill
+# the runaway child instead of sacrificing every session in the host.
 
 # Ubuntu keeps /tmp entries for 10 days by default. Agent package installs can create
 # hundreds of thousands of files per scratch tree, exhausting tmpfs inodes long before
@@ -32,84 +34,8 @@
   ansible.builtin.getent:
     database: passwd
 
-# Keep live reconciliation testable and atomic in one narrowly-owned helper. It
-# neutralizes the unsafe root-owned monitor before arming the UID-owned boundary.
-- name: Install the managed-OOM ownership-boundary reconciler
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/oomd-user-policy-reconcile.sh"
-    dest: /usr/local/bin/oomd-user-policy-reconcile
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Create the user-manager drop-in directories
-  ansible.builtin.file:
-    path: "/etc/systemd/system/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  loop: "{{ devbox_developers }}"
-  loop_control:
-    label: "{{ item.user }}"
-  when: devbox_host.oomd.enabled
-
-- name: Remove the legacy root-owned slice pressure monitor
-  ansible.builtin.file:
-    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
-    state: absent
-  loop: "{{ devbox_developers }}"
-  loop_control:
-    label: "{{ item.user }}"
-  notify: Reload systemd
-
-- name: Write each developer's UID-owned managed-OOM drop-in
-  ansible.builtin.template:
-    src: user-manager-oomd.conf.j2
-    dest: "/etc/systemd/system/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d/50-oomd.conf"
-    owner: root
-    group: root
-    mode: "0644"
-  loop: "{{ devbox_developers }}"
-  loop_control:
-    label: "{{ item.user }}"
-  when: devbox_host.oomd.enabled
-  notify: Reload systemd
-
-- name: Remove each developer's user-manager drop-in when oomd is turned off
-  ansible.builtin.file:
-    path: "/etc/systemd/system/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d/50-oomd.conf"
-    state: absent
-  loop: "{{ devbox_developers }}"
-  loop_control:
-    label: "{{ item.user }}"
-  when: not devbox_host.oomd.enabled
-  notify: Reload systemd
-
-# daemon-reload alone only affects units started afterwards (and, on a failed later role,
-# might never run at all — handlers fire at the end of the whole play). systemd-oomd
-# is already enabled and started by its own postinst once the apt task above runs, so
-# flushing here does not happen before the daemon starts. What it guarantees is that the
-# drop-in is loaded before any cgroup is handed to the daemon with a kill policy: the
-# reconcile below is what actually migrates the live boundary, and it runs after this.
-- name: Apply the systemd change now
-  ansible.builtin.meta: flush_handlers
-
-# Reconcile both boundaries on every run. This clears legacy system.control values
-# that outrank the removed slice drop-in and updates a running user manager without
-# logging the developer out or restarting any child service.
-- name: Reconcile the managed-OOM ownership boundary
-  ansible.builtin.command:
-    argv:
-      - /usr/local/bin/oomd-user-policy-reconcile
-      - "{{ ansible_facts.getent_passwd[item.user][1] }}"
-      - "{{ devbox_host.oomd.enabled | bool | ternary('true', 'false') }}"
-      - "{{ devbox_host.oomd.memory_pressure_limit }}"
-      - "{{ devbox_host.oomd.memory_pressure_duration_sec | string }}"
-  loop: "{{ devbox_developers }}"
-  loop_control:
-    label: "{{ item.user }}"
-  changed_when: false
+- name: Migrate managed-OOM monitoring to the UID-owned boundary
+  ansible.builtin.include_tasks: ownership-boundary.yml
 
 - name: Enable and start systemd-oomd
   ansible.builtin.systemd_service:

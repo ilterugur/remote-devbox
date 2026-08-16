@@ -1,6 +1,7 @@
 ---
-# A slice drop-in needs a daemon-reload to be seen; oomd re-reads slice properties from
-# systemd, so it does not need restarting when only a drop-in changes.
+# A resource-control drop-in needs a daemon-reload to be seen; oomd re-reads unit
+# properties from systemd, so it does not need restarting when only a drop-in changes.
 - name: Reload systemd
   ansible.builtin.systemd_service:
     daemon_reload: true
+  environment: "{{ oomd_reconciler_environment }}"
