@@ -1,10 +1,16 @@
 ---
-- name: Verify every agent profile inherits the shared heavy-command gate
+# The gate has more than one entry point, and the earlier version of this test only
+# rendered the interactive launcher. That is exactly how the always-on Remote Control
+# path shipped ungated while this file stayed green: agent-rc-run never sourced the
+# wiring, so every build an always-on session started bypassed the shared flock.
+# Assert BOTH entry points here, or the same gap reopens the next time one moves.
+- name: Verify every agent entry point inherits the shared heavy-command gate
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
+    gate_env_path: .agent-profiles/codex-main/heavy-gate.env
     item:
       name: codex-main
       provider: codex
@@ -26,6 +32,27 @@
             prefix: remote-devbox-heavy-command-gate-policy-
           register: render_dir
 
+        - name: Render the heavy-job gate environment
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_profiles/templates/heavy-gate.env.j2"
+            dest: "{{ render_dir.path }}/heavy-gate.env"
+            mode: "0600"
+
+        - name: Read the heavy-job gate environment
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/heavy-gate.env"
+          register: gate_env
+
+        - name: Assert the gate environment carries the shim path and this profile's policy
+          ansible.builtin.assert:
+            that:
+              - >-
+                'export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"'
+                in gate_env.content | b64decode
+              - "'DEVBOX_HEAVY_JOB_CATEGORIES=\"build,typecheck,generate\"' in gate_env.content | b64decode"
+              - "'DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=\"1800\"' in gate_env.content | b64decode"
+              - "'DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=\"5\"' in gate_env.content | b64decode"
+
         - name: Render the agent wrapper
           ansible.builtin.template:
             src: "{{ playbook_dir }}/../roles/agent_profiles/templates/agent-wrapper.sh.j2"
@@ -37,40 +64,46 @@
             src: "{{ render_dir.path }}/agent-wrapper"
           register: agent_wrapper
 
-        - name: Assert the gate wins after mise modifies PATH
+        - name: Assert the interactive launcher sources the gate after mise modifies PATH
           ansible.builtin.assert:
             that:
-              - >-
-                'export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"'
-                in agent_wrapper.content | b64decode
+              - "gate_env_path in agent_wrapper.content | b64decode"
               - >-
                 (agent_wrapper.content | b64decode).rfind('mise activate bash --shims')
-                < (agent_wrapper.content | b64decode).rfind('heavy-command-gate:$PATH')
-              - "'DEVBOX_HEAVY_JOB_CATEGORIES=\"build,typecheck,generate\"' in agent_wrapper.content | b64decode"
-              - "'DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=\"1800\"' in agent_wrapper.content | b64decode"
-              - "'DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=\"5\"' in agent_wrapper.content | b64decode"
+                < (agent_wrapper.content | b64decode).rfind(gate_env_path)
+              - "'[ -f \"$HEAVY_GATE_ENV\" ] && . \"$HEAVY_GATE_ENV\"' in agent_wrapper.content | b64decode"
 
-        - name: Render the agent wrapper with the gate disabled
-          ansible.builtin.template:
-            src: "{{ playbook_dir }}/../roles/agent_profiles/templates/agent-wrapper.sh.j2"
-            dest: "{{ render_dir.path }}/agent-wrapper-disabled"
-            mode: "0755"
-          vars:
-            item:
-              name: codex-main
-              provider: codex
-              user: dev-a
-              heavy_job_gate_enabled: false
-
-        - name: Read the disabled agent wrapper
+        # The regression this file exists for. agent-rc-run is a plain script rather than
+        # a template, so it is read straight from the repo.
+        - name: Read the always-on Remote Control runner
           ansible.builtin.slurp:
-            src: "{{ render_dir.path }}/agent-wrapper-disabled"
-          register: disabled_agent_wrapper
+            src: "{{ playbook_dir }}/../../scripts/agent-rc-run.sh"
+          register: agent_rc_run
 
-        - name: Assert a disabled profile bypasses the gate
+        - name: Assert the always-on runner sources the gate after mise modifies PATH
           ansible.builtin.assert:
             that:
-              - "'heavy-command-gate' not in disabled_agent_wrapper.content | b64decode"
+              - "'heavy-gate.env' in agent_rc_run.content | b64decode"
+              - >-
+                (agent_rc_run.content | b64decode).rfind('mise activate bash --shims')
+                < (agent_rc_run.content | b64decode).find('heavy-gate.env')
+            fail_msg: >-
+              scripts/agent-rc-run.sh must source the profile's heavy-gate.env after mise
+              activation. Without it every build an always-on Remote Control session starts
+              bypasses the shared heavy-job slot.
+
+        # Opting out is the absence of the file, so the role has to both skip writing it
+        # and remove one left behind by a previously enabled profile.
+        - name: Read the agent profiles tasks
+          ansible.builtin.slurp:
+            src: "{{ playbook_dir }}/../roles/agent_profiles/tasks/main.yml"
+          register: agent_profiles_tasks
+
+        - name: Assert a disabled profile ends up with no gate environment to source
+          ansible.builtin.assert:
+            that:
+              - "'when: item.heavy_job_gate_enabled | default(true)' in agent_profiles_tasks.content | b64decode"
+              - "'when: not (item.heavy_job_gate_enabled | default(true))' in agent_profiles_tasks.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

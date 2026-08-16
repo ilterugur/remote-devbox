@@ -25,6 +25,16 @@ if [ -n "${PROFILE}" ] && [ -r "${HOME}/.agent-profiles/${PROFILE}/memory.env" ]
   # shellcheck disable=SC1090
   . "${HOME}/.agent-profiles/${PROFILE}/memory.env"
 fi
+
+# Same story for the shared heavy build/typecheck/generate/test slot, and this one is
+# the path that matters: an always-on session runs the repo's builds, so leaving it
+# ungated lets several agents start a multi-gigabyte tsc at the same moment and take
+# the host into swap. Sourced AFTER the mise activation above — behind mise's shims the
+# gate never sees a command. No file means this profile opted out.
+if [ -n "${PROFILE}" ] && [ -r "${HOME}/.agent-profiles/${PROFILE}/heavy-gate.env" ]; then
+  # shellcheck disable=SC1090
+  . "${HOME}/.agent-profiles/${PROFILE}/heavy-gate.env"
+fi
 NAME="${CLAUDE_RC_NAME:-${AGENT}}"
 SPAWN="${CLAUDE_RC_SPAWN:-worktree}"
 CAPACITY="${CLAUDE_RC_CAPACITY:-4}"

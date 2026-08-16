@@ -22,12 +22,11 @@ if command -v mise >/dev/null 2>&1; then
 fi
 
 # All agents owned by this developer share one heavy build/typecheck/generate/test
-# slot. Keep this after mise activation so the gate stays ahead of mise's shims.
-{% if item.heavy_job_gate_enabled | default(true) %}
-export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"
-export DEVBOX_HEAVY_JOB_CATEGORIES="{{ item.heavy_job_gate_categories | default(['build', 'typecheck', 'generate', 'test']) | join(',') }}"
-export DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC="{{ item.heavy_job_gate_wait_timeout_sec | default(1800) }}"
-export DEVBOX_HEAVY_JOB_WARN_AFTER_SEC="{{ item.heavy_job_gate_warn_after_sec | default(5) }}"
-{% endif %}
+# slot. Written by this role and sourced rather than templated in, so agent-rc-run
+# reads the very same file — one wiring, not two that can drift apart. Keep it after
+# mise activation so the gate stays ahead of mise's shims; a profile with the gate
+# disabled has no file here and falls through unthrottled.
+HEAVY_GATE_ENV="{{ '/home/' ~ item.user ~ '/.agent-profiles/' ~ item.name }}/heavy-gate.env"
+[ -f "$HEAVY_GATE_ENV" ] && . "$HEAVY_GATE_ENV"
 
 exec "{{ '/home/' ~ item.user ~ '/' ~ devbox_agent_adapters[item.provider].bin_path }}" "$@"

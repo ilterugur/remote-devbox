@@ -172,6 +172,34 @@
   loop_control:
     label: "{{ item.user }}/{{ item.name }}"
 
+# One file, sourced by every entry point that starts an agent. The launcher is not the
+# only one: an always-on Remote Control session never goes through it, so wiring the
+# gate into the launcher alone leaves the box's busiest path ungated.
+- name: Write the heavy-job gate environment each agent entry point sources
+  ansible.builtin.template:
+    src: heavy-gate.env.j2
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/heavy-gate.env"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when: item.heavy_job_gate_enabled | default(true)
+  tags: [heavy_gate]
+
+# Absence is how a profile opts out: both entry points source the file only when it is
+# readable, so removing it is what actually turns the gate off for that profile.
+- name: Remove the heavy-job gate environment where the gate is disabled
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/heavy-gate.env"
+    state: absent
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when: not (item.heavy_job_gate_enabled | default(true))
+  tags: [heavy_gate]
+
 # The wrapper IS the profile: running `claude` directly would use the developer's
 # default config tree and quietly mix two accounts' credentials.
 - name: Install a launcher per agent profile
