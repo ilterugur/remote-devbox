@@ -25,6 +25,11 @@ the per-project `remote_control.resources` limits unchanged. The aggregate host 
 excluded from parent-slice `systemd-oomd` selection because killing that cgroup kills
 every Codex session together; its own `MemoryMax` remains the containment boundary and
 `OOMPolicy=continue` lets the kernel kill a runaway child without stopping the host.
+Pressure monitoring is anchored at the developer's UID-owned `user@<uid>.service`, not
+the root-owned `user-<uid>.slice`: systemd-oomd only honors a child `omit` preference
+when the monitored ancestor and candidate cgroup have the same owner. Swap-triggered
+oomd killing stays disabled at these boundaries because that owner exception does not
+apply to swap candidates; hard per-slice and per-service swap ceilings remain active.
 
 Ubuntu's default ten-day `/tmp` retention is also shortened to three inactive days.
 Agent package installs can create hundreds of thousands of scratch files and exhaust

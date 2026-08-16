@@ -32,13 +32,19 @@
   ansible.builtin.getent:
     database: passwd
 
-# resource_limits also creates this directory, but this role must stand alone under
-# its own `oomd` tag (see ansible/playbook.yml) — a `--tags oomd` run that never
-# touches resource_limits would otherwise template into a directory that does not
-# exist yet. ansible.builtin.template does not create parent directories itself.
-- name: Create the slice drop-in directories
+# Keep live reconciliation testable and atomic in one narrowly-owned helper. It
+# neutralizes the unsafe root-owned monitor before arming the UID-owned boundary.
+- name: Install the managed-OOM ownership-boundary reconciler
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/oomd-user-policy-reconcile.sh"
+    dest: /usr/local/bin/oomd-user-policy-reconcile
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the user-manager drop-in directories
   ansible.builtin.file:
-    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d"
+    path: "/etc/systemd/system/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d"
     state: directory
     owner: root
     group: root
@@ -48,10 +54,19 @@
     label: "{{ item.user }}"
   when: devbox_host.oomd.enabled
 
-- name: Write each developer's managed-OOM drop-in
+- name: Remove the legacy root-owned slice pressure monitor
+  ansible.builtin.file:
+    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    state: absent
+  loop: "{{ devbox_developers }}"
+  loop_control:
+    label: "{{ item.user }}"
+  notify: Reload systemd
+
+- name: Write each developer's UID-owned managed-OOM drop-in
   ansible.builtin.template:
-    src: slice-oomd.conf.j2
-    dest: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    src: user-manager-oomd.conf.j2
+    dest: "/etc/systemd/system/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d/50-oomd.conf"
     owner: root
     group: root
     mode: "0644"
@@ -61,9 +76,9 @@
   when: devbox_host.oomd.enabled
   notify: Reload systemd
 
-- name: Remove each developer's managed-OOM drop-in when oomd is turned off
+- name: Remove each developer's user-manager drop-in when oomd is turned off
   ansible.builtin.file:
-    path: "/etc/systemd/system/user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice.d/50-oomd.conf"
+    path: "/etc/systemd/system/user@{{ ansible_facts.getent_passwd[item.user][1] }}.service.d/50-oomd.conf"
     state: absent
   loop: "{{ devbox_developers }}"
   loop_control:
@@ -71,63 +86,30 @@
   when: not devbox_host.oomd.enabled
   notify: Reload systemd
 
-# daemon-reload alone only affects slices started afterwards (and, on a failed later
-# role, might never run at all — handlers fire at the end of the whole play). systemd-oomd
+# daemon-reload alone only affects units started afterwards (and, on a failed later role,
+# might never run at all — handlers fire at the end of the whole play). systemd-oomd
 # is already enabled and started by its own postinst once the apt task above runs, so
 # flushing here does not happen before the daemon starts. What it guarantees is that the
 # drop-in is loaded before any cgroup is handed to the daemon with a kill policy: the
-# set-property reconcile below is what actually arms monitoring, and it runs after this.
+# reconcile below is what actually migrates the live boundary, and it runs after this.
 - name: Apply the systemd change now
   ansible.builtin.meta: flush_handlers
 
-# set-property pushes the same values into an already-running slice, so a developer
-# already logged in gets the policy without a reboot or a forced logout. A
-# set-property drop-in lives on under /etc/systemd/system.control and outranks the
-# file drop-in above, so all four properties are named on every run — a value left
-# unset here would otherwise outlive the config that asked for it.
-- name: Reconcile the managed-OOM properties on the running slice
+# Reconcile both boundaries on every run. This clears legacy system.control values
+# that outrank the removed slice drop-in and updates a running user manager without
+# logging the developer out or restarting any child service.
+- name: Reconcile the managed-OOM ownership boundary
   ansible.builtin.command:
     argv:
-      - systemctl
-      - set-property
-      - "user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice"
-      - "ManagedOOMSwap=kill"
-      - "ManagedOOMMemoryPressure=kill"
-      - "ManagedOOMMemoryPressureLimit={{ devbox_host.oomd.memory_pressure_limit }}"
-      - "ManagedOOMMemoryPressureDurationSec={{ devbox_host.oomd.memory_pressure_duration_sec }}s"
+      - /usr/local/bin/oomd-user-policy-reconcile
+      - "{{ ansible_facts.getent_passwd[item.user][1] }}"
+      - "{{ devbox_host.oomd.enabled | bool | ternary('true', 'false') }}"
+      - "{{ devbox_host.oomd.memory_pressure_limit }}"
+      - "{{ devbox_host.oomd.memory_pressure_duration_sec | string }}"
   loop: "{{ devbox_developers }}"
   loop_control:
     label: "{{ item.user }}"
-  when: devbox_host.oomd.enabled
   changed_when: false
-  failed_when: false # the slice may simply not be running yet — the drop-in still applies
-
-# The disable path must undo the enabled path's set-property, not just stop the
-# drop-in from being reapplied: without this, a running slice keeps reporting a kill
-# policy from /etc/systemd/system.control forever, and anything that later starts
-# systemd-oomd (manual triage, a dependency, an operator unaware Ansible turned it
-# off) silently re-arms a policy that was explicitly turned off. systemd's own
-# defaults for ManagedOOMSwap and ManagedOOMMemoryPressure are "auto" — restating them
-# here is what actually clears the override. The limit and duration are named too, so
-# no value from the enabled path is left stranded in /etc/systemd/system.control —
-# harmless while pressure monitoring is auto, but the point is that nothing outlives
-# the config that asked for it, on this branch same as the enable branch above.
-- name: Reconcile the running slice back to the systemd defaults
-  ansible.builtin.command:
-    argv:
-      - systemctl
-      - set-property
-      - "user-{{ ansible_facts.getent_passwd[item.user][1] }}.slice"
-      - "ManagedOOMSwap=auto"
-      - "ManagedOOMMemoryPressure=auto"
-      - "ManagedOOMMemoryPressureLimit=0%"
-      - "ManagedOOMMemoryPressureDurationSec=0s"
-  loop: "{{ devbox_developers }}"
-  loop_control:
-    label: "{{ item.user }}"
-  when: not devbox_host.oomd.enabled
-  changed_when: false
-  failed_when: false # the slice may simply not be running yet — the drop-in still applies
 
 - name: Enable and start systemd-oomd
   ansible.builtin.systemd_service:

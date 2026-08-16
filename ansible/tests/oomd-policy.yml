@@ -1,5 +1,5 @@
 ---
-- name: Verify oomd template rendering
+- name: Verify oomd user-manager policy rendering
   hosts: localhost
   connection: local
   gather_facts: false
@@ -20,24 +20,27 @@
             prefix: remote-devbox-oomd-policy-
           register: render_dir
 
-        - name: Render a developer slice drop-in
+        - name: Render a developer user-manager drop-in
           ansible.builtin.template:
-            src: "{{ playbook_dir }}/../roles/oomd/templates/slice-oomd.conf.j2"
-            dest: "{{ render_dir.path }}/slice.conf"
+            src: "{{ playbook_dir }}/../roles/oomd/templates/user-manager-oomd.conf.j2"
+            dest: "{{ render_dir.path }}/user-manager.conf"
             mode: "0600"
 
         - name: Read the rendered drop-in
           ansible.builtin.slurp:
-            src: "{{ render_dir.path }}/slice.conf"
-          register: slice_dropin
+            src: "{{ render_dir.path }}/user-manager.conf"
+          register: user_manager_dropin
 
-        - name: Assert the thresholds reach the rendered drop-in
+        - name: Assert pressure monitoring stays in the UID-owned boundary
           ansible.builtin.assert:
             that:
-              - "'ManagedOOMSwap=kill' in slice_dropin.content | b64decode"
-              - "'ManagedOOMMemoryPressure=kill' in slice_dropin.content | b64decode"
-              - "'ManagedOOMMemoryPressureLimit=35%' in slice_dropin.content | b64decode"
-              - "'ManagedOOMMemoryPressureDurationSec=45s' in slice_dropin.content | b64decode"
+              - "'[Service]' in user_manager_dropin.content | b64decode"
+              - "'[Slice]' not in user_manager_dropin.content | b64decode"
+              - "'ManagedOOMSwap=auto' in user_manager_dropin.content | b64decode"
+              - "'ManagedOOMSwap=kill' not in user_manager_dropin.content | b64decode"
+              - "'ManagedOOMMemoryPressure=kill' in user_manager_dropin.content | b64decode"
+              - "'ManagedOOMMemoryPressureLimit=35%' in user_manager_dropin.content | b64decode"
+              - "'ManagedOOMMemoryPressureDurationSec=45s' in user_manager_dropin.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

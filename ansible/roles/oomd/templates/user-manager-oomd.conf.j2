@@ -1,0 +1,13 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+# Monitor the UID-owned user manager rather than its root-owned user-UID.slice
+# ancestor. systemd-oomd can then honor avoid/omit preferences on UID-owned child
+# services such as the aggregate Codex host.
+#
+# Swap candidate selection only honors preferences on root-owned cgroups, so it
+# cannot safely protect UID-owned Codex children. Hard MemorySwapMax boundaries
+# remain the containment mechanism for swap; oomd handles sustained memory pressure.
+[Service]
+ManagedOOMSwap=auto
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit={{ devbox_host.oomd.memory_pressure_limit }}
+ManagedOOMMemoryPressureDurationSec={{ devbox_host.oomd.memory_pressure_duration_sec }}s
