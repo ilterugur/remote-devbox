@@ -64,6 +64,13 @@
             src: "{{ render_dir.path }}/agent-wrapper"
           register: agent_wrapper
 
+        # The launcher is the interactive counterpart of the unit files' TMPDIR: /tmp is a
+        # tmpfs at half of RAM, so scratch written there is unreclaimable memory.
+        - name: Assert the interactive launcher sends temporary files to disk
+          ansible.builtin.assert:
+            that:
+              - "'export TMPDIR=\"/var/tmp/devbox-scratch/dev-a\"' in agent_wrapper.content | b64decode"
+
         - name: Assert the interactive launcher sources the gate after mise modifies PATH
           ansible.builtin.assert:
             that:

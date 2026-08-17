@@ -3,3 +3,18 @@
 # tmpfiles only removes entries whose access, modification and change timestamps
 # are all older than this age, so active work remains protected.
 q /tmp 1777 root root 3d
+
+# /tmp is a tmpfs sized at half of RAM, so everything written there is resident memory
+# that cannot be reclaimed — only swapped. That is fine for locks and sockets, and ruinous
+# for the multi-gigabyte scratch trees container tooling produces: one SBOM scan left
+# 10 GiB of unpacked image layers here, and with a bun install tree beside it the box sat
+# at 87% memory stall with the CPU idle, killing the memory daemon repeatedly. Retention
+# does not help — the damage is done in minutes and the policy above measures days.
+#
+# So give agents a TMPDIR on disk instead. The unit files and profile launchers point
+# TMPDIR at this developer's directory; Codex treats $TMPDIR as its own sandbox writable
+# root, distinct from /tmp, so a sandboxed command can still write here.
+d /var/tmp/devbox-scratch 0755 root root -
+{% for dev in devbox_developers %}
+q /var/tmp/devbox-scratch/{{ dev.user }} 0700 {{ dev.user }} {{ dev.user }} 3d
+{% endfor %}

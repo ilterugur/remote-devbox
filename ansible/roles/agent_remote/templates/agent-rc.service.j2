@@ -38,6 +38,11 @@ User={{ row.user }}
 Slice=user-{{ ansible_facts.getent_passwd[row.user][1] }}.slice
 Environment=HOME=/home/{{ row.user }}
 Environment=PATH=/home/{{ row.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+{# /tmp is a tmpfs at half of RAM: anything a session writes there is resident memory
+   that can only be swapped, never dropped. Container tooling routinely leaves multiple
+   gigabytes of scratch behind, which is a memory outage rather than a disk one. Point
+   sessions at disk-backed scratch instead; the oomd role declares the directory. #}
+Environment=TMPDIR=/var/tmp/devbox-scratch/{{ row.user }}
 {# Do NOT set CLAUDE_CONFIG_DIR: it would make claude look for config at
    ~/.claude/.claude.json, but login + interactive sessions use Claude's default
    (~/.claude.json in HOME). The run script defaults its credential-check path to

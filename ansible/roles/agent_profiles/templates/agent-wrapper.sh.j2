@@ -11,6 +11,14 @@ export {{ devbox_agent_adapters[item.provider].config_env }}="{{ '/home/' ~ item
 export DEVBOX_AGENT_PROFILE="{{ item.name }}"
 export DEVBOX_AGENT_PROVIDER="{{ item.provider }}"
 
+# /tmp is a tmpfs at half of RAM, so a scratch tree written there is resident memory that
+# can only be swapped, never dropped — container tooling leaves gigabytes of it behind.
+# Send this session's temporary files to disk instead. Declared by the oomd role, which
+# also ages the contents out; fall back to the default only if it is somehow missing.
+if [ -d "/var/tmp/devbox-scratch/{{ item.user }}" ]; then
+  export TMPDIR="/var/tmp/devbox-scratch/{{ item.user }}"
+fi
+
 # Written by the memory role when this profile has a memory space. Sourced rather
 # than templated in, so exactly one role owns this file.
 MEMORY_ENV="{{ '/home/' ~ item.user ~ '/.agent-profiles/' ~ item.name }}/memory.env"

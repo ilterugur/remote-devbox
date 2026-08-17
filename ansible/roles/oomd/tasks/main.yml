@@ -22,6 +22,17 @@
     owner: root
     group: root
     mode: "0644"
+  register: tmpfiles_policy
+
+# --create only creates and adjusts; it never removes by age (that is the daily
+# systemd-tmpfiles-clean.timer). Safe to run on every apply, and needed here because an
+# agent whose unit already points TMPDIR at the scratch directory cannot wait for the
+# next boot to have one.
+- name: Materialize the scratch directories the policy declares
+  ansible.builtin.command:
+    cmd: systemd-tmpfiles --create /etc/tmpfiles.d/tmp.conf
+  when: tmpfiles_policy.changed
+  changed_when: true
 
 - name: Install systemd-oomd
   ansible.builtin.apt:
