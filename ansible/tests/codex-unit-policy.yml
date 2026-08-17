@@ -92,6 +92,62 @@
           ansible.builtin.assert:
             that:
               - "'heavy-command-gate' not in disabled_codex_unit.content | b64decode"
+
+        # The Remote Control daemon is the other Codex service on the box. Codex hands a
+        # spawned command `arg0-dir : codex-path : <inherited PATH>`, so this unit's PATH
+        # is the only route the gate has into a build Codex runs — it used to be
+        # hand-linked into Codex's versioned bundle instead, where an upgrade drops it.
+        - name: Render the Codex Remote Control service
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-remote-control.service.j2"
+            dest: "{{ render_dir.path }}/codex-remote-control.service"
+            mode: "0600"
+          vars:
+            row: >-
+              {{ codex_row | combine({
+                   'profile': 'codex-remote-control',
+                   'codex_home': '/home/dev-a/.agent-profiles/codex-remote-control',
+                 }) }}
+
+        - name: Read the Codex Remote Control service
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/codex-remote-control.service"
+          register: codex_rc_unit
+
+        - name: Assert Remote Control carries the gate, its own home, and the same wall
+          ansible.builtin.assert:
+            that:
+              - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-remote-control' in codex_rc_unit.content | b64decode"
+              - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_rc_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in codex_rc_unit.content | b64decode"
+              - "'ExecStart=/home/dev-a/.local/bin/codex app-server --remote-control --listen unix://' in codex_rc_unit.content | b64decode"
+              - "'features.code_mode_host' not in codex_rc_unit.content | b64decode"
+              - "'MemoryMax=12G' in codex_rc_unit.content | b64decode"
+              - "'OOMPolicy=continue' in codex_rc_unit.content | b64decode"
+              - "'ManagedOOMPreference=omit' in codex_rc_unit.content | b64decode"
+
+        - name: Render the Codex Remote Control service with the gate disabled
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/codex-remote-control.service.j2"
+            dest: "{{ render_dir.path }}/codex-remote-control-disabled.service"
+            mode: "0600"
+          vars:
+            row: >-
+              {{ codex_row | combine({
+                   'profile': 'codex-remote-control',
+                   'codex_home': '/home/dev-a/.agent-profiles/codex-remote-control',
+                   'heavy_job_gate_enabled': false,
+                 }) }}
+
+        - name: Read the disabled Codex Remote Control service
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/codex-remote-control-disabled.service"
+          register: disabled_codex_rc_unit
+
+        - name: Assert a disabled Remote Control daemon bypasses the gate
+          ansible.builtin.assert:
+            that:
+              - "'heavy-command-gate' not in disabled_codex_rc_unit.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

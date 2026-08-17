@@ -380,6 +380,12 @@ export interface DeveloperSpec {
   /** Resource overrides for this developer's Codex Desktop code-mode host. The host
    * aggregates every Codex project, so it may need more headroom than one RC unit. */
   codex_host_resources?: RcResourceSpec;
+  /** Run the always-on Codex Remote Control daemon for this developer. It is a second
+   * Codex login, not the code-mode host: its own CODEX_HOME under
+   * `.agent-profiles/codex-remote-control`, its own control socket. Declared here so
+   * the unit carries the heavy-job gate and the host resource limits that a daemon
+   * started by hand does not. */
+  codex_remote_control?: boolean;
   /** Overrides host.heavy_job_gate for this Linux developer. */
   heavy_job_gate?: HeavyJobGateSpec;
   container_engine?: EngineId;

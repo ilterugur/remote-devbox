@@ -125,6 +125,61 @@
   changed_when: false
   tags: [heavy_gate]
 
+# The always-on Codex Remote Control daemon, for developers that declared one. Written
+# before the drop-in below is removed, so the unit is never briefly undefined.
+- name: Write the managed Codex Remote Control service
+  ansible.builtin.template:
+    src: codex-remote-control.service.j2
+    dest: "/home/{{ row.user }}/.config/systemd/user/codex-remote-control.service"
+    owner: "{{ row.user }}"
+    group: "{{ row.user }}"
+    mode: "0600"
+  loop: "{{ devbox_codex_remote_control_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  register: codex_rc_service
+  tags: [heavy_gate]
+
+# Adoption. Before this unit was managed it was started by hand, as a base unit plus an
+# override.conf that replaced ExecStart. Leaving that drop-in in place would let the
+# hand-written ExecStart win over the managed one — and it carries no PATH, which is
+# the whole reason for managing the unit. Remove it once the managed unit exists.
+- name: Remove the superseded hand-written Codex Remote Control drop-in
+  ansible.builtin.file:
+    path: "/home/{{ row.user }}/.config/systemd/user/codex-remote-control.service.d"
+    state: absent
+  loop: "{{ devbox_codex_remote_control_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  register: codex_rc_dropin
+  tags: [heavy_gate]
+
+- name: Reload the user manager of each Codex Remote Control developer
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ row.user }}@ daemon-reload"
+  loop: "{{ devbox_codex_remote_control_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  changed_when: false
+  tags: [heavy_gate]
+
+# A daemon already running under the hand-written definition keeps the old environment
+# until it is restarted, so the gate would stay absent from exactly the process this
+# change exists to fix. Restart only when the definition actually moved: Remote Control
+# sessions reconnect, and a needless restart drops live ones for nothing.
+- name: Restart Codex Remote Control where its definition changed
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ item.0.row.user }}@ restart codex-remote-control.service"
+  loop: "{{ codex_rc_service.results | default([]) | zip(codex_rc_dropin.results | default([])) | list }}"
+  loop_control:
+    label: "{{ item.0.row.user }}"
+  when: item.0.changed or item.1.changed
+  changed_when: true
+  tags: [heavy_gate]
+
 - name: Generate a boot/recovery resume companion unit per Remote Control server
   ansible.builtin.template:
     src: agent-rc-resume.service.j2

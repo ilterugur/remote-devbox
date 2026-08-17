@@ -393,6 +393,9 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   if (d.browser !== undefined && typeof d.browser !== "boolean") {
     issues.push(err(`${base}.browser`, "must be true or false"));
   }
+  if (d.codex_remote_control !== undefined && typeof d.codex_remote_control !== "boolean") {
+    issues.push(err(`${base}.codex_remote_control`, "must be true or false"));
+  }
   validateAgentConfig(d.agent_config, `${base}.agent_config`, issues);
   validateGitIdentities(d, base, issues);
   validateAgentProfiles(d, base, issues);

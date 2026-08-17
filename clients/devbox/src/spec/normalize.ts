@@ -45,6 +45,10 @@ const GENERATED_HEADER = [
 /** No client facts is the honest default: detection is best-effort and may find nothing. */
 const NO_CLIENT_FACTS: ClientFacts = { keyboard: null };
 const HEAVY_JOB_CATEGORIES = ["build", "typecheck", "generate", "test"] as const;
+/** Fixed: the Remote Control daemon is its own Codex login and needs a CODEX_HOME that
+ * cannot collide with the code-mode host's. Named, not derived, so adopting a daemon
+ * someone already started by hand is a no-op rather than a move. */
+const CODEX_REMOTE_CONTROL_PROFILE = "codex-remote-control";
 
 type NormalizedHeavyJobGate = {
   enabled: boolean;
@@ -169,6 +173,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),
     devbox_codex_units: normalizeCodexUnits(resolved, hostHeavyJobGate),
+    devbox_codex_remote_control_units: normalizeCodexRemoteControlUnits(resolved, hostHeavyJobGate),
     devbox_developers: resolved.developers.map((dev) =>
       normalizeDeveloper(dev, tailscale, client, clientPorts, hostHeavyJobGate),
     ),
@@ -253,29 +258,69 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
 function normalizeCodexUnits(resolved: ResolvedSpec, hostHeavyJobGate: NormalizedHeavyJobGate): Record<string, unknown>[] {
   return resolved.developers.flatMap((dev) => {
     const profile = Object.entries(dev.agent_profiles ?? {}).find(([, value]) => value.provider === "codex")?.[0];
-    const resources = normalizeDirectMemoryResources(
-      {
-        ...RC_DEFAULTS.resources,
-        ...(resolved.remote_control?.resources ?? {}),
-        ...(dev.codex_host_resources ?? {}),
-      },
-      true,
-    );
-    const heavyJobGate = normalizeHeavyJobGate(hostHeavyJobGate, dev.heavy_job_gate);
-    const enabledCategories = HEAVY_JOB_CATEGORIES.filter((category) => heavyJobGate.categories[category]);
     return profile
       ? [{
           user: dev.user,
           profile,
           codex_home: `/home/${dev.user}/.agent-profiles/${profile}`,
-          heavy_job_gate_enabled: heavyJobGate.enabled,
-          heavy_job_gate_categories: enabledCategories,
-          heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
-          heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
-          resources,
+          ...codexUnitEnvelope(dev, resolved, hostHeavyJobGate),
         }]
       : [];
   });
+}
+
+/**
+ * The always-on Codex Remote Control daemon, one per developer that asks for it.
+ *
+ * A second Codex login rather than a second view of the code-mode host: its own
+ * CODEX_HOME and its own control socket, which is why it gets a fixed profile
+ * directory of its own instead of reusing the `codex-main` one.
+ *
+ * It shares the code-mode host's envelope on purpose. Both daemons belong to the same
+ * developer and compete for the same machine, so a runaway build under either has to
+ * meet the same ceiling — and, more to the point, the same heavy-job gate. Codex hands
+ * a spawned command `arg0-dir : codex-path : <inherited PATH>`, so the gate reaches it
+ * only through this unit's PATH; a daemon started by hand resolves bun/node/tsc
+ * straight from mise and queues on nothing.
+ */
+function normalizeCodexRemoteControlUnits(
+  resolved: ResolvedSpec,
+  hostHeavyJobGate: NormalizedHeavyJobGate,
+): Record<string, unknown>[] {
+  return resolved.developers.flatMap((dev) =>
+    dev.codex_remote_control
+      ? [{
+          user: dev.user,
+          profile: CODEX_REMOTE_CONTROL_PROFILE,
+          codex_home: `/home/${dev.user}/.agent-profiles/${CODEX_REMOTE_CONTROL_PROFILE}`,
+          ...codexUnitEnvelope(dev, resolved, hostHeavyJobGate),
+        }]
+      : [],
+  );
+}
+
+/** Gate settings and resource ceiling shared by every Codex daemon of one developer. */
+function codexUnitEnvelope(
+  dev: ResolvedDeveloper,
+  resolved: ResolvedSpec,
+  hostHeavyJobGate: NormalizedHeavyJobGate,
+): Record<string, unknown> {
+  const resources = normalizeDirectMemoryResources(
+    {
+      ...RC_DEFAULTS.resources,
+      ...(resolved.remote_control?.resources ?? {}),
+      ...(dev.codex_host_resources ?? {}),
+    },
+    true,
+  );
+  const heavyJobGate = normalizeHeavyJobGate(hostHeavyJobGate, dev.heavy_job_gate);
+  return {
+    heavy_job_gate_enabled: heavyJobGate.enabled,
+    heavy_job_gate_categories: HEAVY_JOB_CATEGORIES.filter((category) => heavyJobGate.categories[category]),
+    heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
+    heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
+    resources,
+  };
 }
 
 function normalizeDeveloper(

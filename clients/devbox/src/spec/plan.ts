@@ -137,6 +137,10 @@ function developerLines(
     ),
   );
 
+  if (dev.codex_remote_control) {
+    lines.push(row("codex rc", "always-on daemon · own CODEX_HOME (codex-remote-control)", indent));
+  }
+
   if (dev.memory?.enabled) {
     const instances = Object.entries(dev.memory.instances ?? {})
       .map(([k, v]) => `${k}→${v.llm_provider}`)

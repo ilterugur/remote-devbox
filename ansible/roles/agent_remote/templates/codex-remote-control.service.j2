@@ -1,0 +1,56 @@
+{# Managed by Ansible (remote-devbox). The always-on Codex Remote Control daemon: a
+   second Codex login with its own CODEX_HOME and control socket, distinct from the
+   code-mode host next to it.
+
+   The PATH line is the whole point of managing this unit. Codex hands a spawned
+   command `arg0-dir : codex-path : <inherited PATH>`, so the only way the shared
+   heavy-job gate reaches a build Codex runs is through what this daemon inherits.
+   A hand-started daemon resolves bun/node/tsc straight from mise and queues on
+   nothing — which is why the gate used to be hand-linked into Codex's own versioned
+   bundle directory, where the next upgrade silently dropped it. #}
+{% set L = row.resources %}
+[Unit]
+Description=Codex Remote Control daemon ({{ row.profile }})
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=CODEX_HOME={{ row.codex_home }}
+Environment=PATH={% if row.heavy_job_gate_enabled | default(true) %}/usr/local/lib/agent-devbox/heavy-command-gate:{% endif %}/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+{% if row.heavy_job_gate_enabled | default(true) %}Environment=DEVBOX_HEAVY_JOB_CATEGORIES={{ row.heavy_job_gate_categories | default(['build', 'typecheck', 'generate', 'test']) | join(',') }}
+Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC={{ row.heavy_job_gate_wait_timeout_sec | default(1800) }}
+Environment=DEVBOX_HEAVY_JOB_WARN_AFTER_SEC={{ row.heavy_job_gate_warn_after_sec | default(5) }}
+{% endif %}
+ExecStart=/home/{{ row.user }}/.local/bin/codex app-server --remote-control --listen unix://
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+{% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
+{% endif %}
+{%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
+{% endif %}
+{%- if 'memory_swap_max' in L %}MemorySwapMax={{ L.memory_swap_max }}
+{% endif %}
+{%- if 'cpu_weight' in L %}CPUWeight={{ L.cpu_weight }}
+{% endif %}
+{%- if 'cpu_quota' in L %}CPUQuota={{ L.cpu_quota }}
+{% endif %}
+{%- if 'io_weight' in L %}IOWeight={{ L.io_weight }}
+{% endif %}
+{%- if 'nice' in L %}Nice={{ L.nice }}
+{% endif %}
+{%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
+{% endif %}
+{%- if 'oom_policy' in L %}OOMPolicy={{ L.oom_policy }}
+{% endif %}
+{#- Same reasoning as the code-mode host: this daemon aggregates every Codex session
+    for the user and already carries a hard MemoryMax, so parent-slice oomd must not
+    take it and every live session down together. #}
+ManagedOOMPreference=omit
+
+[Install]
+WantedBy=default.target

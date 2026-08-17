@@ -61,6 +61,7 @@ devbox_remote_control:
     skip_workflow_warning: true
 devbox_rc_units: []
 devbox_codex_units: []
+devbox_codex_remote_control_units: []
 
 devbox_developers:
   - user: dev-a

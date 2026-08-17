@@ -211,6 +211,15 @@ developers:
       memory_max: 16G
       memory_swap_max: 1G
 
+    # The always-on Codex Remote Control daemon, off unless asked for. It is a second
+    # Codex login rather than another view of the code-mode host: its own CODEX_HOME
+    # under `.agent-profiles/codex-remote-control`, its own control socket. Declaring
+    # it is what puts the heavy-job gate on its PATH — Codex hands a spawned command
+    # `arg0-dir : codex-path : <inherited PATH>`, so a daemon started by hand resolves
+    # bun/node/tsc straight from mise and queues on nothing. It shares the ceilings
+    # above, because both daemons compete for the same machine.
+    codex_remote_control: true
+
     git_identities:
       work:
         name: "Dev A"

@@ -190,6 +190,43 @@ test("a developer with no codex profile contributes no codex unit", () => {
   expect(normalize(resolved).devbox_codex_units).toEqual([]);
 });
 
+test("codex remote control is opt-in and off by default", () => {
+  expect(normalize(codexResolved()).devbox_codex_remote_control_units).toEqual([]);
+});
+
+// Its own CODEX_HOME, not the code-mode host's: a second Codex login with its own
+// control socket. The gate settings have to come along — the daemon's inherited PATH is
+// the only route the heavy-job gate has into a build Codex runs.
+test("an opted-in developer gets a codex remote control unit with its own home and the gate", () => {
+  const spec = codexResolved();
+  const units = normalize({
+    ...spec,
+    developers: [{ ...spec.developers[0]!, codex_remote_control: true }],
+  }).devbox_codex_remote_control_units as Record<string, unknown>[];
+
+  expect(units).toHaveLength(1);
+  expect(units[0]).toMatchObject({
+    user: "dev-a",
+    profile: "codex-remote-control",
+    codex_home: "/home/dev-a/.agent-profiles/codex-remote-control",
+    heavy_job_gate_enabled: true,
+    heavy_job_gate_categories: ["build", "typecheck", "generate", "test"],
+  });
+});
+
+// Both daemons belong to one developer and compete for the same machine, so a runaway
+// build under either has to meet the same wall.
+test("codex remote control shares the code-mode host's resolved resource envelope", () => {
+  const spec = codexResolved();
+  const out = normalize({
+    ...spec,
+    developers: [{ ...spec.developers[0]!, codex_remote_control: true }],
+  });
+  const host = (out.devbox_codex_units as Record<string, unknown>[])[0]!;
+  const rc = (out.devbox_codex_remote_control_units as Record<string, unknown>[])[0]!;
+  expect(rc.resources).toEqual(host.resources);
+});
+
 test("absent optionals become concrete values, never undefined", () => {
   const dev = dev0();
   expect(dev.adopt_existing).toBe(false);
