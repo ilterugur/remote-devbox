@@ -65,6 +65,7 @@
           ansible.builtin.assert:
             that:
               - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
+              - "'Environment=TMPDIR=/var/tmp/devbox-scratch/dev-a' in codex_unit.content | b64decode"
               - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_unit.content | b64decode"
               - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in codex_unit.content | b64decode"
               - "'Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=1800' in codex_unit.content | b64decode"
@@ -118,6 +119,7 @@
           ansible.builtin.assert:
             that:
               - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-remote-control' in codex_rc_unit.content | b64decode"
+              - "'Environment=TMPDIR=/var/tmp/devbox-scratch/dev-a' in codex_rc_unit.content | b64decode"
               - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_rc_unit.content | b64decode"
               - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in codex_rc_unit.content | b64decode"
               - "'ExecStart=/home/dev-a/.local/bin/codex app-server --remote-control --listen unix://' in codex_rc_unit.content | b64decode"

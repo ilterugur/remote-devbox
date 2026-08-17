@@ -98,6 +98,16 @@
               - "'MemorySwapMax=2G' in heavy_unit.content | b64decode"
               - "'OOMPolicy=continue' in heavy_unit.content | b64decode"
               - "'ManagedOOMPreference=avoid' in heavy_unit.content | b64decode"
+
+        # A ceiling on the unit does not help when the memory is spent as tmpfs pages:
+        # those are charged to the box, not to this cgroup, and cannot be reclaimed under
+        # pressure. Sessions have to write their scratch to disk for the ceiling to mean
+        # anything, which is what TMPDIR is doing here.
+        - name: Assert sessions write temporary files to disk, not to the RAM-backed tmpfs
+          ansible.builtin.assert:
+            that:
+              - "'Environment=TMPDIR=/var/tmp/devbox-scratch/dev-a' in plain_unit.content | b64decode"
+              - "'Environment=TMPDIR=/var/tmp/devbox-scratch/dev-a' in heavy_unit.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

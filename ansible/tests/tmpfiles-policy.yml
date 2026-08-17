@@ -4,6 +4,11 @@
   connection: local
   gather_facts: false
 
+  vars:
+    devbox_developers:
+      - user: dev-a
+      - user: dev-b
+
   tasks:
     - name: Render and assert
       block:
@@ -29,6 +34,16 @@
             that:
               - "'q /tmp 1777 root root 3d' in tmpfiles_policy.content | b64decode"
               - "'10d' not in tmpfiles_policy.content | b64decode"
+
+        # Every developer needs a scratch directory of their own, private, and aged out
+        # on the same schedule. It is what TMPDIR points at, so a missing entry sends the
+        # session's temporary files back into the RAM-backed tmpfs.
+        - name: Assert each developer gets a private disk-backed scratch directory
+          ansible.builtin.assert:
+            that:
+              - "'d /var/tmp/devbox-scratch 0755 root root -' in tmpfiles_policy.content | b64decode"
+              - "'q /var/tmp/devbox-scratch/dev-a 0700 dev-a dev-a 3d' in tmpfiles_policy.content | b64decode"
+              - "'q /var/tmp/devbox-scratch/dev-b 0700 dev-b dev-b 3d' in tmpfiles_policy.content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

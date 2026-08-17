@@ -12,6 +12,9 @@ StartLimitBurst=5
 [Service]
 Type=simple
 Environment=CODEX_HOME={{ row.codex_home }}
+{# Disk-backed scratch: /tmp is a tmpfs at half of RAM, and Codex treats $TMPDIR as a
+   sandbox writable root of its own, so a sandboxed command can still write here. #}
+Environment=TMPDIR=/var/tmp/devbox-scratch/{{ row.user }}
 Environment=PATH={% if row.heavy_job_gate_enabled | default(true) %}/usr/local/lib/agent-devbox/heavy-command-gate:{% endif %}/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 {% if row.heavy_job_gate_enabled | default(true) %}Environment=DEVBOX_HEAVY_JOB_CATEGORIES={{ row.heavy_job_gate_categories | default(['build', 'typecheck', 'generate', 'test']) | join(',') }}
 Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC={{ row.heavy_job_gate_wait_timeout_sec | default(1800) }}
