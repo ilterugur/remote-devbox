@@ -73,24 +73,36 @@
                 < (agent_wrapper.content | b64decode).rfind(gate_env_path)
               - "'[ -f \"$HEAVY_GATE_ENV\" ] && . \"$HEAVY_GATE_ENV\"' in agent_wrapper.content | b64decode"
 
-        # The regression this file exists for. agent-rc-run is a plain script rather than
-        # a template, so it is read straight from the repo.
-        - name: Read the always-on Remote Control runner
+        # The regression this file exists for. These are plain scripts rather than
+        # templates, so they are read straight from the repo. Every script that starts an
+        # agent belongs in this list: the gate reaching only some of them is precisely how
+        # it stayed inert while looking installed. agent-rc-resume-exec matters most on a
+        # box that restarts or OOMs — it is what brings nearly every session back.
+        - name: Read each script that starts an agent
           ansible.builtin.slurp:
-            src: "{{ playbook_dir }}/../../scripts/agent-rc-run.sh"
-          register: agent_rc_run
+            src: "{{ playbook_dir }}/../../scripts/{{ script }}"
+          loop:
+            - agent-rc-run.sh
+            - agent-rc-resume-exec.sh
+          loop_control:
+            loop_var: script
+          register: agent_entry_scripts
 
-        - name: Assert the always-on runner sources the gate after mise modifies PATH
+        - name: Assert every agent entry point sources the gate after mise modifies PATH
           ansible.builtin.assert:
             that:
-              - "'heavy-gate.env' in agent_rc_run.content | b64decode"
+              - "'heavy-gate.env' in entry.content | b64decode"
               - >-
-                (agent_rc_run.content | b64decode).rfind('mise activate bash --shims')
-                < (agent_rc_run.content | b64decode).find('heavy-gate.env')
+                (entry.content | b64decode).rfind('mise activate bash --shims')
+                < (entry.content | b64decode).find('heavy-gate.env')
             fail_msg: >-
-              scripts/agent-rc-run.sh must source the profile's heavy-gate.env after mise
-              activation. Without it every build an always-on Remote Control session starts
-              bypasses the shared heavy-job slot.
+              scripts/{{ entry.script }} must source the profile's heavy-gate.env after mise
+              activation. Without it every build the sessions it starts runs bypasses the
+              shared heavy-job slot.
+          loop: "{{ agent_entry_scripts.results }}"
+          loop_control:
+            loop_var: entry
+            label: "{{ entry.script }}"
 
         # Opting out is the absence of the file, so the role has to both skip writing it
         # and remove one left behind by a previously enabled profile.

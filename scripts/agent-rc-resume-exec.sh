@@ -23,6 +23,17 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
 export PATH="${HOME}/.local/bin:${PATH}"
 command -v mise >/dev/null 2>&1 && eval "$(mise activate bash --shims)" || true
 
+# This is the third entry point that starts an agent, and on a box that restarts or
+# OOMs it is the one that starts nearly all of them: a session resumed here inherits
+# nothing from agent-rc-run. Source the same shared heavy-job wiring, after the mise
+# activation above, or every build a resumed session runs bypasses the slot. The
+# profile name reaches us from the RC unit through the tmux server we run under.
+_RC_PROFILE="${CLAUDE_RC_AGENT_PROFILE:-}"
+if [ -n "${_RC_PROFILE}" ] && [ -r "${HOME}/.agent-profiles/${_RC_PROFILE}/heavy-gate.env" ]; then
+  # shellcheck disable=SC1090
+  . "${HOME}/.agent-profiles/${_RC_PROFILE}/heavy-gate.env"
+fi
+
 cd "${WT}" 2>/dev/null || { echo "[agent-rc-resume] worktree missing: ${WT}" >&2; sleep 10; exit 1; }
 
 NAME="$(cat "${NAMEFILE}")"
