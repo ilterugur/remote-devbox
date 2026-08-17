@@ -34,6 +34,17 @@ if [ -n "${_RC_PROFILE}" ] && [ -r "${HOME}/.agent-profiles/${_RC_PROFILE}/heavy
   . "${HOME}/.agent-profiles/${_RC_PROFILE}/heavy-gate.env"
 fi
 
+# Memory wiring, for the same reason. This one is not load-bearing today: the bank
+# also comes from ~/.hindsight/claude-code.json, which resolves to the same values
+# with no environment at all. But that file is per-HOME while memory.env is per
+# profile, so the moment a developer runs two agent profiles against different banks
+# it is the only thing that tells them apart — and a resumed session would silently
+# write to the wrong bank. Keep every entry point sourcing the same wiring.
+if [ -n "${_RC_PROFILE}" ] && [ -r "${HOME}/.agent-profiles/${_RC_PROFILE}/memory.env" ]; then
+  # shellcheck disable=SC1090
+  . "${HOME}/.agent-profiles/${_RC_PROFILE}/memory.env"
+fi
+
 cd "${WT}" 2>/dev/null || { echo "[agent-rc-resume] worktree missing: ${WT}" >&2; sleep 10; exit 1; }
 
 NAME="$(cat "${NAMEFILE}")"

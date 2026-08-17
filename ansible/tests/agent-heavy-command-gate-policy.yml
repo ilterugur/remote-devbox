@@ -104,6 +104,21 @@
             loop_var: entry
             label: "{{ entry.script }}"
 
+        # Same invariant for the memory wiring: per-profile, and the only thing that
+        # separates two profiles pointed at different banks.
+        - name: Assert every agent entry point sources the profile's memory wiring
+          ansible.builtin.assert:
+            that:
+              - "'memory.env' in entry.content | b64decode"
+            fail_msg: >-
+              scripts/{{ entry.script }} must source the profile's memory.env. Without it a
+              session it starts falls back to the per-HOME Hindsight config, which cannot
+              tell two profiles pointed at different banks apart.
+          loop: "{{ agent_entry_scripts.results }}"
+          loop_control:
+            loop_var: entry
+            label: "{{ entry.script }}"
+
         # Opting out is the absence of the file, so the role has to both skip writing it
         # and remove one left behind by a previously enabled profile.
         - name: Read the agent profiles tasks
