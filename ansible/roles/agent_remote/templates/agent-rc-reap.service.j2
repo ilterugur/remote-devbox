@@ -1,0 +1,46 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set R = devbox_remote_control.reap %}
+[Unit]
+Description=Reap processes stranded by removed Remote Control worktrees
+Documentation=man:agent-rc-reap(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/agent-rc-reap --grace-sec {{ R.grace_sec }} --state /run/agent-rc-reap/seen.json
+{# The reaper only kills a process it has ALREADY seen orphaned on an earlier pass,
+   so the sighting record has to outlive the oneshot. Without Preserve=yes systemd
+   removes RuntimeDirectory= the moment the unit exits, every pass starts from an
+   empty state, nothing ever reaches its grace, and the timer becomes a no-op that
+   still looks healthy. #}
+RuntimeDirectory=agent-rc-reap
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+{# Runs as root: it reads other users' /proc entries and signals their processes.
+   Everything below narrows that down to the two things it actually needs — read
+   /proc and /sys/fs/cgroup, write its own state file. #}
+ProtectSystem=strict
+ReadWritePaths=/run/agent-rc-reap
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+{# CAP_KILL is the whole job. Signalling processes across uids needs it, and the
+   set is capped here so nothing else in the ambient root set is reachable. #}
+CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+{# hide_pids mounts /proc with hidepid, and ProtectProc= would narrow the view
+   further. The reaper must see every process in the RC cgroups, so it stays at
+   the permissive setting deliberately rather than by omission. #}
+ProtectProc=default
+UMask=0077
+TimeoutStartSec=120s
+{# A janitor must never become the outage. If it wedges, it dies and tries again
+   on the next tick rather than holding a slot open. #}
+Nice=10
+IOSchedulingClass=idle

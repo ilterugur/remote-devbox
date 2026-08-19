@@ -30,6 +30,14 @@
     group: root
     mode: "0755"
 
+- name: Deploy the worktree-orphan reaper (python, driven by its own timer)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/agent-rc-reap.py"
+    dest: /usr/local/bin/agent-rc-reap
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Ensure shared data + adapters dir
   ansible.builtin.file:
     path: "{{ item }}"
@@ -203,6 +211,46 @@
     loop_var: row
     label: "{{ row.agent }}-{{ row.user }}-{{ row.project }}"
   when: not devbox_remote_control.resume.on_boot
+  notify: Reload systemd
+
+# ── Worktree-orphan reaper ────────────────────────────────────────────────────
+# One box-wide timer, not one per unit: the sweep already walks every agent-rc
+# cgroup in a single pass, so a unit apiece would be N wakeups doing one job.
+- name: Write the worktree-orphan reaper unit and timer
+  ansible.builtin.template:
+    src: "agent-rc-reap.{{ item }}.j2"
+    dest: "/etc/systemd/system/agent-rc-reap.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  when: devbox_remote_control.reap.enabled
+  notify: Reload systemd
+
+- name: Enable the worktree-orphan reaper timer
+  ansible.builtin.systemd_service:
+    name: agent-rc-reap.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: devbox_remote_control.reap.enabled
+
+# Stop before removing: a timer whose unit files vanish underneath it stays loaded
+# and armed in the running manager until something reloads it.
+- name: Stop the worktree-orphan reaper timer when reaping is disabled
+  ansible.builtin.systemd_service:
+    name: agent-rc-reap.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not devbox_remote_control.reap.enabled
+
+- name: Remove the worktree-orphan reaper unit and timer when reaping is disabled
+  ansible.builtin.file:
+    path: "/etc/systemd/system/agent-rc-reap.{{ item }}"
+    state: absent
+  loop: [service, timer]
+  when: not devbox_remote_control.reap.enabled
   notify: Reload systemd
 
 # ── Legacy migration: retire the old single-agent claude-rc-* units/scripts/dir.

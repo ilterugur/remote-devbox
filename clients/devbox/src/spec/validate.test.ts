@@ -451,6 +451,19 @@ test("remote_control.capacity must be a positive integer", () => {
   expect(paths({ ...minimal(), remote_control: { capacity: 2.5 } })).toContain("error:remote_control.capacity");
 });
 
+test("remote_control.reap rejects a non-mapping and bad intervals", () => {
+  expect(paths({ ...minimal(), remote_control: { reap: true } })).toContain("error:remote_control.reap");
+  const bad = { ...minimal(), remote_control: { reap: { enabled: "yes", interval_sec: 0, grace_sec: -1 } } };
+  expect(paths(bad)).toContain("error:remote_control.reap.enabled");
+  expect(paths(bad)).toContain("error:remote_control.reap.interval_sec");
+  expect(paths(bad)).toContain("error:remote_control.reap.grace_sec");
+});
+
+test("remote_control.reap accepts a well-formed block", () => {
+  const ok = { ...minimal(), remote_control: { reap: { enabled: true, interval_sec: 600, grace_sec: 1800 } } };
+  expect(paths(ok).filter((p) => p.startsWith("error:remote_control.reap"))).toEqual([]);
+});
+
 test("remote_control.resources reuses the systemd size rules", () => {
   const spec = { ...minimal(), remote_control: { resources: { memory_high: "lots" } } };
   expect(paths(spec)).toContain("error:remote_control.resources.memory_high");
