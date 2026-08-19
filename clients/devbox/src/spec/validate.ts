@@ -703,6 +703,18 @@ function validateRemoteControl(raw: Record<string, unknown>, issues: Issue[]): v
       );
     }
   }
+
+  const rp = rc.reap;
+  if (rp !== undefined) {
+    if (!isRecord(rp)) {
+      issues.push(err("remote_control.reap", "must be a mapping"));
+    } else {
+      if (rp.enabled !== undefined && typeof rp.enabled !== "boolean") {
+        issues.push(err("remote_control.reap.enabled", "must be true or false"));
+      }
+      validatePositiveInts(rp, "remote_control.reap", ["interval_sec", "grace_sec"], issues);
+    }
+  }
 }
 
 function validateProjectRemoteControl(raw: unknown, base: string, issues: Issue[]): void {

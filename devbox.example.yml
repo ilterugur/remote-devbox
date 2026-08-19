@@ -171,6 +171,22 @@ shared_services:
 #   build_env: {}           # e.g. { NODE_OPTIONS: "--max-old-space-size=6144" }
 #   resume:
 #     max_concurrent: 2     # sessions warming at once after a reboot
+#
+# With `spawn: worktree` each session gets its own git worktree, and removing that
+# worktree does not reap what the session started inside it: dev servers, bundler
+# service processes and test runners keep running with a working directory that no
+# longer exists, holding their heap until the box reboots. They accumulate quietly,
+# and the failure they eventually cause does not look like a leak — the unit crosses
+# memory_high, the kernel throttles the whole cgroup instead of killing anything, and
+# every session in it stalls while the unit still reports "active (running)".
+#
+# The sweep only ever kills a process whose working directory is a DELETED worktree
+# path, never an agent session, and only after it has been seen orphaned across a
+# whole pass. Turn it off only if something else on the box already reaps them.
+#   reap:
+#     enabled: true
+#     interval_sec: 900     # how often to sweep
+#     grace_sec: 900        # how long a process must look orphaned before it is killed
 
 # What the box hands a laptop. The CLI is published as a compiled binary per platform,
 # so a developer needs neither this repo nor a Bun install — they run

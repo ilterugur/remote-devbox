@@ -75,6 +75,20 @@ test("remote control defaults are concrete even when nothing is declared", () =>
   });
 });
 
+test("worktree-orphan reaping is on by default", () => {
+  const rc = normalize(resolved).devbox_remote_control as Record<string, unknown>;
+  expect(rc.reap).toEqual({ enabled: true, interval_sec: 900, grace_sec: 900 });
+});
+
+test("reap settings are taken verbatim when declared", () => {
+  const spec: ResolvedSpec = {
+    ...resolved,
+    remote_control: { reap: { enabled: false, interval_sec: 300, grace_sec: 60 } },
+  };
+  const rc = normalize(spec).devbox_remote_control as Record<string, unknown>;
+  expect(rc.reap).toEqual({ enabled: false, interval_sec: 300, grace_sec: 60 });
+});
+
 test("skip_workflow_warning follows on_boot unless it is set explicitly", () => {
   const resume = (s: ResolvedSpec) =>
     (normalize(s).devbox_remote_control as { resume: Record<string, unknown> }).resume;

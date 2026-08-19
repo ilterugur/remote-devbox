@@ -298,6 +298,18 @@ export interface RcResumeSpec {
   skip_workflow_warning?: boolean;
 }
 
+/**
+ * Reaping of processes stranded by removed `spawn: worktree` worktrees. A session's
+ * dev servers and bundlers outlive the worktree they were started in, and they
+ * accumulate until the unit crosses MemoryHigh and every session in it throttles.
+ */
+export interface RcReapSpec {
+  enabled?: boolean;
+  interval_sec?: number;
+  /** How long a process must be observed as an orphan before it is killed. */
+  grace_sec?: number;
+}
+
 /** Box-wide Remote Control defaults. Every project inherits these unless it says otherwise. */
 export interface RemoteControlSpec {
   enabled?: boolean;
@@ -307,6 +319,7 @@ export interface RemoteControlSpec {
   build_env?: Record<string, string>;
   autorestart?: RcAutorestartSpec;
   resume?: RcResumeSpec;
+  reap?: RcReapSpec;
 }
 
 /** One project's override. `resources` and `build_env` merge over the box defaults. */

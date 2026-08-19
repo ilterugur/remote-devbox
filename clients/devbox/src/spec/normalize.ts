@@ -189,6 +189,7 @@ function normalizeRemoteControl(resolved: ResolvedSpec): Record<string, unknown>
   const rc = resolved.remote_control ?? {};
   const ar = rc.autorestart ?? {};
   const re = rc.resume ?? {};
+  const rp = rc.reap ?? {};
   const onBoot = re.on_boot ?? true;
   return {
     enabled: rc.enabled ?? true,
@@ -207,6 +208,16 @@ function normalizeRemoteControl(resolved: ResolvedSpec): Record<string, unknown>
       max_attempts: re.max_attempts ?? 3,
       timeout_sec: re.timeout_sec ?? 1800,
       skip_workflow_warning: re.skip_workflow_warning ?? onBoot,
+    },
+    // Only worktree spawning strands processes, but the reaper keys off deleted
+    // worktree paths rather than the spawn mode, so leaving it on for every box
+    // costs one no-op pass and covers projects that override spawn per project.
+    reap: {
+      enabled: rp.enabled ?? true,
+      interval_sec: rp.interval_sec ?? 900,
+      // Equal to the interval by default: a process has to survive a full pass as
+      // an orphan, never one that merely straddles a worktree being torn down.
+      grace_sec: rp.grace_sec ?? 900,
     },
   };
 }

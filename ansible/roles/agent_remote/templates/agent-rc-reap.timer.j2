@@ -1,0 +1,20 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set R = devbox_remote_control.reap %}
+[Unit]
+Description=Periodic sweep for processes stranded by removed Remote Control worktrees
+
+[Timer]
+{# Nothing is orphaned at boot — the units have only just started — so the first
+   sweep is delayed rather than racing the resume companion for the same box. #}
+OnBootSec=10min
+OnUnitActiveSec={{ R.interval_sec }}s
+{# The sweep is a leak check, not a deadline. Loose accuracy lets systemd batch it
+   with other timers instead of waking the box on its own. #}
+AccuracySec=1min
+RandomizedDelaySec=60s
+{# Deliberately not Persistent=: a missed sweep has nothing to catch up on, and
+   firing at boot would only re-record sightings the state file already lost. #}
+Unit=agent-rc-reap.service
+
+[Install]
+WantedBy=timers.target
