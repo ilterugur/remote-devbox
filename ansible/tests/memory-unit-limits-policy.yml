@@ -40,19 +40,27 @@
             src: "{{ render_dir.path }}/hindsight.service"
           register: memory_unit
 
+        # Match whole lines, never substrings. A directive glued onto the end of the
+        # previous line by Jinja whitespace control still satisfies an `in` test while
+        # systemd silently drops it — which is exactly how ManagedOOMPreference shipped
+        # as `TimeoutStopSec=30ManagedOOMPreference=avoid` and read back as `none`.
+        - name: Split the rendered unit into lines
+          ansible.builtin.set_fact:
+            memory_unit_lines: "{{ (memory_unit.content | b64decode).split('\n') | map('trim') | list }}"
+
         - name: Assert the ceiling reaches the unit
           ansible.builtin.assert:
             that:
-              - "'MemoryHigh=2G' in memory_unit.content | b64decode"
-              - "'MemoryMax=3G' in memory_unit.content | b64decode"
-              - "'MemorySwapMax=512M' in memory_unit.content | b64decode"
+              - "'MemoryHigh=2G' in memory_unit_lines"
+              - "'MemoryMax=3G' in memory_unit_lines"
+              - "'MemorySwapMax=512M' in memory_unit_lines"
 
         # Its own ceiling is the containment boundary. Without `avoid` this background
         # daemon stays the cheap victim while the agent hosts hold the actual memory.
         - name: Assert oomd stops selecting the daemon as the cheap victim
           ansible.builtin.assert:
             that:
-              - "'ManagedOOMPreference=avoid' in memory_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' in memory_unit_lines"
 
         # SIGTERM to a postmaster means "smart shutdown": wait for clients to disconnect,
         # indefinitely. That is exactly why the embedded postgres outlived a restart and
@@ -60,10 +68,10 @@
         - name: Assert the stop sequence actually shuts the embedded postgres down
           ansible.builtin.assert:
             that:
-              - "'KillMode=control-group' in memory_unit.content | b64decode"
-              - "'KillSignal=SIGINT' in memory_unit.content | b64decode"
-              - "'FinalKillSignal=SIGKILL' in memory_unit.content | b64decode"
-              - "'TimeoutStopSec=30' in memory_unit.content | b64decode"
+              - "'KillMode=control-group' in memory_unit_lines"
+              - "'KillSignal=SIGINT' in memory_unit_lines"
+              - "'FinalKillSignal=SIGKILL' in memory_unit_lines"
+              - "'TimeoutStopSec=30' in memory_unit_lines"
 
         # A daemon with no resources declared must still render a valid unit.
         - name: Render the unit for an instance with no resources declared
@@ -87,7 +95,7 @@
             that:
               - "'MemoryHigh=' not in bare_unit.content | b64decode"
               - "'MemoryMax=' not in bare_unit.content | b64decode"
-              - "'KillSignal=SIGINT' in bare_unit.content | b64decode"
+              - "'KillSignal=SIGINT' in (bare_unit.content | b64decode).split('\n') | map('trim') | list"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

@@ -39,8 +39,8 @@ KillMode=control-group
 KillSignal=SIGINT
 FinalKillSignal=SIGKILL
 TimeoutStopSec=30
-{#- The ceiling above is this unit's containment boundary, so parent-slice oomd must
-    stop selecting it as the cheap victim while the agent hosts hold the memory. #}
+# The ceiling above is this unit's containment boundary, so parent-slice oomd must stop
+# selecting it as the cheap victim while the agent hosts hold the memory.
 ManagedOOMPreference=avoid
 
 [Install]
