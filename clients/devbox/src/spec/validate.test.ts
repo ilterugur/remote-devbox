@@ -586,6 +586,17 @@ test("direct and weighted developer memory_high modes cannot mix", () => {
   expect(paths(mixed)).toContain("error:developers.resources.memory_high");
 });
 
+// /tmp is a tmpfs, so its size is a RAM bound. Unlike memory_reserve a percentage is
+// meaningful here — the kernel resolves it against RAM — so both forms must pass.
+test("tmp_size accepts absolute sizes and percentages, rejects junk", () => {
+  expect(paths({ ...minimal(), host: { tmp_size: "4G" } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { tmp_size: "512M" } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { tmp_size: "10%" } })).toEqual([]);
+  expect(paths({ ...minimal(), host: { tmp_size: "" } })).toContain("error:host.tmp_size");
+  expect(paths({ ...minimal(), host: { tmp_size: "half" } })).toContain("error:host.tmp_size");
+  expect(paths({ ...minimal(), host: { tmp_size: 4 } as never })).toContain("error:host.tmp_size");
+});
+
 test("memory_reserve is an absolute size and defaults independently of weight mode", () => {
   expect(paths({ ...minimal(), host: { memory_reserve: "4GB" } })).toEqual([]);
   expect(paths({ ...minimal(), host: { memory_reserve: "20%" } })).toContain("error:host.memory_reserve");

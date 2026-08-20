@@ -34,6 +34,68 @@
   when: tmpfiles_policy.changed
   changed_when: true
 
+# The retention policy above cannot help with this: it measures days, while a runaway
+# fills the tmpfs in minutes. What bounds the damage is the filesystem size itself.
+- name: Create the /tmp mount override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/tmp.mount.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Bound the tmpfs behind /tmp
+  ansible.builtin.template:
+    src: tmp-size.conf.j2
+    dest: /etc/systemd/system/tmp.mount.d/10-devbox-size.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: tmp_size_policy
+
+- name: Reload systemd so the bound is known to the manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: tmp_size_policy.changed
+
+# The drop-in only governs the NEXT mount, and /tmp has been mounted since boot. A
+# tmpfs takes a new size on a live remount without unmounting, so no open file handle
+# and no held flock is disturbed — waiting for a reboot would leave the box unbounded
+# for weeks, which is exactly how long the current uptime is.
+- name: Read what /tmp currently holds
+  ansible.builtin.command:
+    cmd: df -Pk /tmp
+  register: tmp_usage
+  changed_when: false
+  when: tmp_size_policy.changed
+
+# Shrinking a tmpfs below its current contents is the one way this can go wrong, and the
+# kernel's error for it is opaque. Say what to do instead. A percentage bound cannot be
+# compared without the host's RAM figure, so it is left for the remount to arbitrate.
+- name: Refuse to shrink /tmp below what it already holds
+  ansible.builtin.assert:
+    that:
+      - (tmp_usage.stdout_lines[1].split()[2] | int) <= (_tmp_size_kb | int)
+    fail_msg: >-
+      /tmp holds {{ tmp_usage.stdout_lines[1].split()[2] }}K but host.tmp_size is
+      {{ _tmp_size }} ({{ _tmp_size_kb }}K). Clear /tmp before applying, or raise it.
+  vars:
+    _tmp_size: "{{ devbox_host.tmp_size | default('4G', true) }}"
+    _tmp_size_kb: "{{ (_tmp_size | human_to_bytes) // 1024 }}"
+  when:
+    - tmp_size_policy.changed
+    - not (devbox_host.tmp_size | default('4G', true)).endswith('%')
+
+- name: Apply the bound to the live /tmp without unmounting it
+  ansible.builtin.command:
+    argv:
+      - mount
+      - -o
+      - "remount,size={{ devbox_host.tmp_size | default('4G', true) }}"
+      - /tmp
+  changed_when: true
+  when: tmp_size_policy.changed
+
 - name: Install systemd-oomd
   ansible.builtin.apt:
     name: systemd-oomd

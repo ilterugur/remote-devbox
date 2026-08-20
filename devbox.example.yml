@@ -43,6 +43,11 @@ host:
     # its own, so a runaway is the only casualty. '' disables the scope.
     memory_max: 8G
   swap_size: 8G
+  # Size bound for the tmpfs behind /tmp. Everything written there is resident memory
+  # that can only be swapped, never dropped, and the distro default is half of RAM —
+  # which is not a bound. Over the wall a job gets ENOSPC and fails alone, instead of
+  # quietly spending memory the whole box needs. Accepts '4G' or a percentage '10%'.
+  tmp_size: 4G
   zram:
     enabled: true
     percent: 25

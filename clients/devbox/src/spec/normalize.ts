@@ -103,6 +103,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_host: {
       swap_size: resolved.host?.swap_size ?? "4G",
       memory_reserve: canonicalMemorySize(resolved.host?.memory_reserve ?? "4G")!,
+      tmp_size: resolved.host?.tmp_size ?? "4G",
       zram: {
         enabled: resolved.host?.zram?.enabled ?? false,
         percent: resolved.host?.zram?.percent ?? 50,

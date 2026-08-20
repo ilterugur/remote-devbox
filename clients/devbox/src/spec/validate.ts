@@ -138,6 +138,10 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   if (h.swap_size !== undefined && !(typeof h.swap_size === "string" && /^\d+[KMGT]?$/.test(h.swap_size))) {
     issues.push(err("host.swap_size", "must be a size like '8G'"));
   }
+  // A percentage is legal for a tmpfs and is resolved by the kernel against RAM.
+  if (h.tmp_size !== undefined && !(typeof h.tmp_size === "string" && /^\d+([KMGT]|%)?$/.test(h.tmp_size))) {
+    issues.push(err("host.tmp_size", "must be a size like '4G' or a percentage like '10%'"));
+  }
   const reserve = h.memory_reserve;
   const canonicalReserve = typeof reserve === "string" ? canonicalMemorySize(reserve) : null;
   if (

@@ -377,6 +377,14 @@ test("developer heavy job settings merge over host settings field by field", () 
   expect((out.devbox_codex_units as any[])).toEqual([]);
 });
 
+// The vendor tmpfs default is half of RAM, so a box that never declares this must
+// still come out bounded rather than inheriting the thing that caused the incident.
+test("host.tmp_size is always emitted, bounded by default", () => {
+  expect((normalize(resolved).devbox_host as any).tmp_size).toBe("4G");
+  const declared = normalize({ ...resolved, host: { tmp_size: "12G" } } as ResolvedSpec);
+  expect((declared.devbox_host as any).tmp_size).toBe("12G");
+});
+
 test("host.oomd is always emitted, fully defaulted", () => {
   const out = normalize({ ...resolved, host: {} });
   expect(out.devbox_host).toMatchObject({

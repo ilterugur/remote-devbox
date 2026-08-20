@@ -60,6 +60,11 @@ export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";
 export interface HostSpec {
   swap_size?: string;
   memory_reserve?: string;
+  /** Size bound for the tmpfs behind /tmp. Everything written there is resident memory
+   * that can only be swapped, never dropped, and the vendor default is half of RAM —
+   * not a bound at all. Over the wall a job gets ENOSPC and fails alone. A percentage
+   * (e.g. "10%") is accepted and resolved by the kernel against RAM. */
+  tmp_size?: string;
   oomd?: OomdSpec;
   zram?: { enabled: boolean; percent?: number; algo?: string; priority?: number };
   locales?: string[];
