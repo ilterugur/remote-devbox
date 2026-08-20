@@ -5,6 +5,16 @@
 #
 # Key-only either way. Tailscale is a network layer, not authentication: a key listed
 # here works over the public interface too, unless the firewall says otherwise.
+
+# Reap sessions whose client vanished. Without these, sshd never notices a laptop that
+# slept or changed IP: the session lives on, and so does every port it reverse-forwarded.
+# The devbox browser failover forwards a fixed port, so one such orphan makes every later
+# tunnel fail to bind for good — the client relaunches its browser in a loop and nothing
+# on the box ever frees the port. TCPKeepAlive alone does not cover this: its first probe
+# is two hours out, and it does not apply to a peer that is still answering TCP.
+ClientAliveInterval 30
+ClientAliveCountMax 3
+
 PermitRootLogin no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
