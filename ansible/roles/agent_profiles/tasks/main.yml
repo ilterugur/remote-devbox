@@ -105,6 +105,21 @@
     - yarn
   tags: [heavy_gate]
 
+# The shims above only bite while their directory sits ahead of mise's on PATH. Codex
+# runs every command as `bash -lc`, and mise's activation snippet prepends its
+# installs/*/bin ahead of everything the daemon unit passed down — so bun, node and npm
+# resolved to the real toolchain and no build a Codex session ran was ever gated. This
+# sorts after mise.sh in /etc/profile.d and puts the gate back in front. It only
+# reorders: a developer with the gate off never has the directory on PATH to reorder.
+- name: Keep the heavy-command gate ahead of mise in login shells
+  ansible.builtin.template:
+    src: heavy-gate-path.sh.j2
+    dest: /etc/profile.d/zz-agent-devbox-heavy-gate.sh
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [heavy_gate]
+
 - name: Reject a profile whose provider has no adapter
   ansible.builtin.assert:
     that: item.provider in devbox_agent_adapters
