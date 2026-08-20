@@ -75,6 +75,7 @@ type RenderBrowserSupervisor = (opts: {
   readyTimeoutSeconds?: number;
   pollIntervalSeconds?: number;
   monitorIntervalSeconds?: number;
+  tunnelRetryMaxSeconds?: number;
 }) => string;
 
 type SupervisorFixture = {
@@ -89,6 +90,8 @@ type SupervisorFixture = {
   sshPid: string;
   curlCalls: string;
   curlFailures: string;
+  sshCalls: string;
+  sshFailures: string;
 };
 
 const SUPERVISOR_READY_TIMEOUT_SECONDS = 3;
@@ -99,7 +102,7 @@ function fakeExecutable(path: string, source: string): void {
   chmodSync(path, 0o755);
 }
 
-function supervisorFixture(markerPort: string, curlFailures = 0): SupervisorFixture {
+function supervisorFixture(markerPort: string, curlFailures = 0, sshFailures = 0): SupervisorFixture {
   const root = mkdtempSync(join(tmpdir(), "devbox-browser-supervisor-"));
   const bin = join(root, "bin");
   const state = join(root, "state");
@@ -133,6 +136,13 @@ function supervisorFixture(markerPort: string, curlFailures = 0): SupervisorFixt
   ].join("\n"));
   fakeExecutable(sshPath, [
     'printf "%s\\n" "ssh $*" >> "$EVENTS"',
+    'calls=$(cat "$STATE/ssh.calls" 2>/dev/null || echo 0)',
+    'calls=$((calls + 1))',
+    'printf "%s\\n" "$calls" > "$STATE/ssh.calls"',
+    'if [ "$calls" -le "$SSH_FAILURES" ]; then',
+    '  printf "%s\\n" "Error: remote port forwarding failed for listen port" >&2',
+    '  exit 255',
+    'fi',
     'printf "%s\\n" "$$" > "$STATE/ssh.pid"',
     'trap \'printf "%s\\n" ssh-term >> "$EVENTS"; exit 0\' TERM INT HUP',
     'while :; do sleep 0.01; done',
@@ -150,6 +160,8 @@ function supervisorFixture(markerPort: string, curlFailures = 0): SupervisorFixt
     sshPid: join(state, "ssh.pid"),
     curlCalls,
     curlFailures: String(curlFailures),
+    sshCalls: join(state, "ssh.calls"),
+    sshFailures: String(sshFailures),
   };
 }
 
@@ -187,6 +199,7 @@ function startSupervisor(script: string, fixture: SupervisorFixture) {
       MARKER_PORT: fixture.markerPort,
       STATE: fixture.state,
       CURL_FAILURES: fixture.curlFailures,
+      SSH_FAILURES: fixture.sshFailures,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -266,6 +279,11 @@ describe("agentsFor", () => {
     expect(script).toContain("trap cleanup EXIT");
     expect(script).toContain('kill "$tunnel_pid"');
     expect(script).toContain('kill "$chrome_pid"');
+    // A tunnel that cannot bind is a remote-state problem, not a reason to kill this
+    // machine's Chrome: only Chrome's own death ends the supervisor.
+    expect(script).not.toContain('fail "CDP reverse tunnel exited"');
+    expect(script).toContain("tunnel_backoff");
+    expect(script).toContain('fail "managed Chrome exited"');
   });
 
   test("a browser port gets an owned loopback SSH forward", () => {
@@ -445,6 +463,36 @@ describe("agentsFor", () => {
     try {
       await waitFor(() => existsSync(fixture.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
       expect(Number(readFileSync(fixture.curlCalls, "utf8").trim())).toBeGreaterThanOrEqual(2);
+    } finally {
+      await stopSupervisor(supervisor);
+    }
+  }, BEHAVIORAL_FIXTURE_BUDGET_MS + 5_000);
+
+  test("a refused reverse forward is retried without taking the managed Chrome down", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    // The box refuses the first two binds — what a stale sshd session owning the remote
+    // port looks like from here — then lets the forward through.
+    const fixture = supervisorFixture("49126", 0, 2);
+    const supervisor = startSupervisor(renderSupervisor!({
+      dataDir: fixture.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: fixture.chromePath,
+      curlPath: fixture.curlPath,
+      sshPath: fixture.sshPath,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+      tunnelRetryMaxSeconds: 1,
+    }), fixture);
+    try {
+      await waitFor(() => existsSync(fixture.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+      expect(Number(readFileSync(fixture.sshCalls, "utf8").trim())).toBe(3);
+      expect(alive(fixture.chromePid)).toBe(true);
+      expect(supervisor.exitCode).toBeNull();
+      expect(readFileSync(fixture.events, "utf8")).not.toContain("chrome-term");
     } finally {
       await stopSupervisor(supervisor);
     }

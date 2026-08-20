@@ -139,6 +139,10 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const CURL = "/usr/bin/curl";
 const SSH = "/usr/bin/ssh";
 const BROWSER_READY_TIMEOUT_SECONDS = 15;
+// How long the supervisor waits, at most, between attempts to rebuild the reverse tunnel.
+// Also doubles as "the tunnel has held long enough to call it up again" — see the retry
+// loop below.
+const BROWSER_TUNNEL_RETRY_MAX_SECONDS = 30;
 const PORT_FORWARD_READY_ATTEMPTS = 30;
 
 export const browserModePath = (profile: string, home: string = homedir()): string =>
@@ -314,6 +318,7 @@ export type BrowserSupervisorOptions = {
   readyTimeoutSeconds?: number;
   pollIntervalSeconds?: number;
   monitorIntervalSeconds?: number;
+  tunnelRetryMaxSeconds?: number;
 };
 
 function absoluteExecutable(path: string, name: string): string {
@@ -325,6 +330,13 @@ function boundedSeconds(value: number | undefined, fallback: number, name: strin
   const seconds = value ?? fallback;
   if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 60)
     throw new Error(`${name} must be a number in (0, 60]`);
+  return String(seconds);
+}
+
+function boundedIntegerSeconds(value: number | undefined, fallback: number, name: string): string {
+  const seconds = value ?? fallback;
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60)
+    throw new Error(`${name} must be an integer number of seconds in [1, 60]`);
   return String(seconds);
 }
 
@@ -342,6 +354,11 @@ export function renderBrowserSupervisor(opts: BrowserSupervisorOptions): string 
   );
   const pollIntervalSeconds = boundedSeconds(opts.pollIntervalSeconds, 0.1, "browser marker poll interval");
   const monitorIntervalSeconds = boundedSeconds(opts.monitorIntervalSeconds, 1, "browser monitor interval");
+  const tunnelRetryMaxSeconds = boundedIntegerSeconds(
+    opts.tunnelRetryMaxSeconds,
+    BROWSER_TUNNEL_RETRY_MAX_SECONDS,
+    "browser tunnel retry ceiling",
+  );
 
   return `set -eu
 umask 077
@@ -423,22 +440,58 @@ while :; do
   sleep ${pollIntervalSeconds}
 done
 
-"$ssh" -N \\
-  -o ExitOnForwardFailure=yes \\
-  -o ServerAliveInterval=15 \\
-  -o ServerAliveCountMax=3 \\
-  -R "127.0.0.1:$tunnel_port:127.0.0.1:$cdp_port" \\
-  "$ssh_host" &
-tunnel_pid=$!
+start_tunnel() {
+  "$ssh" -N \\
+    -o ExitOnForwardFailure=yes \\
+    -o ServerAliveInterval=15 \\
+    -o ServerAliveCountMax=3 \\
+    -R "127.0.0.1:$tunnel_port:127.0.0.1:$cdp_port" \\
+    "$ssh_host" &
+  tunnel_pid=$!
+  tunnel_started=$(date +%s)
+}
+
+# The tunnel and the browser have independent lifetimes on purpose. A reverse forward can
+# fail for reasons this machine cannot fix and did not cause — most often a previous
+# session of this very agent whose client vanished (sleep, a new IP) and whose sshd on the
+# box still owns $tunnel_port. Ending the supervisor there would take Chrome down with it
+# and launchd would relaunch the pair every ThrottleInterval: a browser that opens and
+# closes forever, over remote state that only time fixes. So keep Chrome, retry the tunnel
+# with a backoff, and let Chrome's own death be the only thing that ends this script.
+# Meanwhile the box's CDP pool health-checks $tunnel_port and serves its local browser.
+tunnel_backoff=1
+tunnel_started=0
+tunnel_reported_down=0
+start_tunnel
 
 while :; do
   if ! kill -0 "$chrome_pid" 2>/dev/null; then
     fail "managed Chrome exited"
   fi
-  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
-    fail "CDP reverse tunnel exited"
+  if kill -0 "$tunnel_pid" 2>/dev/null; then
+    # Held for a full retry ceiling: this one is up, not merely young.
+    if [ "$(( $(date +%s) - tunnel_started ))" -ge ${tunnelRetryMaxSeconds} ]; then
+      if [ "$tunnel_reported_down" -eq 1 ]; then
+        printf '%s\\n' "CDP reverse tunnel re-established" >&2
+        tunnel_reported_down=0
+      fi
+      tunnel_backoff=1
+    fi
+    sleep ${monitorIntervalSeconds}
+    continue
   fi
-  sleep ${monitorIntervalSeconds}
+  wait "$tunnel_pid" 2>/dev/null || true
+  # One line per outage, not per attempt: an offline laptop retries all night.
+  if [ "$tunnel_reported_down" -eq 0 ]; then
+    printf '%s\\n' "CDP reverse tunnel down — Chrome stays up, retrying" >&2
+    tunnel_reported_down=1
+  fi
+  sleep "$tunnel_backoff"
+  tunnel_backoff=$(( tunnel_backoff * 2 ))
+  if [ "$tunnel_backoff" -gt ${tunnelRetryMaxSeconds} ]; then
+    tunnel_backoff=${tunnelRetryMaxSeconds}
+  fi
+  start_tunnel
 done
 `;
 }
