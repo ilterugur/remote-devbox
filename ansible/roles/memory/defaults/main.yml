@@ -2,3 +2,13 @@
 # Instances are numbered from here, in declaration order, so the port a client was wired
 # to never moves. Loopback only — exposure is a separate, deliberate decision.
 devbox_memory_base_port: 9077
+
+# The memory daemon is a background service with an embedded Postgres, so under
+# user-slice pressure it is what oomd reaches for first. Measured 2026-08-20: with no
+# ceiling at all it ran 1623 restarts in a kill/restart loop that fed itself, while the
+# agent hosts that actually held the memory carried ceilings and were left alone. A
+# ceiling of its own turns that into self-containment.
+devbox_memory_default_resources:
+  memory_high: 2G
+  memory_max: 3G
+  memory_swap_max: 512M

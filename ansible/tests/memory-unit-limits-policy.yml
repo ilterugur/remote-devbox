@@ -1,0 +1,96 @@
+---
+# The memory daemon was the one managed unit with no ceiling of its own, which made it
+# whatever oomd reached for first under user-slice pressure. Measured 2026-08-20 on the
+# live box: 1623 restarts, oomd killing 14-19 processes every 15-60 seconds, each start
+# logging ~19 left-over postgres processes it then ran beside.
+- name: Verify the memory daemon unit contains itself instead of feeding an oomd loop
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    instance_row:
+      user: dev-a
+      name: claude-code
+      port: 9077
+      resources:
+        memory_high: "2G"
+        memory_max: "3G"
+        memory_swap_max: "512M"
+
+  tasks:
+    - name: Render and verify the unit in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-memory-unit-limits-policy-
+          register: render_dir
+
+        - name: Render the memory daemon unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/memory/templates/hindsight.service.j2"
+            dest: "{{ render_dir.path }}/hindsight.service"
+            mode: "0600"
+          vars:
+            item: "{{ instance_row }}"
+
+        - name: Read the rendered unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/hindsight.service"
+          register: memory_unit
+
+        - name: Assert the ceiling reaches the unit
+          ansible.builtin.assert:
+            that:
+              - "'MemoryHigh=2G' in memory_unit.content | b64decode"
+              - "'MemoryMax=3G' in memory_unit.content | b64decode"
+              - "'MemorySwapMax=512M' in memory_unit.content | b64decode"
+
+        # Its own ceiling is the containment boundary. Without `avoid` this background
+        # daemon stays the cheap victim while the agent hosts hold the actual memory.
+        - name: Assert oomd stops selecting the daemon as the cheap victim
+          ansible.builtin.assert:
+            that:
+              - "'ManagedOOMPreference=avoid' in memory_unit.content | b64decode"
+
+        # SIGTERM to a postmaster means "smart shutdown": wait for clients to disconnect,
+        # indefinitely. That is exactly why the embedded postgres outlived a restart and
+        # the next start inherited it. SIGINT is postgres' fast shutdown.
+        - name: Assert the stop sequence actually shuts the embedded postgres down
+          ansible.builtin.assert:
+            that:
+              - "'KillMode=control-group' in memory_unit.content | b64decode"
+              - "'KillSignal=SIGINT' in memory_unit.content | b64decode"
+              - "'FinalKillSignal=SIGKILL' in memory_unit.content | b64decode"
+              - "'TimeoutStopSec=30' in memory_unit.content | b64decode"
+
+        # A daemon with no resources declared must still render a valid unit.
+        - name: Render the unit for an instance with no resources declared
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/memory/templates/hindsight.service.j2"
+            dest: "{{ render_dir.path }}/bare.service"
+            mode: "0600"
+          vars:
+            item:
+              user: dev-b
+              name: bare
+              port: 9078
+
+        - name: Read the bare unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/bare.service"
+          register: bare_unit
+
+        - name: Assert the bare unit omits ceilings but keeps the stop sequence
+          ansible.builtin.assert:
+            that:
+              - "'MemoryHigh=' not in bare_unit.content | b64decode"
+              - "'MemoryMax=' not in bare_unit.content | b64decode"
+              - "'KillSignal=SIGINT' in bare_unit.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

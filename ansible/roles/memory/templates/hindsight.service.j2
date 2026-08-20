@@ -22,6 +22,26 @@ Restart=on-failure
 RestartSec=5s
 # Background service, not interactive work: yield under contention.
 Nice=5
+{% set L = item.resources | default({}) %}
+{% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
+{% endif %}
+{%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
+{% endif %}
+{%- if 'memory_swap_max' in L %}MemorySwapMax={{ L.memory_swap_max }}
+{% endif %}
+{#- The daemon and its embedded Postgres are backgrounded by hindsight-embed, so
+    systemd's main process is only a monitor and the stop sequence is what has to
+    clear the cgroup. SIGTERM cannot: to a postmaster it means "smart shutdown",
+    i.e. wait for clients to disconnect, indefinitely. That is why the postgres
+    backends outlived a restart and every start logged them as left-over processes
+    it then ran beside. SIGINT is postgres' fast shutdown; SIGKILL bounds the wait. #}
+KillMode=control-group
+KillSignal=SIGINT
+FinalKillSignal=SIGKILL
+TimeoutStopSec=30
+{#- The ceiling above is this unit's containment boundary, so parent-slice oomd must
+    stop selecting it as the cheap victim while the agent hosts hold the memory. #}
+ManagedOOMPreference=avoid
 
 [Install]
 WantedBy=default.target
