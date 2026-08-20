@@ -65,7 +65,9 @@ is_heavy_command() {
   local arg
   case "$command_name" in
     tsc)
-      category_enabled typecheck
+      # The `return 0` is load-bearing: the case only sets a status, and the function
+      # ends in `return 1`, so without it every direct tsc fell through as "not heavy".
+      category_enabled typecheck && return 0
       ;;
     bun | npm | pnpm | yarn)
       for arg in "$@"; do

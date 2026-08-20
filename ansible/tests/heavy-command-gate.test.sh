@@ -136,6 +136,23 @@ wait "$light_a"
 wait "$light_b"
 [[ $(cat "$tmp/maximum") == 2 ]] || fail "light commands were serialized"
 
+# A direct `tsc` is the heaviest thing an agent runs and the only one mise does not
+# shadow on PATH, so it is the one command that always reached the gate. It was also
+# the one the gate declined: its case arm set a status the function then discarded by
+# ending in `return 1`, so every direct tsc ran unqueued.
+reset_counter
+ln -s fake-command "$tmp/real-bin/tsc"
+ln -s "$gate" "$tmp/gate-bin/tsc"
+export DEVBOX_GATE_TEST_SLEEP=0.35
+tsc --noEmit &
+serial_a=$!
+tsc --noEmit &
+serial_b=$!
+wait "$serial_a"
+wait "$serial_b"
+unset DEVBOX_GATE_TEST_SLEEP
+[[ $(cat "$tmp/maximum") == 1 ]] || fail "two direct tsc runs overlapped"
+
 reset_counter
 timeout 3 bun run build:nested
 [[ $(cat "$tmp/active") == 0 ]] || fail "nested heavy command leaked active state"
