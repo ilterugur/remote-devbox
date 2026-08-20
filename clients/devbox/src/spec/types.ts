@@ -48,6 +48,10 @@ export interface HeavyJobGateSpec {
   wait_timeout_sec?: number;
   /** Zero logs immediately; positive values log only after this many seconds in queue. */
   warn_after_sec?: number;
+  /** Ceiling for ONE gated job, as a systemd size. The queue bounds how many run at
+   * once; this bounds how large one gets, so a runaway dies alone instead of
+   * throttling every session sharing its agent host. "" disables the scope. */
+  memory_max?: string;
 }
 
 export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";

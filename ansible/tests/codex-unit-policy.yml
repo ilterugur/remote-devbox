@@ -70,6 +70,8 @@
               - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in codex_unit.content | b64decode"
               - "'Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=1800' in codex_unit.content | b64decode"
               - "'Environment=DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=5' in codex_unit.content | b64decode"
+              # The queue bounds how many heavy jobs run; this bounds how large one gets.
+              - "'Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX=8G' in codex_unit.content | b64decode"
               - "'ExecStart=/home/dev-a/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://' in codex_unit.content | b64decode"
               - "'app-server --remote-control' not in codex_unit.content | b64decode"
               - "'Restart=always' in codex_unit.content | b64decode"
@@ -122,6 +124,7 @@
               - "'Environment=TMPDIR=/var/tmp/devbox-scratch/dev-a' in codex_rc_unit.content | b64decode"
               - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in codex_rc_unit.content | b64decode"
               - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in codex_rc_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX=8G' in codex_rc_unit.content | b64decode"
               - "'ExecStart=/home/dev-a/.local/bin/codex app-server --remote-control --listen unix://' in codex_rc_unit.content | b64decode"
               - "'features.code_mode_host' not in codex_rc_unit.content | b64decode"
               - "'MemoryMax=12G' in codex_rc_unit.content | b64decode"

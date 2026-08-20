@@ -23,6 +23,7 @@
                 'heavy_job_gate_categories': ((dev.heavy_job_gate | default({})).categories | default({'build': true, 'typecheck': true, 'generate': true, 'test': true}) | dict2items | selectattr('value', 'equalto', true) | map(attribute='key') | list),
                 'heavy_job_gate_wait_timeout_sec': (dev.heavy_job_gate | default({})).wait_timeout_sec | default(1800),
                 'heavy_job_gate_warn_after_sec': (dev.heavy_job_gate | default({})).warn_after_sec | default(5),
+                'heavy_job_gate_memory_max': (dev.heavy_job_gate | default({})).memory_max | default('8G'),
                 'is_default': name == dev.default_agent_profile}) or '' -}}
         {%- endfor -%}
       {%- endfor -%}

@@ -147,6 +147,7 @@ test("codex code-mode hosts inherit resolved RC defaults, not only explicitly st
       heavy_job_gate_categories: ["build", "typecheck", "generate", "test"],
       heavy_job_gate_wait_timeout_sec: 1800,
       heavy_job_gate_warn_after_sec: 5,
+      heavy_job_gate_memory_max: "8G",
       resources: {
         memory_high: "8G",
         memory_max: "12G",
@@ -305,6 +306,7 @@ test("heavy job gate defaults on and supports global and developer overrides", (
     categories: { build: true, typecheck: true, generate: true, test: true },
     wait_timeout_sec: 1800,
     warn_after_sec: 5,
+    memory_max: "8G",
   });
   expect((defaulted.devbox_developers as any[])[0].heavy_job_gate).toEqual(
     (defaulted.devbox_host as any).heavy_job_gate,
@@ -316,6 +318,7 @@ test("heavy job gate defaults on and supports global and developer overrides", (
     categories: { build: true, typecheck: true, generate: true, test: true },
     wait_timeout_sec: 1800,
     warn_after_sec: 5,
+    memory_max: "8G",
   });
 
   const overridden = normalize({
@@ -328,6 +331,7 @@ test("heavy job gate defaults on and supports global and developer overrides", (
     categories: { build: true, typecheck: true, generate: true, test: true },
     wait_timeout_sec: 1800,
     warn_after_sec: 5,
+    memory_max: "8G",
   });
 });
 
@@ -352,6 +356,7 @@ test("developer heavy job settings merge over host settings field by field", () 
         categories: { test: false },
         wait_timeout_sec: 900,
         warn_after_sec: 10,
+        memory_max: "6G",
       },
     },
     developers: [{
@@ -365,6 +370,9 @@ test("developer heavy job settings merge over host settings field by field", () 
     categories: { build: true, typecheck: true, generate: false, test: true },
     wait_timeout_sec: 900,
     warn_after_sec: 2,
+    // Stated once on the host and never restated by the developer: it has to survive
+    // the field-by-field merge rather than snapping back to the built-in default.
+    memory_max: "6G",
   });
   expect((out.devbox_codex_units as any[])).toEqual([]);
 });

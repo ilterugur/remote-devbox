@@ -36,6 +36,12 @@ host:
       test: true
     wait_timeout_sec: 1800 # 0 waits forever; timeout exits the queued command with status 75.
     warn_after_sec: 5     # 0 reports queuing immediately.
+    # Ceiling for ONE gated job. The queue above bounds how many run at once; this
+    # bounds how large one gets. A single tsc reaching its agent host's whole budget
+    # does not die there — MemoryHigh throttles instead of killing — so the host stalls
+    # and every session sharing that cgroup drops. Each gated job runs in a scope of
+    # its own, so a runaway is the only casualty. '' disables the scope.
+    memory_max: 8G
   swap_size: 8G
   zram:
     enabled: true
@@ -255,6 +261,7 @@ developers:
     #   categories:
     #     test: false
     #   wait_timeout_sec: 900
+    #   memory_max: 12G
 
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:

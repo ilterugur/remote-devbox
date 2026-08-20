@@ -219,4 +219,47 @@ export DEVBOX_HEAVY_JOB_FD=$slot_fd
 export DEVBOX_HEAVY_JOB_OWNER_PID=$$
 export DEVBOX_HEAVY_JOB_OWNER_START
 export DEVBOX_HEAVY_JOB_OWNER_FD=$slot_fd
+
+# The lock bounds how MANY heavy jobs run at once; it says nothing about how large
+# one gets. Measured 2026-08-20: a single tsc reached 14.4G inside an agent host with
+# a 15G budget. Nothing died — MemoryHigh throttles rather than kills — so the whole
+# cgroup stalled 73% of the time at ~3100 throttle events a second, its sockets were
+# refused memory 74k times, and every live session on that host dropped. A scope of
+# its own makes the runaway the only casualty.
+memory_max=${DEVBOX_HEAVY_JOB_MEMORY_MAX:-}
+
+# The TypeScript 7 compiler is a statically linked Go binary, so --max-old-space-size
+# cannot reach it; GOMEMLIMIT is the knob that makes its GC work instead of balloon.
+# Node-based tools ignore GOMEMLIMIT and read NODE_OPTIONS, so offer both and let each
+# runtime take the one it understands. Neither replaces the scope: they are cooperative
+# hints, and the cgroup is the wall that holds when a runtime ignores them.
+if [[ -n "$memory_max" ]]; then
+  export GOMEMLIMIT="${GOMEMLIMIT:-$memory_max}"
+fi
+
+# Fail open, and decide that BEFORE running anything. systemd-run exits 1 when it
+# cannot reach a user manager — indistinguishable from a command that legitimately
+# exited 1 — so the exit status can never be used to detect "the scope did not start".
+# The caller's status has to survive untouched: the suite pins a child exit of 42, and
+# an agent reads a build's status to decide what to do next.
+# `systemd-run --user` reaches the manager over its local transport — the private socket
+# below — and ignores DBUS_SESSION_BUS_ADDRESS entirely (verified: with only the session
+# bus linked it still fails "user scope bus via local transport"). Test the exact socket
+# it connects to, and keep the test strict on purpose: a false negative only costs an
+# unscoped run, while a false positive would hand systemd-run's own exit 1 back to the
+# caller as if the command had failed.
+scope_available() {
+  [[ -n "$memory_max" ]] || return 1
+  command -v systemd-run >/dev/null 2>&1 || return 1
+  [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private" ]]
+}
+
+if scope_available; then
+  exec systemd-run --user --scope --quiet --collect \
+    -p "MemoryMax=$memory_max" \
+    -p "MemorySwapMax=0" \
+    -p "OOMPolicy=continue" \
+    -- "$real_command" "$@"
+fi
+
 exec "$real_command" "$@"
