@@ -143,6 +143,10 @@ const BROWSER_READY_TIMEOUT_SECONDS = 15;
 // Also doubles as "the tunnel has held long enough to call it up again" — see the retry
 // loop below.
 const BROWSER_TUNNEL_RETRY_MAX_SECONDS = 30;
+// How long the supervisor lets the profile change hands before it calls the browser dead.
+// Chrome's stale-lock recovery re-execs itself, so between the process this script forked
+// exiting and the re-execed one taking the lock, nothing owns the profile.
+const BROWSER_ADOPTION_GRACE_SECONDS = 2;
 const PORT_FORWARD_READY_ATTEMPTS = 30;
 
 export const browserModePath = (profile: string, home: string = homedir()): string =>
@@ -319,6 +323,7 @@ export type BrowserSupervisorOptions = {
   pollIntervalSeconds?: number;
   monitorIntervalSeconds?: number;
   tunnelRetryMaxSeconds?: number;
+  adoptionGraceSeconds?: number;
 };
 
 function absoluteExecutable(path: string, name: string): string {
@@ -359,6 +364,11 @@ export function renderBrowserSupervisor(opts: BrowserSupervisorOptions): string 
     BROWSER_TUNNEL_RETRY_MAX_SECONDS,
     "browser tunnel retry ceiling",
   );
+  const adoptionGraceSeconds = boundedIntegerSeconds(
+    opts.adoptionGraceSeconds,
+    BROWSER_ADOPTION_GRACE_SECONDS,
+    "browser adoption grace",
+  );
 
   return `set -eu
 umask 077
@@ -389,11 +399,72 @@ fail() {
   exit 1
 }
 
+# The pid this script forks is not always the browser that ends up owning the profile:
+# Chrome's stale-lock recovery re-execs itself and the process it forked exits. So ask the
+# profile who holds it rather than trusting $!.
+profile_owner_pid() {
+  owner=$(readlink "$data_dir/SingletonLock" 2>/dev/null || true)
+  owner_pid=\${owner##*-}
+  case "$owner_pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$owner_pid" -gt 1 ] || return 1
+  kill -0 "$owner_pid" 2>/dev/null || return 1
+  # A recycled pid is not the browser that took this profile.
+  ps -p "$owner_pid" -o command= 2>/dev/null | grep -qF -e "--user-data-dir=$data_dir" || return 1
+  printf '%s\\n' "$owner_pid"
+}
+
+# A previous supervisor can leave this profile owned by a Chrome that outlived it. Take the
+# profile back before launching, because a Chrome that finds it held opens no window of its
+# own: it hands one to the holder and exits, this script fails on a browser that never
+# became ready, and launchd puts it straight back for another round. That is a browser that
+# opens a window every ThrottleInterval, forever, over a lock only a human ever cleared.
+claim_profile() {
+  held=$(profile_owner_pid) || held=
+  if [ -n "$held" ]; then
+    printf '%s\\n' "profile still held by pid $held — ending it before taking over" >&2
+    kill "$held" 2>/dev/null || true
+    claim_deadline=$(( $(date +%s) + ${adoptionGraceSeconds} ))
+    while kill -0 "$held" 2>/dev/null; do
+      if [ "$(date +%s)" -ge "$claim_deadline" ]; then
+        kill -9 "$held" 2>/dev/null || true
+        break
+      fi
+      sleep ${pollIntervalSeconds}
+    done
+  fi
+  rm -f "$data_dir/SingletonLock" "$data_dir/SingletonCookie" "$data_dir/SingletonSocket"
+}
+
+# Grace, not a verdict: the re-execed Chrome needs a moment to take the lock, and by then
+# the pid this script forked is already gone. Adopting it keeps the supervisor and the
+# browser on the same lifetime, which is also what lets cleanup reap the right process.
+browser_alive() {
+  if kill -0 "$chrome_pid" 2>/dev/null; then
+    return 0
+  fi
+  adopt_deadline=$(( $(date +%s) + ${adoptionGraceSeconds} ))
+  while :; do
+    adopted=$(profile_owner_pid) || adopted=
+    if [ -n "$adopted" ] && [ "$adopted" != "$chrome_pid" ]; then
+      printf '%s\\n' "managed Chrome re-execed — adopting pid $adopted" >&2
+      chrome_pid=$adopted
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$adopt_deadline" ]; then
+      return 1
+    fi
+    sleep ${pollIntervalSeconds}
+  done
+}
+
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 mkdir -p "$data_dir"
 chmod 700 "$data_dir"
+claim_profile
 rm -f "$marker"
 
 "$chrome" \\
@@ -407,7 +478,7 @@ chrome_pid=$!
 deadline=$(( $(date +%s) + ${readyTimeoutSeconds} ))
 cdp_port=
 while :; do
-  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+  if ! browser_alive; then
     fail "managed Chrome exited before CDP became ready"
   fi
   if [ -s "$marker" ]; then
@@ -427,7 +498,7 @@ while :; do
 done
 
 while :; do
-  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+  if ! browser_alive; then
     fail "managed Chrome exited before CDP became ready"
   fi
   if "$curl" --fail --silent --show-error --max-time 1 \\
@@ -465,7 +536,7 @@ tunnel_reported_down=0
 start_tunnel
 
 while :; do
-  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+  if ! browser_alive; then
     fail "managed Chrome exited"
   fi
   if kill -0 "$tunnel_pid" 2>/dev/null; then

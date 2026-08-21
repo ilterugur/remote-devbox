@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as agentModule from "./agent";
@@ -76,6 +76,7 @@ type RenderBrowserSupervisor = (opts: {
   pollIntervalSeconds?: number;
   monitorIntervalSeconds?: number;
   tunnelRetryMaxSeconds?: number;
+  adoptionGraceSeconds?: number;
 }) => string;
 
 type SupervisorFixture = {
@@ -92,6 +93,7 @@ type SupervisorFixture = {
   curlFailures: string;
   sshCalls: string;
   sshFailures: string;
+  chromeReexec: string;
 };
 
 const SUPERVISOR_READY_TIMEOUT_SECONDS = 3;
@@ -102,7 +104,12 @@ function fakeExecutable(path: string, source: string): void {
   chmodSync(path, 0o755);
 }
 
-function supervisorFixture(markerPort: string, curlFailures = 0, sshFailures = 0): SupervisorFixture {
+function supervisorFixture(
+  markerPort: string,
+  curlFailures = 0,
+  sshFailures = 0,
+  chromeReexec = false,
+): SupervisorFixture {
   const root = mkdtempSync(join(tmpdir(), "devbox-browser-supervisor-"));
   const bin = join(root, "bin");
   const state = join(root, "state");
@@ -120,6 +127,14 @@ function supervisorFixture(markerPort: string, curlFailures = 0, sshFailures = 0
     '    --user-data-dir=*) data_dir=${arg#--user-data-dir=} ;;',
     '  esac',
     'done',
+    'mkdir -p "$data_dir"',
+    '# Chrome\'s stale-lock recovery: the profile ends up owned by a process the caller',
+    '# never forked, and the one it did fork exits before any marker is written.',
+    'if [ "${CHROME_REEXEC:-0}" = "1" ]; then',
+    '  CHROME_REEXEC=0 "$0" "$@" &',
+    '  exit 0',
+    'fi',
+    'ln -sfn "$(hostname)-$$" "$data_dir/SingletonLock"',
     'printf "%s\\n/devtools/browser/fake\\n" "$MARKER_PORT" > "$data_dir/DevToolsActivePort"',
     'printf "%s\\n" "$$" > "$STATE/chrome.pid"',
     'printf "%s\\n" "chrome $*" >> "$EVENTS"',
@@ -162,6 +177,7 @@ function supervisorFixture(markerPort: string, curlFailures = 0, sshFailures = 0
     curlFailures: String(curlFailures),
     sshCalls: join(state, "ssh.calls"),
     sshFailures: String(sshFailures),
+    chromeReexec: chromeReexec ? "1" : "0",
   };
 }
 
@@ -179,6 +195,15 @@ async function waitForExit(process: ReturnType<typeof Bun.spawn>, timeoutMs = 1_
     process.exited,
     new Promise<number>((_, reject) => setTimeout(() => reject(new Error("supervisor did not exit")), timeoutMs)),
   ]);
+}
+
+/** Chrome's SingletonLock points at "host-pid", so it is a symlink to nothing on disk. */
+function profileHeld(dataDir: string): boolean {
+  try {
+    return lstatSync(join(dataDir, "SingletonLock")).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 function alive(pidFile: string): boolean {
@@ -200,6 +225,7 @@ function startSupervisor(script: string, fixture: SupervisorFixture) {
       STATE: fixture.state,
       CURL_FAILURES: fixture.curlFailures,
       SSH_FAILURES: fixture.sshFailures,
+      CHROME_REEXEC: fixture.chromeReexec,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -495,6 +521,117 @@ describe("agentsFor", () => {
       expect(readFileSync(fixture.events, "utf8")).not.toContain("chrome-term");
     } finally {
       await stopSupervisor(supervisor);
+    }
+  }, BEHAVIORAL_FIXTURE_BUDGET_MS + 5_000);
+
+  test("adopts the Chrome that a stale-lock re-exec left owning the profile", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    // Chrome's own recovery path: the pid this supervisor forked exits and a process it
+    // never forked ends up holding the profile. Reading that as a death is what left the
+    // orphan behind that every later relaunch then handed a window to.
+    const fixture = supervisorFixture("49127", 0, 0, true);
+    const supervisor = startSupervisor(renderSupervisor!({
+      dataDir: fixture.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: fixture.chromePath,
+      curlPath: fixture.curlPath,
+      sshPath: fixture.sshPath,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+      adoptionGraceSeconds: 2,
+    }), fixture);
+    try {
+      await waitFor(() => existsSync(fixture.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+      expect(supervisor.exitCode).toBeNull();
+      expect(alive(fixture.chromePid)).toBe(true);
+    } finally {
+      await stopSupervisor(supervisor);
+    }
+  }, BEHAVIORAL_FIXTURE_BUDGET_MS + 5_000);
+
+  test("reaps the adopted Chrome on shutdown instead of orphaning it", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    const fixture = supervisorFixture("49128", 0, 0, true);
+    const supervisor = startSupervisor(renderSupervisor!({
+      dataDir: fixture.dataDir,
+      clientTunnelPort: 9322,
+      host: "devbox-ilterugur",
+      chromePath: fixture.chromePath,
+      curlPath: fixture.curlPath,
+      sshPath: fixture.sshPath,
+      readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
+      pollIntervalSeconds: 0.01,
+      monitorIntervalSeconds: 0.01,
+      adoptionGraceSeconds: 2,
+    }), fixture);
+    try {
+      await waitFor(() => existsSync(fixture.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+      process.kill(supervisor.pid, "SIGTERM");
+      await waitForExit(supervisor, BEHAVIORAL_FIXTURE_BUDGET_MS);
+      await waitFor(() => !alive(fixture.chromePid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+    } finally {
+      await stopSupervisor(supervisor);
+    }
+  }, BEHAVIORAL_FIXTURE_BUDGET_MS + 5_000);
+
+  test("takes a profile a Chrome that outlived its supervisor still holds", async () => {
+    const renderSupervisor = agentModule.renderBrowserSupervisor as RenderBrowserSupervisor | undefined;
+    expect(renderSupervisor).toBeDefined();
+
+    // A Chrome that finds the profile held opens no window of its own: it hands one to
+    // the holder and exits, which reads here as a browser that never became ready.
+    const fixture = supervisorFixture("49129");
+    mkdirSync(fixture.dataDir, { recursive: true });
+    const holderState = join(fixture.state, "holder");
+    mkdirSync(holderState);
+    const holderPid = join(holderState, "chrome.pid");
+    const holder = Bun.spawn([fixture.chromePath, `--user-data-dir=${fixture.dataDir}`], {
+      env: {
+        ...process.env,
+        EVENTS: join(holderState, "events"),
+        MARKER_PORT: "49999",
+        STATE: holderState,
+        CHROME_REEXEC: "0",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      await waitFor(
+        () => profileHeld(fixture.dataDir) && alive(holderPid),
+        BEHAVIORAL_FIXTURE_BUDGET_MS,
+      );
+      const supervisor = startSupervisor(renderSupervisor!({
+        dataDir: fixture.dataDir,
+        clientTunnelPort: 9322,
+        host: "devbox-ilterugur",
+        chromePath: fixture.chromePath,
+        curlPath: fixture.curlPath,
+        sshPath: fixture.sshPath,
+        readyTimeoutSeconds: SUPERVISOR_READY_TIMEOUT_SECONDS,
+        pollIntervalSeconds: 0.01,
+        monitorIntervalSeconds: 0.01,
+        adoptionGraceSeconds: 2,
+      }), fixture);
+      try {
+        await waitFor(() => !alive(holderPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+        await waitFor(() => existsSync(fixture.sshPid), BEHAVIORAL_FIXTURE_BUDGET_MS);
+        expect(supervisor.exitCode).toBeNull();
+      } finally {
+        await stopSupervisor(supervisor);
+      }
+    } finally {
+      try {
+        process.kill(holder.pid, "SIGKILL");
+      } catch {
+        // Already reaped by the supervisor, which is the point of the test.
+      }
     }
   }, BEHAVIORAL_FIXTURE_BUDGET_MS + 5_000);
 
