@@ -1,0 +1,39 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# Codex spawns every command as `bash -lc`. The login shell sources this directory, and
+# mise's activation prepends its installs/*/bin ahead of everything the daemon unit
+# passed down — so on 2026-08-20 bun, node and npm all resolved to the real toolchain
+# and no build a Codex session ran was ever gated. Measured with one identical PATH:
+#
+#   non-login shell:  bun -> /usr/local/lib/agent-devbox/heavy-command-gate/bun
+#   login shell:      bun -> ~/.local/share/mise/installs/bun/latest/bin/bun
+#
+# This file sorts after mise's snippet on purpose: it re-prepends the gate once
+# activation has had its say. Note the scope of the fix — mise also installs a
+# prompt/chpwd hook that can retake the front of PATH in a long-lived interactive
+# shell. That does not affect the failure this closes: each agent command is a fresh
+# non-interactive `bash -lc`, where activation runs once and this runs after it.
+#
+# It only ever REORDERS. A developer who has the gate turned off never has the
+# directory on PATH in the first place, and this must not quietly hand it back.
+__devbox_gate_dir=${DEVBOX_HEAVY_GATE_DIR:-/usr/local/lib/agent-devbox/heavy-command-gate}
+
+case ":${PATH}:" in
+  *":${__devbox_gate_dir}:"*)
+    # Drop the existing entry before re-prepending, so repeated sourcing cannot grow PATH.
+    # The trailing newline matters: `read` discards a final unterminated line, so
+    # printing without one silently drops the last PATH entry on every source.
+    __devbox_new_path=$(
+      printf '%s\n' "$PATH" | tr ':' '\n' |
+        while IFS= read -r __devbox_entry; do
+          [ -n "$__devbox_entry" ] || continue
+          [ "$__devbox_entry" = "$__devbox_gate_dir" ] && continue
+          printf '%s\n' "$__devbox_entry"
+        done | paste -sd: -
+    )
+    PATH="${__devbox_gate_dir}:${__devbox_new_path}"
+    export PATH
+    unset __devbox_new_path __devbox_entry
+    ;;
+esac
+unset __devbox_gate_dir

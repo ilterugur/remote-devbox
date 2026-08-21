@@ -30,6 +30,8 @@
                 'llm_model': instance.llm_model,
                 'llm_base_url': instance.llm_base_url,
                 'api_key_env': instance.api_key_env,
+                'resources': devbox_memory_default_resources
+                             | combine(instance.resources | default({}), recursive=true),
                 'port': devbox_memory_base_port + out | length}) or '' -}}
         {%- endfor -%}
       {%- endfor -%}

@@ -48,6 +48,10 @@ export interface HeavyJobGateSpec {
   wait_timeout_sec?: number;
   /** Zero logs immediately; positive values log only after this many seconds in queue. */
   warn_after_sec?: number;
+  /** Ceiling for ONE gated job, as a systemd size. The queue bounds how many run at
+   * once; this bounds how large one gets, so a runaway dies alone instead of
+   * throttling every session sharing its agent host. "" disables the scope. */
+  memory_max?: string;
 }
 
 export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";
@@ -56,6 +60,11 @@ export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";
 export interface HostSpec {
   swap_size?: string;
   memory_reserve?: string;
+  /** Size bound for the tmpfs behind /tmp. Everything written there is resident memory
+   * that can only be swapped, never dropped, and the vendor default is half of RAM —
+   * not a bound at all. Over the wall a job gets ENOSPC and fails alone. A percentage
+   * (e.g. "10%") is accepted and resolved by the kernel against RAM. */
+  tmp_size?: string;
   oomd?: OomdSpec;
   zram?: { enabled: boolean; percent?: number; algo?: string; priority?: number };
   locales?: string[];

@@ -55,6 +55,7 @@ type NormalizedHeavyJobGate = {
   categories: Record<(typeof HEAVY_JOB_CATEGORIES)[number], boolean>;
   wait_timeout_sec: number;
   warn_after_sec: number;
+  memory_max: string;
 };
 
 function normalizeHeavyJobGate(
@@ -72,6 +73,7 @@ function normalizeHeavyJobGate(
     categories,
     wait_timeout_sec: developer?.wait_timeout_sec ?? host?.wait_timeout_sec ?? 1800,
     warn_after_sec: developer?.warn_after_sec ?? host?.warn_after_sec ?? 5,
+    memory_max: canonicalMemorySize(developer?.memory_max ?? host?.memory_max ?? "8G") ?? "8G",
   };
 }
 
@@ -101,6 +103,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_host: {
       swap_size: resolved.host?.swap_size ?? "4G",
       memory_reserve: canonicalMemorySize(resolved.host?.memory_reserve ?? "4G")!,
+      tmp_size: resolved.host?.tmp_size ?? "4G",
       zram: {
         enabled: resolved.host?.zram?.enabled ?? false,
         percent: resolved.host?.zram?.percent ?? 50,
@@ -330,6 +333,7 @@ function codexUnitEnvelope(
     heavy_job_gate_categories: HEAVY_JOB_CATEGORIES.filter((category) => heavyJobGate.categories[category]),
     heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
     heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
+    heavy_job_gate_memory_max: heavyJobGate.memory_max,
     resources,
   };
 }

@@ -138,6 +138,10 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   if (h.swap_size !== undefined && !(typeof h.swap_size === "string" && /^\d+[KMGT]?$/.test(h.swap_size))) {
     issues.push(err("host.swap_size", "must be a size like '8G'"));
   }
+  // A percentage is legal for a tmpfs and is resolved by the kernel against RAM.
+  if (h.tmp_size !== undefined && !(typeof h.tmp_size === "string" && /^\d+([KMGT]|%)?$/.test(h.tmp_size))) {
+    issues.push(err("host.tmp_size", "must be a size like '4G' or a percentage like '10%'"));
+  }
   const reserve = h.memory_reserve;
   const canonicalReserve = typeof reserve === "string" ? canonicalMemorySize(reserve) : null;
   if (
@@ -412,7 +416,7 @@ function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): vo
     issues.push(err(path, "must be a mapping"));
     return;
   }
-  const allowedFields = new Set(["enabled", "categories", "wait_timeout_sec", "warn_after_sec"]);
+  const allowedFields = new Set(["enabled", "categories", "wait_timeout_sec", "warn_after_sec", "memory_max"]);
   for (const key of Object.keys(value)) {
     if (!allowedFields.has(key)) issues.push(err(`${path}.${key}`, "unknown heavy-job gate field"));
   }
@@ -436,6 +440,10 @@ function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): vo
     if (setting !== undefined && !(typeof setting === "number" && Number.isInteger(setting) && setting >= 0)) {
       issues.push(err(`${path}.${key}`, "must be a non-negative integer"));
     }
+  }
+  const memoryMax = value.memory_max;
+  if (memoryMax !== undefined && !(typeof memoryMax === "string" && canonicalMemorySize(memoryMax) !== null)) {
+    issues.push(err(`${path}.memory_max`, "must be a systemd size like '8G' (or '' for no per-job ceiling)"));
   }
 }
 

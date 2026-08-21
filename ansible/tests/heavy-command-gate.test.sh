@@ -136,6 +136,23 @@ wait "$light_a"
 wait "$light_b"
 [[ $(cat "$tmp/maximum") == 2 ]] || fail "light commands were serialized"
 
+# A direct `tsc` is the heaviest thing an agent runs and the only one mise does not
+# shadow on PATH, so it is the one command that always reached the gate. It was also
+# the one the gate declined: its case arm set a status the function then discarded by
+# ending in `return 1`, so every direct tsc ran unqueued.
+reset_counter
+ln -s fake-command "$tmp/real-bin/tsc"
+ln -s "$gate" "$tmp/gate-bin/tsc"
+export DEVBOX_GATE_TEST_SLEEP=0.35
+tsc --noEmit &
+serial_a=$!
+tsc --noEmit &
+serial_b=$!
+wait "$serial_a"
+wait "$serial_b"
+unset DEVBOX_GATE_TEST_SLEEP
+[[ $(cat "$tmp/maximum") == 1 ]] || fail "two direct tsc runs overlapped"
+
 reset_counter
 timeout 3 bun run build:nested
 [[ $(cat "$tmp/active") == 0 ]] || fail "nested heavy command leaked active state"
@@ -146,5 +163,86 @@ failure_status=$?
 set -e
 [[ $failure_status -eq 42 ]] || fail "child exit status was not preserved"
 timeout 3 bun run build
+
+# The lock bounds how many heavy jobs run; it never bounded how large one gets. These
+# cover the ceiling that does: a scope of the job's own, so a runaway compiler dies
+# alone instead of throttling the agent host that serves every session.
+reset_counter
+cat >"$tmp/real-bin/scope-probe" <<'EOF'
+#!/usr/bin/env bash
+own_cgroup=$(cut -d: -f3 /proc/self/cgroup)
+printf '%s\n' "$own_cgroup"
+printf 'GOMEMLIMIT=%s\n' "${GOMEMLIMIT-unset}"
+# Read the ceiling from inside, while the scope is still alive: --collect removes the
+# unit the moment this process exits, so the caller cannot read it afterwards.
+printf 'MEMMAX=%s\n' "$(cat "/sys/fs/cgroup${own_cgroup}/memory.max" 2>/dev/null || echo unknown)"
+[[ " $* " != *" probe:fail "* ]] || exit 42
+EOF
+chmod 755 "$tmp/real-bin/scope-probe"
+ln -s scope-probe "$tmp/real-bin/next"
+ln -s "$gate" "$tmp/gate-bin/next"
+
+# The harness points XDG_RUNTIME_DIR at a private directory so the lock stays hermetic,
+# which also hides the user bus systemd-run needs. Link the real socket in rather than
+# giving the lock back to the box: an ssh session's own cgroup is already a *.scope, so
+# the ambient cgroup is captured here to compare against instead of matching on ".scope".
+real_runtime=${DEVBOX_GATE_TEST_REAL_RUNTIME:-/run/user/$(id -u)}
+mkdir -p "$tmp/runtime/systemd"
+for sock in bus systemd/private; do
+  [[ -S "$real_runtime/$sock" && ! -e "$tmp/runtime/$sock" ]] &&
+    ln -s "$real_runtime/$sock" "$tmp/runtime/$sock"
+done
+ambient_cgroup=$(cut -d: -f3 /proc/self/cgroup)
+
+if command -v systemd-run >/dev/null 2>&1 &&
+   systemd-run --user --scope --quiet --collect /bin/true >/dev/null 2>&1; then
+  scope_out=$(DEVBOX_HEAVY_JOB_MEMORY_MAX=1G next build 2>/dev/null)
+  scope_cgroup=$(printf '%s\n' "$scope_out" | head -1)
+  [[ "$scope_cgroup" != "$ambient_cgroup" ]] \
+    || fail "gated job stayed in the ambient cgroup: $scope_cgroup"
+  [[ "$scope_cgroup" == *.scope ]] \
+    || fail "gated job did not run inside its own scope: $scope_cgroup"
+  [[ "$scope_out" == *"GOMEMLIMIT=1G"* ]] \
+    || fail "gated job did not receive GOMEMLIMIT: $scope_out"
+
+  # A scope that does not actually carry the ceiling is theatre.
+  [[ "$scope_out" == *"MEMMAX=1073741824"* ]] \
+    || fail "scope carried no ceiling: $scope_out"
+
+  # systemd-run exits 1 when it cannot reach a user manager, so the status can never be
+  # read as "the scope failed to start". The child's own status must arrive intact.
+  set +e
+  DEVBOX_HEAVY_JOB_MEMORY_MAX=1G next build probe:fail >/dev/null 2>&1
+  scoped_failure=$?
+  set -e
+  [[ $scoped_failure -eq 42 ]] \
+    || fail "scoped child exit status was not preserved (got $scoped_failure)"
+
+  # The slot is held by an inherited descriptor. Wrapping the job in a scope must not
+  # break the reentrancy that lets a nested heavy command through.
+  reset_counter
+  DEVBOX_HEAVY_JOB_MEMORY_MAX=1G timeout 5 bun run build:nested
+  [[ $(cat "$tmp/active") == 0 ]] || fail "scoped nested heavy command leaked active state"
+
+  echo "heavy command gate: scope containment OK"
+else
+  echo "heavy command gate: SKIP scope containment (no reachable systemd user manager)"
+fi
+
+# Fail open: an unreachable user manager must still run the command, just unscoped.
+# A runtime dir the gate can still take its lock in, but with no manager socket in it —
+# pointing XDG_RUNTIME_DIR at an unwritable path would break the lock, not the bus.
+mkdir -p "$tmp/nobus"
+scope_out=$(
+  XDG_RUNTIME_DIR="$tmp/nobus" DBUS_SESSION_BUS_ADDRESS= \
+    DEVBOX_HEAVY_JOB_MEMORY_MAX=1G next build 2>/dev/null
+) || fail "gate did not fail open without a reachable user manager"
+[[ "$(printf '%s\n' "$scope_out" | head -1)" == "$ambient_cgroup" ]] \
+  || fail "expected an unscoped run without a user manager, got $scope_out"
+
+# No ceiling configured is the untouched path: no scope, and no GOMEMLIMIT invented.
+scope_out=$(next build 2>/dev/null) || fail "gate did not run without a ceiling"
+[[ "$scope_out" == *"GOMEMLIMIT=unset"* ]] \
+  || fail "gate invented a GOMEMLIMIT with no ceiling configured: $scope_out"
 
 echo "heavy command gate: PASS"

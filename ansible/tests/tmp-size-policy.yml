@@ -1,0 +1,90 @@
+---
+# /tmp is a tmpfs, so everything written there is resident memory that can only be
+# swapped, never dropped. Ubuntu's default sizes it at half of RAM — 31 GiB on this box —
+# which is not a bound at all. Measured 2026-08-20: 7.4 GiB of /tmp, 6.0 GiB of it one
+# scratch checkout an agent made up on the spot, charged as unreclaimable shmem against
+# the agent host's cgroup and helping pin it on its ceiling.
+#
+# Chasing the writers does not work. The 6.0 GiB tree matched no committed script, and
+# the monorepo hardcodes ~20 other /tmp paths for fixtures and sockets. The next agent
+# invents a new path. Bounding the filesystem is the only thing that holds.
+- name: Verify the tmpfs bound rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Render and assert
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-tmp-size-policy-
+          register: render_dir
+
+        - name: Render the mount override with an explicit size
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/oomd/templates/tmp-size.conf.j2"
+            dest: "{{ render_dir.path }}/sized.conf"
+            mode: "0644"
+          vars:
+            devbox_host:
+              tmp_size: "4G"
+
+        - name: Read the rendered override
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/sized.conf"
+          register: sized
+
+        - name: Split the override into lines
+          ansible.builtin.set_fact:
+            sized_lines: "{{ (sized.content | b64decode).split('\n') | map('trim') | list }}"
+
+        - name: Assert the size lands in a [Mount] Options line
+          ansible.builtin.assert:
+            that:
+              - "'[Mount]' in sized_lines"
+              - sized_lines | select('match', '^Options=.*\\bsize=4G\\b') | list | length == 1
+            fail_msg: >-
+              Expected exactly one Options line carrying size=4G, got
+              {{ sized_lines | select('match', '^Options=') | list }}
+
+        # Options= REPLACES the whole option set rather than adding to it, so anything
+        # the vendor mount relied on has to be restated here or it is silently dropped.
+        # nosuid/nodev on a world-writable directory are the ones that matter.
+        - name: Assert the hardening options survive the override
+          ansible.builtin.assert:
+            that:
+              - sized_lines | select('match', '^Options=.*\\bnosuid\\b') | list | length == 1
+              - sized_lines | select('match', '^Options=.*\\bnodev\\b') | list | length == 1
+              - sized_lines | select('match', '^Options=.*\\bmode=1777\\b') | list | length == 1
+            fail_msg: >-
+              The override dropped a vendor mount option:
+              {{ sized_lines | select('match', '^Options=') | list }}
+
+        - name: Render the override with no size declared
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/oomd/templates/tmp-size.conf.j2"
+            dest: "{{ render_dir.path }}/default.conf"
+            mode: "0644"
+          vars:
+            devbox_host: {}
+
+        - name: Read the defaulted override
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/default.conf"
+          register: defaulted
+
+        # A box that never declares tmp_size must still get a bound, because the whole
+        # failure is that the vendor default is half of RAM.
+        - name: Assert an undeclared size still renders a bound
+          ansible.builtin.assert:
+            that:
+              - (defaulted.content | b64decode).split('\n') | map('trim') | list
+                | select('match', '^Options=.*\\bsize=4G\\b') | list | length == 1
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

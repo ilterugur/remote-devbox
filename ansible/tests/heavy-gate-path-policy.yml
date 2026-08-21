@@ -1,0 +1,122 @@
+---
+# Codex runs every command as `bash -lc`, and mise's activation prepends its
+# installs/*/bin ahead of whatever the daemon unit passed down. Measured 2026-08-20 with
+# one identical starting PATH: a non-login shell resolved bun to the gate shim, a login
+# shell resolved it to mise's own bun. So the gate was installed, correct, and never
+# reached for any build a Codex session ran.
+- name: Verify the heavy gate survives mise activation in a login shell
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Render and exercise the snippet in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-heavy-gate-path-policy-
+          register: render_dir
+
+        - name: Render the profile snippet
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_profiles/templates/heavy-gate-path.sh.j2"
+            dest: "{{ render_dir.path }}/zz-gate.sh"
+            mode: "0644"
+
+        - name: Lay out a gate shim and a mise install that shadow the same command
+          ansible.builtin.shell: |
+            set -eu
+            d={{ render_dir.path | quote }}
+            mkdir -p "$d/gate" "$d/mise"
+            printf '#!/bin/sh\necho gate\n' > "$d/gate/bun"
+            printf '#!/bin/sh\necho mise\n' > "$d/mise/bun"
+            chmod +x "$d/gate/bun" "$d/mise/bun"
+          args:
+            executable: /bin/bash
+          changed_when: false
+
+        # The live failure: mise is already in front when the snippet runs.
+        - name: Resolve bun after the snippet reorders PATH
+          ansible.builtin.shell: |
+            set -eu
+            d={{ render_dir.path | quote }}
+            export PATH="$d/mise:$d/gate:/usr/bin:/bin"
+            DEVBOX_HEAVY_GATE_DIR="$d/gate" . "$d/zz-gate.sh"
+            command -v bun
+          args:
+            executable: /bin/bash
+          register: resolved
+          changed_when: false
+
+        - name: Assert the gate wins once the snippet has run
+          ansible.builtin.assert:
+            that:
+              - resolved.stdout | trim == (render_dir.path ~ '/gate/bun')
+            fail_msg: >-
+              Expected the gate shim to win, got {{ resolved.stdout | trim }}.
+
+        - name: Source the snippet twice over
+          ansible.builtin.shell: |
+            set -eu
+            d={{ render_dir.path | quote }}
+            export PATH="$d/mise:$d/gate:/usr/bin:/bin"
+            DEVBOX_HEAVY_GATE_DIR="$d/gate" . "$d/zz-gate.sh"
+            DEVBOX_HEAVY_GATE_DIR="$d/gate" . "$d/zz-gate.sh"
+            printf '%s\n' "$PATH" | tr ':' '\n' | grep -c -x "$d/gate"
+          args:
+            executable: /bin/bash
+          register: occurrences
+          changed_when: false
+
+        - name: Assert repeated sourcing does not grow PATH
+          ansible.builtin.assert:
+            that:
+              - occurrences.stdout | trim | int == 1
+
+        - name: Assert the rest of PATH keeps its order and nothing is dropped
+          ansible.builtin.shell: |
+            set -eu
+            d={{ render_dir.path | quote }}
+            export PATH="$d/mise:$d/gate:/usr/bin:/bin"
+            DEVBOX_HEAVY_GATE_DIR="$d/gate" . "$d/zz-gate.sh"
+            printf '%s\n' "$PATH"
+          args:
+            executable: /bin/bash
+          register: reordered
+          changed_when: false
+
+        - name: Assert the reordered PATH is exactly the gate followed by the original order
+          ansible.builtin.assert:
+            that:
+              - reordered.stdout | trim == (render_dir.path ~ '/gate:' ~ render_dir.path ~ '/mise:/usr/bin:/bin')
+            fail_msg: >-
+              PATH was not reordered cleanly: {{ reordered.stdout | trim }}
+
+        # A developer with the gate turned off never has the directory on PATH. The
+        # snippet reorders; it must never hand the gate back to them.
+        - name: Resolve bun when the gate is not on PATH at all
+          ansible.builtin.shell: |
+            set -eu
+            d={{ render_dir.path | quote }}
+            export PATH="$d/mise:/usr/bin:/bin"
+            DEVBOX_HEAVY_GATE_DIR="$d/gate" . "$d/zz-gate.sh"
+            command -v bun
+          args:
+            executable: /bin/bash
+          register: disabled
+          changed_when: false
+
+        - name: Assert the snippet did not introduce the gate
+          ansible.builtin.assert:
+            that:
+              - disabled.stdout | trim == (render_dir.path ~ '/mise/bun')
+            fail_msg: >-
+              Snippet added the gate for a developer who has it off:
+              {{ disabled.stdout | trim }}
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

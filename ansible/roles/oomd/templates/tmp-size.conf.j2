@@ -1,0 +1,27 @@
+{#- Managed by Ansible (remote-devbox). Bound the tmpfs behind /tmp.
+
+    Everything written to /tmp is resident memory that can only be swapped, never
+    dropped, and the vendor unit sizes it at half of RAM — 31 GiB here, which is not a
+    bound at all. Measured 2026-08-20: 7.4 GiB of /tmp, 6.0 GiB of it a scratch checkout
+    an agent invented on the spot, charged as unreclaimable shmem against the agent
+    host's cgroup and helping pin it on its memory ceiling for over an hour.
+
+    The neighbouring tmp.conf already routes agents to a TMPDIR on disk and already
+    explains why retention cannot help: the damage lands in minutes, the policy measures
+    days. What was still missing is a wall. Chasing writers does not work either — that
+    6.0 GiB tree matched no committed script, so the next agent simply invents a new
+    path. Bounding the filesystem is the part that holds regardless of who writes.
+
+    Over the wall a job gets ENOSPC and fails alone, which is the same bargain the
+    memory ceilings make: the runaway dies instead of the box.
+
+    Options= REPLACES the vendor option set rather than extending it, so every option
+    the vendor unit carried is restated here. Dropping nosuid/nodev off a world-writable
+    directory would be a security regression, not a tuning choice. Kept verbatim from
+    /usr/lib/systemd/system/tmp.mount with size= as the only change. #}
+{%- set raw_size = devbox_host.tmp_size | default('4G', true) -%}
+{#- A percentage is legal here, but systemd reads % as a specifier escape, so it has to
+    be doubled in the unit file or the mount silently gets a malformed size. -#}
+{%- set size = raw_size | replace('%', '%%') -%}
+[Mount]
+Options=mode=1777,strictatime,nosuid,nodev,size={{ size }},nr_inodes=1m,x-systemd.graceful-option=usrquota
