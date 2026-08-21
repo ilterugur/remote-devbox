@@ -43,23 +43,62 @@ const cfg = (profile: Record<string, unknown>): Config => ({
  * the fs-touching parts of those are covered structurally (they're direct callers of
  * this same, now-tested, checked helper) and manually via DEVBOX_DRYRUN dry runs.
  */
-function withFakeLaunchctl(behavior: { print?: number; bootout?: number }, fn: () => void): void {
+function withFakeLaunchctl(
+  behavior: {
+    print?: number;
+    bootout?: number;
+    bootstrap?: number;
+    /** `print` reports the label loaded for this many calls, then gone — launchd letting go late. */
+    loadedPrints?: number;
+    /** `bootstrap` returns launchd's EIO this many times before it takes the plist. */
+    bootstrapEio?: number;
+  },
+  fn: (calls: (subcommand: string) => number) => void,
+): void {
   const bin = mkdtempSync(join(tmpdir(), "devbox-agent-bin-"));
+  // Each subcommand counts its own invocations on disk: whether a call was retried is the
+  // whole behavior under test, and a stateless fake cannot show it.
+  const printCase = behavior.loadedPrints === undefined
+    ? `  print) bump print; exit ${behavior.print ?? 0} ;;`
+    : `  print)
+    n=$(bump print)
+    if [ "$n" -le ${behavior.loadedPrints} ]; then exit 0; fi
+    exit 1
+    ;;`;
   const script = `#!/bin/sh
+state='${bin}'
+bump() {
+  n=$(cat "$state/$1.calls" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  printf '%s\\n' "$n" > "$state/$1.calls"
+  printf '%s\\n' "$n"
+}
 case "$1" in
-  print) exit ${behavior.print ?? 0} ;;
-  bootout) exit ${behavior.bootout ?? 0} ;;
+${printCase}
+  bootout) bump bootout; exit ${behavior.bootout ?? 0} ;;
+  bootstrap)
+    n=$(bump bootstrap)
+    if [ "$n" -le ${behavior.bootstrapEio ?? 0} ]; then
+      printf '%s\\n' "Bootstrap failed: 5: Input/output error" >&2
+      exit 5
+    fi
+    exit ${behavior.bootstrap ?? 0}
+    ;;
   *) exit 0 ;;
 esac
 `;
   const path = join(bin, "launchctl");
   writeFileSync(path, script);
   chmodSync(path, 0o755);
+  const calls = (subcommand: string): number => {
+    const file = join(bin, `${subcommand}.calls`);
+    return existsSync(file) ? Number(readFileSync(file, "utf8").trim()) : 0;
+  };
 
   const originalPath = process.env.PATH;
   process.env.PATH = `${bin}:${originalPath}`;
   try {
-    fn();
+    fn(calls);
   } finally {
     process.env.PATH = originalPath;
   }
@@ -865,8 +904,60 @@ describe("bootoutIfLoaded", () => {
   });
 
   test("a successful bootout of a loaded label does not throw", () => {
-    withFakeLaunchctl({ print: 0, bootout: 0 }, () => {
+    withFakeLaunchctl({ loadedPrints: 1, bootout: 0 }, () => {
       expect(() => bootoutIfLoaded(FAKE)).not.toThrow();
+    });
+  });
+
+  test("waits for launchd to finish unloading rather than returning on bootout's word", () => {
+    // launchd accepts the bootout and holds the label a moment longer. Returning there is
+    // what makes the caller's next bootstrap collide with a service that still exists.
+    withFakeLaunchctl({ loadedPrints: 3, bootout: 0 }, (calls) => {
+      expect(() => bootoutIfLoaded(FAKE)).not.toThrow();
+      expect(calls("print")).toBeGreaterThan(1);
+    });
+  });
+
+  test("throws when launchd never lets the label go", () => {
+    withFakeLaunchctl({ print: 0, bootout: 0 }, () => {
+      expect(() => bootoutIfLoaded(FAKE)).toThrow(/still loaded/);
+    });
+  });
+});
+
+describe("bootstrapAgent", () => {
+  const FAKE = "com.devbox.test-fixture.not-a-real-agent";
+  const FAKE_PLIST = "/nonexistent/com.devbox.test-fixture.not-a-real-agent.plist";
+  type BootstrapAgent = (label: string, path: string) => void;
+
+  test("retries the EIO launchd returns while it is still tearing the old service down", () => {
+    const bootstrapAgent = agentModule.bootstrapAgent as BootstrapAgent | undefined;
+    expect(bootstrapAgent).toBeDefined();
+
+    withFakeLaunchctl({ bootstrapEio: 2 }, (calls) => {
+      expect(() => bootstrapAgent!(FAKE, FAKE_PLIST)).not.toThrow();
+      expect(calls("bootstrap")).toBe(3);
+    });
+  });
+
+  test("gives up naming bootstrap when the EIO never clears", () => {
+    const bootstrapAgent = agentModule.bootstrapAgent as BootstrapAgent | undefined;
+    expect(bootstrapAgent).toBeDefined();
+
+    withFakeLaunchctl({ bootstrapEio: 99 }, () => {
+      expect(() => bootstrapAgent!(FAKE, FAKE_PLIST)).toThrow(/bootstrap failed/);
+    });
+  });
+
+  test("does not retry a bootstrap that failed for some other reason", () => {
+    const bootstrapAgent = agentModule.bootstrapAgent as BootstrapAgent | undefined;
+    expect(bootstrapAgent).toBeDefined();
+
+    // Only EIO means "still registered". A bad plist retried ten times is ten times the
+    // wait for the same answer.
+    withFakeLaunchctl({ bootstrap: 1 }, (calls) => {
+      expect(() => bootstrapAgent!(FAKE, FAKE_PLIST)).toThrow(/bootstrap failed/);
+      expect(calls("bootstrap")).toBe(1);
     });
   });
 });

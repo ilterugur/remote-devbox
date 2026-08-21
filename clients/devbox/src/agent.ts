@@ -123,8 +123,7 @@ export function recoverOwnedAgentLive(spec: AgentSpec, health: HealthResult): Ow
       },
       bootstrap: () => {
         if (spec.readyFile) rmSync(spec.readyFile, { force: true });
-        const result = launchctl("bootstrap", domain(), path);
-        if (result.status !== 0) throw new Error("launchctl bootstrap failed");
+        bootstrapAgent(spec.label, path);
       },
     });
   } catch {
@@ -148,6 +147,13 @@ const BROWSER_TUNNEL_RETRY_MAX_SECONDS = 30;
 // exiting and the re-execed one taking the lock, nothing owns the profile.
 const BROWSER_ADOPTION_GRACE_SECONDS = 2;
 const PORT_FORWARD_READY_ATTEMPTS = 30;
+// launchd does not finish tearing a service down synchronously with `bootout`, and it
+// answers a `bootstrap` that lands in that window with EIO — its way of saying the label
+// is still registered. Both waits have the same shape: poll in tenths of a second,
+// bounded, because the state they wait on always resolves or never does.
+const LAUNCHD_UNLOAD_ATTEMPTS = 30;
+const LAUNCHD_BOOTSTRAP_ATTEMPTS = 10;
+const LAUNCHD_STILL_REGISTERED = 5;
 
 export const browserModePath = (profile: string, home: string = homedir()): string =>
   join(resolveCfgDir(home), `browser-mode-${profile}`);
@@ -748,6 +754,37 @@ export function bootoutIfLoaded(label: string): void {
   if (!isLoaded(label)) return;
   const r = launchctl("bootout", `${domain()}/${label}`);
   if (r.status !== 0) die(`launchctl bootout failed for ${label}: ${(r.stderr || "").trim()}`);
+  // `bootout` returning is launchd accepting the request, not finishing it. Callers treat
+  // this function as "the label is gone now" and bootstrap a replacement immediately, so
+  // wait for that to be true rather than handing them a domain that still owns the label.
+  for (let attempt = 0; attempt < LAUNCHD_UNLOAD_ATTEMPTS; attempt++) {
+    if (!isLoaded(label)) return;
+    spawnSync("/bin/sleep", ["0.1"]);
+  }
+  die(`${label} is still loaded after a successful bootout; launchd did not release it`);
+}
+
+/**
+ * Bootstrap `path` into this user's launchd domain, tolerating the one failure that is not
+ * one: launchd answers EIO while it is still tearing the label's previous service down,
+ * and the identical call a moment later is accepted. Every other failure — a malformed
+ * plist, a path launchd cannot read — says the same thing on every attempt, so it is
+ * reported at once rather than waited out. Throws rather than dying: one caller reports
+ * the failure and stops, the other folds it into a recovery result.
+ */
+export function bootstrapAgent(label: string, path: string): void {
+  let result = launchctl("bootstrap", domain(), path);
+  for (
+    let attempt = 1;
+    attempt < LAUNCHD_BOOTSTRAP_ATTEMPTS && result.status === LAUNCHD_STILL_REGISTERED;
+    attempt++
+  ) {
+    spawnSync("/bin/sleep", ["0.1"]);
+    result = launchctl("bootstrap", domain(), path);
+  }
+  if (result.status !== 0) {
+    throw new Error(`launchctl bootstrap failed for ${label}: ${(result.stderr || "").trim()}`);
+  }
 }
 
 function requireMac(): void {
@@ -854,8 +891,11 @@ function installAgents(specs: AgentSpec[]): void {
     if (spec.readyFile) rmSync(spec.readyFile, { force: true });
     mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(path, wanted);
-    const result = launchctl("bootstrap", domain(), path);
-    if (result.status !== 0) die(`launchctl bootstrap failed for ${spec.label}: ${(result.stderr || "").trim()}`);
+    try {
+      bootstrapAgent(spec.label, path);
+    } catch (e) {
+      die((e as Error).message);
+    }
     if (spec.readyFile) {
       let ready = false;
       for (let attempt = 0; attempt < PORT_FORWARD_READY_ATTEMPTS; attempt++) {
