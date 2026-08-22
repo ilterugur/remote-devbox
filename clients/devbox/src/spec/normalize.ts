@@ -363,9 +363,18 @@ function normalizeDeveloper(
     container_engine: dev.container_engine ?? null,
     git_identities: mapValues(dev.git_identities, normalizeIdentity),
     default_git_identity: dev.default_git_identity ?? null,
+    agent_versions: { ...(dev.agent_versions ?? {}) },
     agent_profiles: mapValues(dev.agent_profiles, (p) => ({
       provider: p.provider,
       memory_space: p.memory_space ?? null,
+      ...(p.omp_model_presets
+        ? {
+            omp_model_presets: {
+              default_preset: p.omp_model_presets.default_preset,
+              presets: mapValues(p.omp_model_presets.presets, (roles) => ({ ...roles })),
+            },
+          }
+        : {}),
     })),
     default_agent_profile: dev.default_agent_profile ?? null,
     memory: {

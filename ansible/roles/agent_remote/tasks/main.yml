@@ -356,7 +356,7 @@
   # undefined mid-loop, which would suppress the changed status).
   changed_when: "'CHANGED' in (stdout | default(''))"
 
-- name: Deploy operator helper commands
+- name: Deploy the Remote Control operator helper
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../scripts/{{ item.src }}"
     dest: "/usr/local/bin/{{ item.dest }}"
@@ -364,5 +364,7 @@
     group: root
     mode: "0755"
   loop:
-    - { src: remote-devbox-login.sh, dest: remote-devbox-login }
+    # agent_profiles owns remote-devbox-login: it knows every provider/profile and
+    # installs the multi-provider helper after flattening that canonical inventory.
+    # The legacy Claude-only script used to overwrite it later in this same phase.
     - { src: remote-devbox-dev.sh, dest: remote-devbox-dev }

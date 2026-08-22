@@ -268,6 +268,11 @@ developers:
     #   wait_timeout_sec: 900
     #   memory_max: 12G
 
+    # Provider binaries shared by several profiles are pinned once per developer.
+    # OMP rejects floating tags/ranges so a later `devbox apply` is a controlled upgrade.
+    agent_versions:
+      omp: "17.4.2"
+
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:
       claude-work:
@@ -282,6 +287,51 @@ developers:
       # applies this developer's optional `codex_host_resources` overrides.
       codex-work:
         provider: codex
+      omp-work:
+        provider: omp
+        # Presets are inventory data, not extension source. `/preset <name>` changes
+        # the whole built-in role map atomically inside the current OMP session;
+        # `/preset reset` returns to OMP's normal settings. A resumed session restores
+        # its own last choice, so one Paseo OMP provider can host all three strategies.
+        omp_model_presets:
+          default_preset: balanced
+          presets:
+            balanced:
+              default: openai-codex/gpt-5.6-sol:xhigh
+              smol: openai-codex/gpt-5.6-luna:medium
+              slow: anthropic/claude-opus-5:xhigh
+              vision: anthropic/claude-opus-5:xhigh
+              plan: anthropic/claude-opus-5:xhigh
+              designer: anthropic/claude-opus-5:xhigh
+              commit: openai-codex/gpt-5.6-luna:medium
+              tiny: openai-codex/gpt-5.6-luna:medium
+              task: openai-codex/gpt-5.6-sol:xhigh
+              advisor: anthropic/claude-opus-5:xhigh
+            codex:
+              default: openai-codex/gpt-5.6-sol:xhigh
+              smol: openai-codex/gpt-5.6-luna:medium
+              slow: openai-codex/gpt-5.6-sol:xhigh
+              vision: openai-codex/gpt-5.6-sol:xhigh
+              plan: openai-codex/gpt-5.6-sol:xhigh
+              designer: openai-codex/gpt-5.6-sol:xhigh
+              commit: openai-codex/gpt-5.6-luna:medium
+              tiny: openai-codex/gpt-5.6-luna:medium
+              task: openai-codex/gpt-5.6-sol:xhigh
+              advisor: openai-codex/gpt-5.6-sol:xhigh
+            claude:
+              default: anthropic/claude-opus-5:xhigh
+              smol: anthropic/claude-haiku-4-5:medium
+              slow: anthropic/claude-opus-5:xhigh
+              vision: anthropic/claude-opus-5:xhigh
+              plan: anthropic/claude-opus-5:xhigh
+              designer: anthropic/claude-opus-5:xhigh
+              commit: anthropic/claude-haiku-4-5:medium
+              tiny: anthropic/claude-haiku-4-5:medium
+              task: anthropic/claude-opus-5:xhigh
+              advisor: anthropic/claude-opus-5:xhigh
+          # Add an `opencode` preset only after `omp models opencode --json` exposes
+          # the authenticated Ox Alpha selector; guessing an ID would make switching
+          # fail closed at runtime.
     default_agent_profile: claude-work
 
     memory:

@@ -6,6 +6,7 @@
  * and default resolution is resolve.ts's. Collects every issue in one pass; returns a
  * typed spec only when no error was produced.
  */
+import { OMP_THINKING_LEVELS } from "../omp-model-presets/core";
 import { type Issue, err, hasErrors, warn } from "./issues";
 import {
   CLI_TARGETS,
@@ -13,6 +14,7 @@ import {
   type CliTarget,
   type DevboxSpec,
   type EngineId,
+  OMP_MODEL_ROLE_IDS,
   type RcSpawn,
   SERVICE_RESOURCE_KEYS,
   SLICE_RESOURCE_KEYS,
@@ -29,16 +31,20 @@ const PROJECT_NAME_RE = /^[A-Za-z0-9._-]+$/;
 const XKB_NAME_RE = /^[a-z0-9_+-]+$/;
 const ENGINES: readonly string[] = ["podman-rootless", "docker-rootless", "none"] satisfies EngineId[];
 const SSH_ACCESS: readonly string[] = ["public", "tailnet"] satisfies SshAccess[];
-const PROVIDERS: readonly string[] = ["claude", "codex"];
+const PROVIDERS: readonly string[] = ["claude", "codex", "omp"];
+const VERSIONED_PROVIDERS: readonly string[] = ["omp"];
+const EXACT_AGENT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];
 const RC_SPAWNS: readonly string[] = ["worktree", "same-dir", "session"] satisfies RcSpawn[];
 const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+const OMP_PRESET_NAME_RE = /^[a-z][a-z0-9-]*$/;
+const OMP_THINKING_LEVEL_SET = new Set<string>(OMP_THINKING_LEVELS);
 /**
  * An agent profile becomes a launcher script on the developer's PATH. Naming a profile
  * after the agent's own binary makes the launcher overwrite that binary and then exec
  * itself — so the collision is rejected here rather than discovered as a fork bomb.
  */
-const RESERVED_PROFILE_NAMES: readonly string[] = ["claude", "codex", "mise", "git", "node", "bun"];
+const RESERVED_PROFILE_NAMES: readonly string[] = ["claude", "codex", "omp", "mise", "git", "node", "bun"];
 
 /**
  * Accepts the classic types plus FIDO2/security-key types (sk-*) and certificates.
@@ -402,12 +408,46 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   }
   validateAgentConfig(d.agent_config, `${base}.agent_config`, issues);
   validateGitIdentities(d, base, issues);
+  validateAgentVersions(d, base, issues);
   validateAgentProfiles(d, base, issues);
   validateMemory(d.memory, `${base}.memory`, issues);
   validateDesktop(d.desktop, `${base}.desktop`, issues);
   validateFileBridge(d.file_bridge, `${base}.file_bridge`, issues);
   validateAppConfigs(d, base, issues);
   validateProjects(d.projects, `${base}.projects`, issues);
+}
+
+function validateAgentVersions(d: Record<string, unknown>, base: string, issues: Issue[]): void {
+  const versions = d.agent_versions;
+  const profiles = isRecord(d.agent_profiles) ? Object.values(d.agent_profiles) : [];
+  const needsOmpPin = profiles.some((profile) => isRecord(profile) && profile.provider === "omp");
+
+  if (versions === undefined) {
+    if (needsOmpPin) issues.push(err(`${base}.agent_versions.omp`, "an exact OMP version pin is required"));
+    return;
+  }
+  if (!isRecord(versions)) {
+    issues.push(err(`${base}.agent_versions`, "must be a mapping of provider -> exact version"));
+    if (needsOmpPin) issues.push(err(`${base}.agent_versions.omp`, "an exact OMP version pin is required"));
+    return;
+  }
+
+  for (const [provider, version] of Object.entries(versions)) {
+    const path = `${base}.agent_versions.${provider}`;
+    if (!VERSIONED_PROVIDERS.includes(provider)) {
+      issues.push(err(path, `version pinning is supported for: ${VERSIONED_PROVIDERS.join(", ")}`));
+      continue;
+    }
+    if (typeof version !== "string" || !EXACT_AGENT_VERSION_RE.test(version)) {
+      issues.push(err(path, "must be an exact version such as 17.4.2 (not a tag or range)"));
+    }
+  }
+
+  if (needsOmpPin && !EXACT_AGENT_VERSION_RE.test(String(versions.omp ?? ""))) {
+    if (!issues.some((issue) => issue.path === `${base}.agent_versions.omp`)) {
+      issues.push(err(`${base}.agent_versions.omp`, "an exact OMP version pin is required"));
+    }
+  }
 }
 
 function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): void {
@@ -796,11 +836,76 @@ function validateAgentProfiles(d: Record<string, unknown>, base: string, issues:
         if (val.memory_space !== undefined && !isNonEmptyString(val.memory_space)) {
           issues.push(err(`${p}.memory_space`, "must be a memory space key (or 'none')"));
         }
+        validateOmpModelPresets(val.omp_model_presets, val.provider, `${p}.omp_model_presets`, issues);
       }
     }
   }
   if (d.default_agent_profile !== undefined && !isNonEmptyString(d.default_agent_profile)) {
     issues.push(err(`${base}.default_agent_profile`, "must be an agent profile key"));
+  }
+}
+
+function validateOmpModelPresets(raw: unknown, provider: unknown, base: string, issues: Issue[]): void {
+  if (raw === undefined) return;
+  if (provider !== "omp") {
+    issues.push(err(base, "is only valid when provider is 'omp'"));
+  }
+  if (!isRecord(raw)) {
+    issues.push(err(base, "must be a mapping"));
+    return;
+  }
+
+  const allowedFields = new Set(["default_preset", "presets"]);
+  for (const key of Object.keys(raw)) {
+    if (!allowedFields.has(key)) issues.push(err(`${base}.${key}`, "unknown OMP model presets field"));
+  }
+
+  const defaultPreset = raw.default_preset;
+  if (!isNonEmptyString(defaultPreset) || !OMP_PRESET_NAME_RE.test(defaultPreset)) {
+    issues.push(err(`${base}.default_preset`, `must match ${OMP_PRESET_NAME_RE.source}`));
+  }
+
+  const presets = raw.presets;
+  if (!isRecord(presets) || Object.keys(presets).length === 0) {
+    issues.push(err(`${base}.presets`, "must be a non-empty mapping of preset name to role map"));
+    return;
+  }
+  if (typeof defaultPreset === "string" && !Object.hasOwn(presets, defaultPreset)) {
+    issues.push(err(`${base}.default_preset`, `'${defaultPreset}' is not declared in presets`));
+  }
+
+  const knownRoles = new Set<string>(OMP_MODEL_ROLE_IDS);
+  for (const [name, roleMap] of Object.entries(presets)) {
+    const presetPath = `${base}.presets.${name}`;
+    if (!OMP_PRESET_NAME_RE.test(name)) {
+      issues.push(err(presetPath, `'${name}' must match ${OMP_PRESET_NAME_RE.source}`));
+    }
+    if (!isRecord(roleMap)) {
+      issues.push(err(presetPath, "must be a mapping of every OMP model role to a selector"));
+      continue;
+    }
+    for (const role of OMP_MODEL_ROLE_IDS) {
+      if (!Object.hasOwn(roleMap, role)) {
+        issues.push(err(`${presetPath}.${role}`, "is required"));
+      } else if (!isNonEmptyString(roleMap[role])) {
+        issues.push(err(`${presetPath}.${role}`, "must be a non-empty OMP model selector"));
+      } else {
+        const selector = roleMap[role];
+        const separator = selector.lastIndexOf(":");
+        const thinking = separator > 0 ? selector.slice(separator + 1) : "";
+        if (!OMP_THINKING_LEVEL_SET.has(thinking)) {
+          issues.push(
+            err(
+              `${presetPath}.${role}`,
+              `must end with one of these OMP thinking levels: ${OMP_THINKING_LEVELS.join(", ")}`,
+            ),
+          );
+        }
+      }
+    }
+    for (const role of Object.keys(roleMap)) {
+      if (!knownRoles.has(role)) issues.push(err(`${presetPath}.${role}`, "is not a built-in OMP model role"));
+    }
   }
 }
 
