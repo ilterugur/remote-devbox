@@ -261,6 +261,43 @@ test("absent optionals become concrete values, never undefined", () => {
   });
 });
 
+test("OMP model presets remain declarative data during normalization", () => {
+  const spec: ResolvedSpec = {
+    ...resolved,
+    developers: [
+      {
+        ...resolved.developers[0]!,
+        agent_profiles: {
+          "omp-work": {
+            provider: "omp",
+            omp_model_presets: {
+              default_preset: "codex",
+              presets: {
+                codex: {
+                  default: "openai-codex/gpt-5.6-sol:xhigh",
+                  smol: "openai-codex/gpt-5.6-luna:medium",
+                  slow: "openai-codex/gpt-5.6-sol:xhigh",
+                  vision: "openai-codex/gpt-5.6-sol:xhigh",
+                  plan: "openai-codex/gpt-5.6-sol:xhigh",
+                  designer: "openai-codex/gpt-5.6-sol:xhigh",
+                  commit: "openai-codex/gpt-5.6-luna:medium",
+                  tiny: "openai-codex/gpt-5.6-luna:medium",
+                  task: "openai-codex/gpt-5.6-sol:xhigh",
+                  advisor: "openai-codex/gpt-5.6-sol:xhigh",
+                },
+              },
+            },
+          },
+        },
+      },
+    ],
+  } as ResolvedSpec;
+
+  const profile = (normalize(spec).devbox_developers as Record<string, any>[])[0]?.agent_profiles["omp-work"];
+  expect(profile.provider).toBe("omp");
+  expect(profile.omp_model_presets).toEqual(spec.developers[0]?.agent_profiles?.["omp-work"]?.omp_model_presets);
+});
+
 test("a git identity is emitted with an explicit github_user", () => {
   expect(dev0().git_identities).toEqual({ work: { name: "N", email: "e@example.com", github_user: null } });
 });

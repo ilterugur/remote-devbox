@@ -7,6 +7,19 @@ import { validateStructure } from "./validate";
 
 const KEY = "ssh-ed25519 AAAAC3Nz key@client";
 
+const completeOmpRoles = () => ({
+  default: "openai-codex/gpt-5.6-sol:xhigh",
+  smol: "openai-codex/gpt-5.6-luna:medium",
+  slow: "anthropic/claude-opus-5:xhigh",
+  vision: "anthropic/claude-opus-5:xhigh",
+  plan: "anthropic/claude-opus-5:xhigh",
+  designer: "anthropic/claude-opus-5:xhigh",
+  commit: "openai-codex/gpt-5.6-luna:medium",
+  tiny: "openai-codex/gpt-5.6-luna:medium",
+  task: "openai-codex/gpt-5.6-sol:xhigh",
+  advisor: "anthropic/claude-opus-5:xhigh",
+});
+
 const minimal = () => ({
   config_version: 3,
   platform: { distribution: "ubuntu", version: "26.04", architecture: "amd64" },
@@ -225,6 +238,181 @@ test("a profile name with a slash is rejected (it becomes a filename)", () => {
     developers: [{ user: "dev-a", login_ssh_keys: [KEY], agent_profiles: { "a/b": { provider: "claude" } } }],
   };
   expect(paths(raw)).toContain("error:developers[0].agent_profiles.a/b");
+});
+
+test("an OMP profile requires and preserves an exact developer-level version pin", () => {
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "17.4.2" },
+        agent_profiles: { "omp-main": { provider: "omp" } },
+      },
+    ],
+  };
+
+  const result = runRawPipeline(raw);
+  expect(result.issues).toEqual([]);
+  expect((result.normalized?.devbox_developers as Record<string, unknown>[])[0]).toMatchObject({
+    agent_versions: { omp: "17.4.2" },
+    agent_profiles: { "omp-main": { provider: "omp", memory_space: null } },
+  });
+});
+
+test("an OMP profile preserves declarative complete model presets", () => {
+  const presets = {
+    default_preset: "balanced",
+    presets: { balanced: completeOmpRoles() },
+  };
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "17.4.2" },
+        agent_profiles: { "omp-work": { provider: "omp", omp_model_presets: presets } },
+      },
+    ],
+  };
+
+  const result = runRawPipeline(raw);
+  expect(result.issues).toEqual([]);
+  expect((result.normalized?.devbox_developers as Record<string, any>[])[0]?.agent_profiles).toEqual({
+    "omp-work": { provider: "omp", memory_space: null, omp_model_presets: presets },
+  });
+});
+
+test("OMP model presets require exactly every built-in role and an existing default", () => {
+  const missingAdvisor = completeOmpRoles() as Record<string, string>;
+  delete missingAdvisor.advisor;
+  missingAdvisor.surprise = "openai-codex/gpt-5.6-sol:xhigh";
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "17.4.2" },
+        agent_profiles: {
+          "omp-work": {
+            provider: "omp",
+            omp_model_presets: {
+              default_preset: "missing",
+              presets: { "Bad Name": missingAdvisor },
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toEqual(
+    expect.arrayContaining([
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.default_preset",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.presets.Bad Name",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.presets.Bad Name.advisor",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.presets.Bad Name.surprise",
+    ]),
+  );
+});
+
+test("OMP model presets reject non-OMP profiles, unknown fields, and empty selectors", () => {
+  const roles = completeOmpRoles() as Record<string, unknown>;
+  roles.commit = " ";
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_profiles: {
+          "claude-work": {
+            provider: "claude",
+            omp_model_presets: {
+              default_preset: "balanced",
+              api_key: "must-not-be-accepted",
+              presets: { balanced: roles },
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toEqual(
+    expect.arrayContaining([
+      "error:developers[0].agent_profiles.claude-work.omp_model_presets",
+      "error:developers[0].agent_profiles.claude-work.omp_model_presets.api_key",
+      "error:developers[0].agent_profiles.claude-work.omp_model_presets.presets.balanced.commit",
+    ]),
+  );
+});
+
+test("OMP model presets reject selectors without an exact supported thinking suffix", () => {
+  const roles = completeOmpRoles();
+  roles.plan = "anthropic/claude-opus-5:extreme";
+  roles.vision = "anthropic/claude-opus-5";
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "17.4.2" },
+        agent_profiles: {
+          "omp-work": {
+            provider: "omp",
+            omp_model_presets: { default_preset: "balanced", presets: { balanced: roles } },
+          },
+        },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toEqual(
+    expect.arrayContaining([
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.presets.balanced.plan",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.presets.balanced.vision",
+    ]),
+  );
+});
+
+test("an OMP profile without an exact version pin is rejected", () => {
+  const withoutPin = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_profiles: { "omp-main": { provider: "omp" } },
+      },
+    ],
+  };
+  const floatingPin = {
+    ...withoutPin,
+    developers: [{ ...withoutPin.developers[0], agent_versions: { omp: "latest" } }],
+  };
+
+  expect(paths(withoutPin)).toContain("error:developers[0].agent_versions.omp");
+  expect(paths(floatingPin)).toContain("error:developers[0].agent_versions.omp");
+});
+
+test("agent version pins reject unknown providers", () => {
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { gemini: "1.2.3" },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toContain("error:developers[0].agent_versions.gemini");
 });
 
 test("desktop access defaults are absent-but-valid; an empty list is not", () => {

@@ -1,0 +1,73 @@
+---
+- name: Verify OMP is a pinned, profile-isolated agent provider
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Read the provider adapters
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../roles/agent_profiles/vars/main.yml"
+      register: adapters
+
+    - name: Read the provider installation tasks
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../roles/agent_profiles/tasks/main.yml"
+      register: provider_tasks
+
+    - name: Read the profile wrapper template
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../roles/agent_profiles/templates/agent-wrapper.sh.j2"
+      register: wrapper
+
+    - name: Read the agent remote tasks
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../roles/agent_remote/tasks/main.yml"
+      register: remote_tasks
+
+    - name: Read the OMP model preset extension adapter
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../roles/agent_profiles/files/omp-model-presets/index.ts"
+      register: preset_extension
+
+    - name: Read the provider-neutral preset core
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../clients/devbox/src/omp-model-presets/core.ts"
+      register: preset_core
+
+    - name: Assert OMP uses Bun, an exact pin, and its isolated config root
+      ansible.builtin.assert:
+        that:
+          - "'omp:' in adapters.content | b64decode"
+          - "'@oh-my-pi/pi-coding-agent@__VERSION__' in adapters.content | b64decode"
+          - "'config_env: PI_CODING_AGENT_DIR' in adapters.content | b64decode"
+          - "'AWS_EC2_METADATA_DISABLED' in adapters.content | b64decode"
+          - "'AWS_BEARER_TOKEN_BEDROCK' in adapters.content | b64decode"
+          - "'unset_env' in wrapper.content | b64decode"
+          - "'runtime_env' in wrapper.content | b64decode"
+          - "'agent_versions' in provider_tasks.content | b64decode"
+          - "'Inspect pinned agent versions' in provider_tasks.content | b64decode"
+          - "'Install pinned agent binaries when their versions differ' in provider_tasks.content | b64decode"
+          - "'Assert installed agent versions match their pins' in provider_tasks.content | b64decode"
+          - "\"{ src: remote-devbox-login.sh, dest: remote-devbox-login }\" not in remote_tasks.content | b64decode"
+
+    - name: Assert presets are declarative, runtime-only, and session-aware
+      ansible.builtin.assert:
+        that:
+          - "'omp_model_presets' in provider_tasks.content | b64decode"
+          - "'extensions/omp-model-presets' in provider_tasks.content | b64decode"
+          - "'model-presets.json' in provider_tasks.content | b64decode"
+          - "'to_nice_json' in provider_tasks.content | b64decode"
+          - "'SUPPORTED_OMP_VERSION = \"17.4.2\"' in preset_extension.content | b64decode"
+          - "'VERSION !== SUPPORTED_OMP_VERSION' in preset_extension.content | b64decode"
+          - "'registerCommand(\"preset\"' in preset_extension.content | b64decode"
+          - "'pi.pi.settings.override(\"modelRoles\"' in preset_extension.content | b64decode"
+          - "'pi.pi.settings.clearOverride(\"modelRoles\"' in preset_extension.content | b64decode"
+          - "'import { settings' not in preset_extension.content | b64decode"
+          - "'session_start' in preset_extension.content | b64decode"
+          - "'session_switch' in preset_extension.content | b64decode"
+          - "'getEntries()' in preset_extension.content | b64decode"
+          - "'PRESET_STATE_CUSTOM_TYPE' in preset_core.content | b64decode"
+          - "'gpt-' not in preset_core.content | b64decode"
+          - "'claude-' not in preset_core.content | b64decode"
+          - "'balanced' not in preset_core.content | b64decode"

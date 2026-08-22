@@ -10,6 +10,12 @@ set -euo pipefail
 export {{ devbox_agent_adapters[item.provider].config_env }}="{{ '/home/' ~ item.user ~ '/.agent-profiles/' ~ item.name }}"
 export DEVBOX_AGENT_PROFILE="{{ item.name }}"
 export DEVBOX_AGENT_PROVIDER="{{ item.provider }}"
+{% for key, value in devbox_agent_adapters[item.provider].runtime_env | default({}) | dictsort %}
+export {{ key }}={{ value | quote }}
+{% endfor %}
+{% if devbox_agent_adapters[item.provider].unset_env | default([]) %}
+unset {{ devbox_agent_adapters[item.provider].unset_env | join(' ') }}
+{% endif %}
 
 # /tmp is a tmpfs at half of RAM, so a scratch tree written there is resident memory that
 # can only be swapped, never dropped — container tooling leaves gigabytes of it behind.

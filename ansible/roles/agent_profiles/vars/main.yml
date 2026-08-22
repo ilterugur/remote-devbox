@@ -23,3 +23,30 @@ devbox_agent_adapters:
     config_env: CODEX_HOME
     version_args: "--version"
     login_hint: "run the wrapper, then `codex login`"
+  omp:
+    binary: omp
+    # Bun owns both the package tree and executable under this developer's home. The
+    # exact version is supplied by developers[].agent_versions.omp; __VERSION__ is
+    # replaced only after schema validation has rejected tags and version ranges.
+    install_cmd: "mise exec -- bun install -g @oh-my-pi/pi-coding-agent@__VERSION__"
+    install_creates: ".bun/bin/omp"
+    bin_path: ".bun/bin/omp"
+    config_env: PI_CODING_AGENT_DIR
+    version_args: "--version"
+    login_hint: "run the wrapper, then `/login anthropic` and `/login openai-codex`"
+    # OMP can prefer Bedrock when it sees ambient AWS credentials. This profile uses
+    # native Anthropic OAuth, so fail closed instead of allowing an inherited shell or
+    # future service environment to silently change the provider and billing path.
+    runtime_env:
+      AWS_EC2_METADATA_DISABLED: "true"
+    unset_env:
+      - AWS_PROFILE
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+      - AWS_SECURITY_TOKEN
+      - AWS_BEARER_TOKEN_BEDROCK
+      - AWS_CONTAINER_CREDENTIALS_FULL_URI
+      - AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+      - AWS_WEB_IDENTITY_TOKEN_FILE
+      - AWS_ROLE_ARN

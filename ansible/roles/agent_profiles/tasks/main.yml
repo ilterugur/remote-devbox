@@ -19,6 +19,7 @@
                 'user': dev.user,
                 'name': name,
                 'provider': profile.provider,
+                'omp_model_presets': profile.omp_model_presets | default(none),
                 'heavy_job_gate_enabled': (dev.heavy_job_gate | default({'enabled': true})).enabled,
                 'heavy_job_gate_categories': ((dev.heavy_job_gate | default({})).categories | default({'build': true, 'typecheck': true, 'generate': true, 'test': true}) | dict2items | selectattr('value', 'equalto', true) | map(attribute='key') | list),
                 'heavy_job_gate_wait_timeout_sec': (dev.heavy_job_gate | default({})).wait_timeout_sec | default(1800),
@@ -141,12 +142,15 @@
       {%- for dev in devbox_developers -%}
         {%- for provider in (dev.agent_profiles | default({})).values()
                             | map(attribute='provider') | unique -%}
-          {{- out.append({'user': dev.user, 'provider': provider}) or '' -}}
+          {{- out.append({
+                'user': dev.user,
+                'provider': provider,
+                'version': (dev.agent_versions | default({})).get(provider, none)}) or '' -}}
         {%- endfor -%}
       {%- endfor -%}
       {{ out | to_json }}
 
-- name: Install each agent binary
+- name: Install each unversioned agent binary
   ansible.builtin.shell:
     cmd: "set -o pipefail; timeout 600 bash -lc '{{ devbox_agent_adapters[item.provider].install_cmd }}'"
     executable: /bin/bash
@@ -158,6 +162,43 @@
   loop: "{{ _devbox_agent_installs }}"
   loop_control:
     label: "{{ item.user }}/{{ item.provider }}"
+  when: item.version is none
+
+- name: Inspect pinned agent versions
+  ansible.builtin.shell:
+    cmd: >-
+      bash -lc "/home/{{ item.user }}/{{ devbox_agent_adapters[item.provider].bin_path }}
+      {{ devbox_agent_adapters[item.provider].version_args }}"
+    executable: /bin/bash
+  become: true
+  become_user: "{{ item.user }}"
+  environment:
+    HOME: "/home/{{ item.user }}"
+  loop: "{{ _devbox_agent_installs }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.provider }}@{{ item.version }}"
+  when: item.version is not none
+  register: _devbox_pinned_agent_versions
+  changed_when: false
+  failed_when: false
+
+- name: Install pinned agent binaries when their versions differ
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; timeout 600 bash -lc
+      '{{ devbox_agent_adapters[item.item.provider].install_cmd
+          | replace("__VERSION__", item.item.version) }}'
+    executable: /bin/bash
+  become: true
+  become_user: "{{ item.item.user }}"
+  environment:
+    HOME: "/home/{{ item.item.user }}"
+  loop: "{{ _devbox_pinned_agent_versions.results }}"
+  loop_control:
+    label: "{{ item.item.user }}/{{ item.item.provider }}@{{ item.item.version }}"
+  when:
+    - not (item.skipped | default(false))
+    - item.rc != 0 or item.item.version not in (item.stdout | default(''))
 
 - name: Verify each agent binary runs (catches a truncated install)
   # Through a login shell: an agent installed via npm carries an `env node` shebang, so
@@ -176,6 +217,22 @@
   loop_control:
     label: "{{ item.user }}/{{ item.provider }}"
   changed_when: false
+  register: _devbox_agent_version_checks
+
+- name: Assert installed agent versions match their pins
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.stdout | regex_search(
+          '(^|[^0-9])' ~ (item.item.version | regex_escape) ~ '([^0-9]|$)'
+        )) is not none
+    fail_msg: >-
+      {{ item.item.user }}/{{ item.item.provider }} reported '{{ item.stdout | trim }}',
+      expected exact pinned version {{ item.item.version }}.
+  loop: "{{ _devbox_agent_version_checks.results }}"
+  loop_control:
+    label: "{{ item.item.user }}/{{ item.item.provider }}@{{ item.item.version }}"
+  when: item.item.version is not none
 
 - name: Create the per-profile config trees
   ansible.builtin.file:
@@ -187,6 +244,84 @@
   loop: "{{ _devbox_agent_profiles }}"
   loop_control:
     label: "{{ item.user }}/{{ item.name }}"
+
+- name: Create the OMP model preset extension directories
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-model-presets"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.omp_model_presets is not none
+
+- name: Install the OMP model preset extension adapter
+  ansible.builtin.copy:
+    src: omp-model-presets/index.ts
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-model-presets/index.ts"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.omp_model_presets is not none
+
+- name: Install the provider-neutral OMP model preset core
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../clients/devbox/src/omp-model-presets/core.ts"
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-model-presets/core.ts"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.omp_model_presets is not none
+
+- name: Write declarative OMP model presets
+  ansible.builtin.copy:
+    content: "{{ item.omp_model_presets | to_nice_json }}\n"
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/model-presets.json"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.omp_model_presets is not none
+
+- name: Remove unmanaged OMP model preset extensions
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-model-presets"
+    state: absent
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.omp_model_presets is none
+
+- name: Remove unmanaged OMP model preset documents
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/model-presets.json"
+    state: absent
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.omp_model_presets is none
 
 # One file, sourced by every entry point that starts an agent. The launcher is not the
 # only one: an always-on Remote Control session never goes through it, so wiring the

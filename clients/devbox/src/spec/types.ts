@@ -15,7 +15,7 @@ export type EngineId = "podman-rootless" | "docker-rootless" | "none";
  * no way to say "neither" (which is simply invalid).
  */
 export type SshAccess = "public" | "tailnet";
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "omp";
 
 export interface PlatformSpec {
   distribution: string;
@@ -119,9 +119,32 @@ export interface GitIdentity {
   github_user?: string;
 }
 
+export const OMP_MODEL_ROLE_IDS = [
+  "default",
+  "smol",
+  "slow",
+  "vision",
+  "plan",
+  "designer",
+  "commit",
+  "tiny",
+  "task",
+  "advisor",
+] as const;
+
+export type OmpModelRole = (typeof OMP_MODEL_ROLE_IDS)[number];
+export type OmpModelRoleMap = Record<OmpModelRole, string>;
+
+export interface OmpModelPresetsSpec {
+  default_preset: string;
+  presets: Record<string, OmpModelRoleMap>;
+}
+
 export interface AgentProfile {
   provider: AgentProvider;
   memory_space?: string;
+  /** Runtime-only OMP role maps. Models and preset names remain inventory data. */
+  omp_model_presets?: OmpModelPresetsSpec;
 }
 
 export interface MemoryInstance {
@@ -413,6 +436,9 @@ export interface DeveloperSpec {
   container_engine?: EngineId;
   git_identities?: Record<string, GitIdentity>;
   default_git_identity?: string;
+  /** Exact provider binary versions installed once per developer. OMP is deliberately
+   * pinned here (rather than per profile) because all profiles share one binary. */
+  agent_versions?: Partial<Record<AgentProvider, string>>;
   agent_profiles?: Record<string, AgentProfile>;
   default_agent_profile?: string;
   memory?: MemorySpec;
