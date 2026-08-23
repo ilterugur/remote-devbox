@@ -4,9 +4,11 @@ import {
   MODEL_ROLE_IDS,
   PRESET_STATE_CUSTOM_TYPE,
   createPresetController,
+  formatPresetDetails,
   formatPresetList,
   latestPresetState,
   parsePresetDocument,
+  presetNamesForShow,
   toOmpRetrySettings,
   type OmpModelPresetRuntime,
   type OmpThinkingLevel,
@@ -188,6 +190,60 @@ describe("preset list", () => {
         defaultPreset: "balanced",
       }),
     ).toBe("OMP presets (override reset):\n- balanced (default)\n- codex");
+  });
+});
+
+describe("preset details", () => {
+  test("shows every role for one preset with active and default markers", () => {
+    const document = parsePresetDocument(rawDocument());
+
+    expect(
+      formatPresetDetails(document, ["balanced"], {
+        activePreset: "balanced",
+        defaultPreset: "balanced",
+      }),
+    ).toBe(
+      [
+        "OMP preset: balanced (active, default)",
+        "- default: provider/primary:xhigh",
+        "- smol: provider/small:medium",
+        "- slow: provider/primary:xhigh",
+        "- vision: provider/primary:xhigh",
+        "- plan: provider/primary:xhigh",
+        "- designer: provider/primary:xhigh",
+        "- commit: provider/small:medium",
+        "- tiny: provider/small:medium",
+        "- task: provider/primary:xhigh",
+        "- advisor: provider/primary:xhigh",
+      ].join("\n"),
+    );
+  });
+
+  test("shows all presets and rejects unknown names", () => {
+    const document = parsePresetDocument(rawDocument());
+    const output = formatPresetDetails(document, Object.keys(document.presets), {
+      activePreset: "alternate",
+      defaultPreset: "balanced",
+    });
+
+    expect(output).toContain("OMP preset: balanced (default)");
+    expect(output).toContain("\n\nOMP preset: alternate (active)\n");
+    expect(() =>
+      formatPresetDetails(document, ["missing"], {
+        activePreset: "alternate",
+        defaultPreset: "balanced",
+      }),
+    ).toThrow("unknown OMP model preset 'missing'");
+  });
+
+  test("selects the active, named, or all presets for the show command", () => {
+    const names = ["balanced", "codex", "claude"];
+
+    expect(presetNamesForShow("", names, "balanced")).toEqual(["balanced"]);
+    expect(presetNamesForShow("codex", names, "balanced")).toEqual(["codex"]);
+    expect(presetNamesForShow("all", names, "balanced")).toEqual(names);
+    expect(() => presetNamesForShow("", names, null)).toThrow("no active OMP model preset");
+    expect(() => presetNamesForShow("missing", names, "balanced")).toThrow("unknown OMP model preset 'missing'");
   });
 });
 

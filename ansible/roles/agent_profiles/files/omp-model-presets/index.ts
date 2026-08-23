@@ -12,8 +12,10 @@ import {
 import {
   PRESET_STATE_CUSTOM_TYPE,
   createPresetController,
+  formatPresetDetails,
   formatPresetList,
   parsePresetDocument,
+  presetNamesForShow,
   toOmpRetrySettings,
   type OmpModelPresetRuntime,
   type OmpThinkingLevel,
@@ -93,7 +95,15 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
   pi.registerCommand("preset", {
     description: "Show or switch the declarative OMP model-role preset",
     getArgumentCompletions: (prefix) =>
-      ["status", "list", "reset", ...controller.list()]
+      [
+        "status",
+        "list",
+        "show",
+        "show all",
+        ...controller.list().map((name) => `show ${name}`),
+        "reset",
+        ...controller.list(),
+      ]
         .filter((value) => value.startsWith(prefix.trim()))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -112,6 +122,13 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
           }
           if (requested === "list") {
             ctx.ui.notify(formatPresetList(controller.list(), controller.status()), "info");
+            return;
+          }
+          if (requested === "show" || requested.startsWith("show ")) {
+            const argument = requested.slice("show".length).trim();
+            const status = controller.status();
+            const names = presetNamesForShow(argument, controller.list(), status.activePreset);
+            ctx.ui.notify(formatPresetDetails(document, names, status), "info");
             return;
           }
           if (requested === "reset") {

@@ -123,6 +123,42 @@ export function formatPresetList(
   return [header, ...rows].join("\n");
 }
 
+export function formatPresetDetails(
+  document: ParsedPresetDocument,
+  names: readonly string[],
+  status: { activePreset: string | null; defaultPreset: string },
+): string {
+  return names
+    .map((name) => {
+      const preset = document.presets[name];
+      if (!preset) throw new Error(`unknown OMP model preset '${name}'`);
+      const markers = [
+        ...(name === status.activePreset ? ["active"] : []),
+        ...(name === status.defaultPreset ? ["default"] : []),
+      ];
+      const header = `OMP preset: ${name}${markers.length > 0 ? ` (${markers.join(", ")})` : ""}`;
+      const rows = MODEL_ROLE_IDS.map((role) => `- ${role}: ${preset.roles[role].selector}`);
+      return [header, ...rows].join("\n");
+    })
+    .join("\n\n");
+}
+
+export function presetNamesForShow(
+  argument: string,
+  names: readonly string[],
+  activePreset: string | null,
+): string[] {
+  if (argument === "all") return [...names];
+  if (argument.length > 0) {
+    if (!names.includes(argument)) throw new Error(`unknown OMP model preset '${argument}'`);
+    return [argument];
+  }
+  if (!activePreset) {
+    throw new Error("no active OMP model preset; use '/preset show <name>' or '/preset show all'");
+  }
+  return [activePreset];
+}
+
 const PRESET_NAME_RE = /^[a-z][a-z0-9-]*$/;
 const THINKING_LEVEL_SET = new Set<string>(OMP_THINKING_LEVELS);
 const ROLE_SET = new Set<string>(MODEL_ROLE_IDS);
