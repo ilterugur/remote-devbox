@@ -135,9 +135,22 @@ export const OMP_MODEL_ROLE_IDS = [
 export type OmpModelRole = (typeof OMP_MODEL_ROLE_IDS)[number];
 export type OmpModelRoleMap = Record<OmpModelRole, string>;
 
+export type OmpUsageReservePolicy = "confirm" | "auto" | "fail-closed";
+export type OmpFallbackRevertPolicy = "cooldown-expiry" | "never";
+
+export interface OmpRetryPolicySpec {
+  model_fallback: boolean;
+  usage_aware_fallback: boolean;
+  usage_reserve_pct: number;
+  usage_reserve_policy: OmpUsageReservePolicy;
+  fallback_revert_policy: OmpFallbackRevertPolicy;
+  fallback_chains: Record<string, string[]>;
+}
+
 export interface OmpModelPresetsSpec {
   default_preset: string;
   presets: Record<string, OmpModelRoleMap>;
+  retry?: OmpRetryPolicySpec;
 }
 
 export interface AgentProfile {

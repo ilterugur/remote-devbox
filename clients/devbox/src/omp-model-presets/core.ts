@@ -31,9 +31,31 @@ export interface ParsedPreset {
   selectors: OmpRoleSelectors;
 }
 
+export type OmpUsageReservePolicy = "confirm" | "auto" | "fail-closed";
+export type OmpFallbackRevertPolicy = "cooldown-expiry" | "never";
+
+export interface ParsedRetryPolicy {
+  modelFallback: boolean;
+  usageAwareFallback: boolean;
+  usageReservePct: number;
+  usageReservePolicy: OmpUsageReservePolicy;
+  fallbackRevertPolicy: OmpFallbackRevertPolicy;
+  fallbackChains: Record<string, string[]>;
+}
+
+export type OmpRetrySettings = {
+  "retry.modelFallback": boolean;
+  "retry.usageAwareFallback": boolean;
+  "retry.usageReservePct": number;
+  "retry.usageReservePolicy": OmpUsageReservePolicy;
+  "retry.fallbackRevertPolicy": OmpFallbackRevertPolicy;
+  "retry.fallbackChains": Record<string, string[]>;
+};
+
 export interface ParsedPresetDocument {
   defaultPreset: string;
   presets: Record<string, ParsedPreset>;
+  retry?: ParsedRetryPolicy;
 }
 
 export interface PresetState {
@@ -73,6 +95,34 @@ export interface OmpModelPresetController {
   restore(entries: readonly SessionEntryLike[]): Promise<boolean>;
 }
 
+export function toOmpRetrySettings(policy: ParsedRetryPolicy): OmpRetrySettings {
+  return {
+    "retry.modelFallback": policy.modelFallback,
+    "retry.usageAwareFallback": policy.usageAwareFallback,
+    "retry.usageReservePct": policy.usageReservePct,
+    "retry.usageReservePolicy": policy.usageReservePolicy,
+    "retry.fallbackRevertPolicy": policy.fallbackRevertPolicy,
+    "retry.fallbackChains": Object.fromEntries(
+      Object.entries(policy.fallbackChains).map(([selector, fallbacks]) => [selector, [...fallbacks]]),
+    ),
+  };
+}
+
+export function formatPresetList(
+  names: readonly string[],
+  status: { activePreset: string | null; defaultPreset: string },
+): string {
+  const header = status.activePreset === null ? "OMP presets (override reset):" : "OMP presets:";
+  const rows = names.map((name) => {
+    const markers = [
+      ...(name === status.activePreset ? ["active"] : []),
+      ...(name === status.defaultPreset ? ["default"] : []),
+    ];
+    return `- ${name}${markers.length > 0 ? ` (${markers.join(", ")})` : ""}`;
+  });
+  return [header, ...rows].join("\n");
+}
+
 const PRESET_NAME_RE = /^[a-z][a-z0-9-]*$/;
 const THINKING_LEVEL_SET = new Set<string>(OMP_THINKING_LEVELS);
 const ROLE_SET = new Set<string>(MODEL_ROLE_IDS);
@@ -97,10 +147,62 @@ function parseSelection(value: unknown, path: string): ParsedRoleSelection {
   return { selector: value, modelSelector, thinking: thinking as OmpThinkingLevel };
 }
 
+function parseRetryPolicy(raw: unknown): ParsedRetryPolicy | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) throw new Error("retry must be a mapping");
+  const allowed = new Set([
+    "model_fallback",
+    "usage_aware_fallback",
+    "usage_reserve_pct",
+    "usage_reserve_policy",
+    "fallback_revert_policy",
+    "fallback_chains",
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) throw new Error(`unknown OMP retry field '${key}'`);
+  }
+  if (typeof raw.model_fallback !== "boolean") throw new Error("retry.model_fallback must be true or false");
+  if (typeof raw.usage_aware_fallback !== "boolean") throw new Error("retry.usage_aware_fallback must be true or false");
+  if (!(typeof raw.usage_reserve_pct === "number" && Number.isInteger(raw.usage_reserve_pct) && raw.usage_reserve_pct >= 1 && raw.usage_reserve_pct <= 100)) {
+    throw new Error("retry.usage_reserve_pct must be an integer in 1..100");
+  }
+  if (!["confirm", "auto", "fail-closed"].includes(String(raw.usage_reserve_policy))) {
+    throw new Error("retry.usage_reserve_policy is unsupported");
+  }
+  if (!["cooldown-expiry", "never"].includes(String(raw.fallback_revert_policy))) {
+    throw new Error("retry.fallback_revert_policy is unsupported");
+  }
+  if (!isRecord(raw.fallback_chains) || Object.keys(raw.fallback_chains).length === 0) {
+    throw new Error("retry.fallback_chains must be a non-empty mapping");
+  }
+  const fallbackChains: Record<string, string[]> = {};
+  for (const [selector, rawFallbacks] of Object.entries(raw.fallback_chains)) {
+    if (selector.length === 0 || selector.trim() !== selector || !Array.isArray(rawFallbacks) || rawFallbacks.length === 0) {
+      throw new Error(`retry.fallback_chains '${selector}' is invalid`);
+    }
+    const fallbacks: string[] = [];
+    for (const fallback of rawFallbacks) {
+      if (typeof fallback !== "string" || fallback.length === 0 || fallback.trim() !== fallback || fallbacks.includes(fallback)) {
+        throw new Error(`retry.fallback_chains '${selector}' contains an invalid fallback selector`);
+      }
+      fallbacks.push(fallback);
+    }
+    fallbackChains[selector] = fallbacks;
+  }
+  return {
+    modelFallback: raw.model_fallback,
+    usageAwareFallback: raw.usage_aware_fallback,
+    usageReservePct: raw.usage_reserve_pct,
+    usageReservePolicy: raw.usage_reserve_policy as OmpUsageReservePolicy,
+    fallbackRevertPolicy: raw.fallback_revert_policy as OmpFallbackRevertPolicy,
+    fallbackChains,
+  };
+}
+
 export function parsePresetDocument(raw: unknown): ParsedPresetDocument {
   if (!isRecord(raw)) throw new Error("OMP model preset document must be a mapping");
   for (const key of Object.keys(raw)) {
-    if (key !== "default_preset" && key !== "presets") throw new Error(`unknown OMP model preset field '${key}'`);
+    if (key !== "default_preset" && key !== "presets" && key !== "retry") throw new Error(`unknown OMP model preset field '${key}'`);
   }
   if (typeof raw.default_preset !== "string" || !PRESET_NAME_RE.test(raw.default_preset)) {
     throw new Error("default_preset must be a safe preset name");
@@ -131,7 +233,8 @@ export function parsePresetDocument(raw: unknown): ParsedPresetDocument {
     presets[presetName] = { roles: parsedRoles, selectors };
   }
 
-  return { defaultPreset: raw.default_preset, presets };
+  const retry = parseRetryPolicy(raw.retry);
+  return { defaultPreset: raw.default_preset, presets, ...(retry ? { retry } : {}) };
 }
 
 function parseState(value: unknown): PresetState | undefined {

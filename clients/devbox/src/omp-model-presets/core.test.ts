@@ -4,8 +4,10 @@ import {
   MODEL_ROLE_IDS,
   PRESET_STATE_CUSTOM_TYPE,
   createPresetController,
+  formatPresetList,
   latestPresetState,
   parsePresetDocument,
+  toOmpRetrySettings,
   type OmpModelPresetRuntime,
   type OmpThinkingLevel,
   type PresetState,
@@ -24,6 +26,18 @@ const rawDocument = () => ({
       commit: "provider/small:medium",
     },
     alternate: roles("provider/alternate:high"),
+  },
+});
+
+const rawRetryPolicy = () => ({
+  model_fallback: true,
+  usage_aware_fallback: true,
+  usage_reserve_pct: 1,
+  usage_reserve_policy: "auto",
+  fallback_revert_policy: "cooldown-expiry",
+  fallback_chains: {
+    "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-go/ox-alpha-free"],
+    "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-go/ox-alpha-free"],
   },
 });
 
@@ -97,6 +111,36 @@ describe("parsePresetDocument", () => {
     });
   });
 
+  test("parses a complete quota-aware retry policy without changing preset data", () => {
+    const parsed = parsePresetDocument({ ...rawDocument(), retry: rawRetryPolicy() });
+
+    expect(parsed.retry).toEqual({
+      modelFallback: true,
+      usageAwareFallback: true,
+      usageReservePct: 1,
+      usageReservePolicy: "auto",
+      fallbackRevertPolicy: "cooldown-expiry",
+      fallbackChains: {
+        "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-go/ox-alpha-free"],
+        "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-go/ox-alpha-free"],
+      },
+    });
+    expect(parsed.presets.balanced?.selectors.default).toBe("provider/primary:xhigh");
+  });
+
+  test("rejects malformed retry percentages, unknown fields, and unsafe fallback selectors", () => {
+    const badPercentage = rawRetryPolicy();
+    badPercentage.usage_reserve_pct = 0;
+    expect(() => parsePresetDocument({ ...rawDocument(), retry: badPercentage })).toThrow("usage_reserve_pct");
+
+    const unknown = { ...rawRetryPolicy(), surprise: true };
+    expect(() => parsePresetDocument({ ...rawDocument(), retry: unknown })).toThrow("surprise");
+
+    const unsafe = rawRetryPolicy();
+    unsafe.fallback_chains["openai-codex/gpt-5.6-sol"] = [" anthropic/claude-opus-5:xhigh"];
+    expect(() => parsePresetDocument({ ...rawDocument(), retry: unsafe })).toThrow("fallback_chains");
+  });
+
   test("rejects missing, extra, or malformed roles and thinking levels", () => {
     const missing = rawDocument();
     delete (missing.presets.balanced as Record<string, string>).advisor;
@@ -109,6 +153,41 @@ describe("parsePresetDocument", () => {
     const invalidThinking = rawDocument();
     invalidThinking.presets.balanced.default = "provider/primary:extreme";
     expect(() => parsePresetDocument(invalidThinking)).toThrow("thinking level");
+  });
+});
+
+describe("OMP retry settings", () => {
+  test("maps the declarative retry policy to OMP 17.4.2 setting paths", () => {
+    const policy = parsePresetDocument({ ...rawDocument(), retry: rawRetryPolicy() }).retry!;
+
+    expect(toOmpRetrySettings(policy)).toEqual({
+      "retry.modelFallback": true,
+      "retry.usageAwareFallback": true,
+      "retry.usageReservePct": 1,
+      "retry.usageReservePolicy": "auto",
+      "retry.fallbackRevertPolicy": "cooldown-expiry",
+      "retry.fallbackChains": rawRetryPolicy().fallback_chains,
+    });
+  });
+});
+
+describe("preset list", () => {
+  test("marks the active and default presets", () => {
+    expect(
+      formatPresetList(["balanced", "codex", "claude"], {
+        activePreset: "balanced",
+        defaultPreset: "balanced",
+      }),
+    ).toBe("OMP presets:\n- balanced (active, default)\n- codex\n- claude");
+  });
+
+  test("shows only the default marker after the override is reset", () => {
+    expect(
+      formatPresetList(["balanced", "codex"], {
+        activePreset: null,
+        defaultPreset: "balanced",
+      }),
+    ).toBe("OMP presets (override reset):\n- balanced (default)\n- codex");
   });
 });
 

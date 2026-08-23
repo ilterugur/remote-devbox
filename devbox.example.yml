@@ -329,9 +329,27 @@ developers:
               tiny: anthropic/claude-haiku-4-5:medium
               task: anthropic/claude-opus-5:xhigh
               advisor: anthropic/claude-opus-5:xhigh
-          # Add an `opencode` preset only after `omp models opencode --json` exposes
-          # the authenticated Ox Alpha selector; guessing an ID would make switching
-          # fail closed at runtime.
+          # OMP moves before the provider reaches zero, automatically returns after
+          # cooldown, and keeps the expensive/economical model tiers aligned.
+          retry:
+            model_fallback: true
+            usage_aware_fallback: true
+            usage_reserve_pct: 1
+            usage_reserve_policy: auto
+            fallback_revert_policy: cooldown-expiry
+            fallback_chains:
+              openai-codex/gpt-5.6-sol:
+                - anthropic/claude-opus-5:xhigh
+                - opencode-go/ox-alpha-free
+              anthropic/claude-opus-5:
+                - openai-codex/gpt-5.6-sol:xhigh
+                - opencode-go/ox-alpha-free
+              openai-codex/gpt-5.6-luna:
+                - anthropic/claude-haiku-4-5:medium
+                - opencode-go/ox-alpha-free
+              anthropic/claude-haiku-4-5:
+                - openai-codex/gpt-5.6-luna:medium
+                - opencode-go/ox-alpha-free
     default_agent_profile: claude-work
 
     memory:

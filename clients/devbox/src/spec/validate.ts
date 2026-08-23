@@ -855,7 +855,7 @@ function validateOmpModelPresets(raw: unknown, provider: unknown, base: string, 
     return;
   }
 
-  const allowedFields = new Set(["default_preset", "presets"]);
+  const allowedFields = new Set(["default_preset", "presets", "retry"]);
   for (const key of Object.keys(raw)) {
     if (!allowedFields.has(key)) issues.push(err(`${base}.${key}`, "unknown OMP model presets field"));
   }
@@ -906,6 +906,66 @@ function validateOmpModelPresets(raw: unknown, provider: unknown, base: string, 
     for (const role of Object.keys(roleMap)) {
       if (!knownRoles.has(role)) issues.push(err(`${presetPath}.${role}`, "is not a built-in OMP model role"));
     }
+  }
+
+  validateOmpRetryPolicy(raw.retry, `${base}.retry`, issues);
+}
+
+function validateOmpRetryPolicy(raw: unknown, base: string, issues: Issue[]): void {
+  if (raw === undefined) return;
+  if (!isRecord(raw)) {
+    issues.push(err(base, "must be a mapping"));
+    return;
+  }
+
+  const allowedFields = new Set([
+    "model_fallback",
+    "usage_aware_fallback",
+    "usage_reserve_pct",
+    "usage_reserve_policy",
+    "fallback_revert_policy",
+    "fallback_chains",
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowedFields.has(key)) issues.push(err(`${base}.${key}`, "unknown OMP retry policy field"));
+  }
+
+  for (const field of ["model_fallback", "usage_aware_fallback"] as const) {
+    if (typeof raw[field] !== "boolean") issues.push(err(`${base}.${field}`, "must be true or false"));
+  }
+  if (!(typeof raw.usage_reserve_pct === "number" && Number.isInteger(raw.usage_reserve_pct) && raw.usage_reserve_pct >= 1 && raw.usage_reserve_pct <= 100)) {
+    issues.push(err(`${base}.usage_reserve_pct`, "must be an integer in 1..100"));
+  }
+  if (!["confirm", "auto", "fail-closed"].includes(String(raw.usage_reserve_policy))) {
+    issues.push(err(`${base}.usage_reserve_policy`, "must be one of: confirm, auto, fail-closed"));
+  }
+  if (!["cooldown-expiry", "never"].includes(String(raw.fallback_revert_policy))) {
+    issues.push(err(`${base}.fallback_revert_policy`, "must be one of: cooldown-expiry, never"));
+  }
+
+  const chains = raw.fallback_chains;
+  if (!isRecord(chains) || Object.keys(chains).length === 0) {
+    issues.push(err(`${base}.fallback_chains`, "must be a non-empty mapping of selector to fallback list"));
+    return;
+  }
+  for (const [selector, fallbacks] of Object.entries(chains)) {
+    const path = `${base}.fallback_chains.${selector}`;
+    if (selector.length === 0 || selector.trim() !== selector) issues.push(err(path, "selector must be non-empty and trimmed"));
+    if (!Array.isArray(fallbacks) || fallbacks.length === 0) {
+      issues.push(err(path, "must be a non-empty list of fallback selectors"));
+      continue;
+    }
+    const seen = new Set<string>();
+    fallbacks.forEach((fallback, index) => {
+      const itemPath = `${path}[${index}]`;
+      if (!isNonEmptyString(fallback) || fallback.trim() !== fallback) {
+        issues.push(err(itemPath, "must be a non-empty trimmed model selector"));
+      } else if (seen.has(fallback)) {
+        issues.push(err(itemPath, "must not repeat a fallback selector"));
+      } else {
+        seen.add(fallback);
+      }
+    });
   }
 }
 

@@ -20,6 +20,18 @@ const completeOmpRoles = () => ({
   advisor: "anthropic/claude-opus-5:xhigh",
 });
 
+const completeOmpRetry = () => ({
+  model_fallback: true,
+  usage_aware_fallback: true,
+  usage_reserve_pct: 1,
+  usage_reserve_policy: "auto",
+  fallback_revert_policy: "cooldown-expiry",
+  fallback_chains: {
+    "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-go/ox-alpha-free"],
+    "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-go/ox-alpha-free"],
+  },
+});
+
 const minimal = () => ({
   config_version: 3,
   platform: { distribution: "ubuntu", version: "26.04", architecture: "amd64" },
@@ -265,6 +277,7 @@ test("an OMP profile preserves declarative complete model presets", () => {
   const presets = {
     default_preset: "balanced",
     presets: { balanced: completeOmpRoles() },
+    retry: completeOmpRetry(),
   };
   const raw = {
     ...minimal(),
@@ -283,6 +296,45 @@ test("an OMP profile preserves declarative complete model presets", () => {
   expect((result.normalized?.devbox_developers as Record<string, any>[])[0]?.agent_profiles).toEqual({
     "omp-work": { provider: "omp", memory_space: null, omp_model_presets: presets },
   });
+});
+
+test("OMP retry policy rejects unsafe percentages, incomplete policy, and malformed chains", () => {
+  const retry = completeOmpRetry() as Record<string, unknown>;
+  retry.usage_reserve_pct = 0;
+  delete retry.usage_reserve_policy;
+  retry.fallback_chains = {
+    " openai-codex/gpt-5.6-sol": [],
+    "anthropic/claude-opus-5": [" openai-codex/gpt-5.6-sol:xhigh"],
+  };
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "17.4.2" },
+        agent_profiles: {
+          "omp-work": {
+            provider: "omp",
+            omp_model_presets: {
+              default_preset: "balanced",
+              presets: { balanced: completeOmpRoles() },
+              retry,
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toEqual(
+    expect.arrayContaining([
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.retry.usage_reserve_pct",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.retry.usage_reserve_policy",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.retry.fallback_chains. openai-codex/gpt-5.6-sol",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.retry.fallback_chains.anthropic/claude-opus-5[0]",
+    ]),
+  );
 });
 
 test("OMP model presets require exactly every built-in role and an existing default", () => {

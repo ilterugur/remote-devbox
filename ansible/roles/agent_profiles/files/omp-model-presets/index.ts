@@ -12,7 +12,9 @@ import {
 import {
   PRESET_STATE_CUSTOM_TYPE,
   createPresetController,
+  formatPresetList,
   parsePresetDocument,
+  toOmpRetrySettings,
   type OmpModelPresetRuntime,
   type OmpThinkingLevel,
   type PresetState,
@@ -33,6 +35,11 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
   const agentDir = process.env.PI_CODING_AGENT_DIR;
   if (!agentDir) throw new Error("PI_CODING_AGENT_DIR is required for omp-model-presets");
   const document = parsePresetDocument(JSON.parse(readFileSync(join(agentDir, "model-presets.json"), "utf8")));
+  if (document.retry) {
+    for (const [path, value] of Object.entries(toOmpRetrySettings(document.retry))) {
+      pi.pi.settings.override(path as Parameters<typeof pi.pi.settings.override>[0], value);
+    }
+  }
   let context: ExtensionContext | undefined;
 
   const currentContext = (): ExtensionContext => {
@@ -86,7 +93,7 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
   pi.registerCommand("preset", {
     description: "Show or switch the declarative OMP model-role preset",
     getArgumentCompletions: (prefix) =>
-      ["status", "reset", ...controller.list()]
+      ["status", "list", "reset", ...controller.list()]
         .filter((value) => value.startsWith(prefix.trim()))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -101,6 +108,10 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
                 : `OMP preset override is reset (default: ${status.defaultPreset})`,
               "info",
             );
+            return;
+          }
+          if (requested === "list") {
+            ctx.ui.notify(formatPresetList(controller.list(), controller.status()), "info");
             return;
           }
           if (requested === "reset") {
