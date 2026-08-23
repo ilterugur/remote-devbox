@@ -286,6 +286,19 @@ test("OMP model presets remain declarative data during normalization", () => {
                   advisor: "openai-codex/gpt-5.6-sol:xhigh",
                 },
               },
+              retry: {
+                model_fallback: true,
+                usage_aware_fallback: true,
+                usage_reserve_pct: 1,
+                usage_reserve_policy: "auto",
+                fallback_revert_policy: "cooldown-expiry",
+                fallback_chains: {
+                  "openai-codex/gpt-5.6-sol": [
+                    "anthropic/claude-opus-5:xhigh",
+                    "opencode-go/ox-alpha-free",
+                  ],
+                },
+              },
             },
           },
         },

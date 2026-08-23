@@ -372,6 +372,17 @@ function normalizeDeveloper(
             omp_model_presets: {
               default_preset: p.omp_model_presets.default_preset,
               presets: mapValues(p.omp_model_presets.presets, (roles) => ({ ...roles })),
+              ...(p.omp_model_presets.retry
+                ? {
+                    retry: {
+                      ...p.omp_model_presets.retry,
+                      fallback_chains: mapValues(
+                        p.omp_model_presets.retry.fallback_chains,
+                        (fallbacks) => [...fallbacks],
+                      ),
+                    },
+                  }
+                : {}),
             },
           }
         : {}),
