@@ -371,6 +371,7 @@ function normalizeDeveloper(
         ? {
             omp_model_presets: {
               default_preset: p.omp_model_presets.default_preset,
+              ...(p.omp_model_presets.aliases ? { aliases: { ...p.omp_model_presets.aliases } } : {}),
               presets: mapValues(p.omp_model_presets.presets, (roles) => ({ ...roles })),
               ...(p.omp_model_presets.retry
                 ? {

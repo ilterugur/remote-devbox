@@ -6,7 +6,11 @@
  * and default resolution is resolve.ts's. Collects every issue in one pass; returns a
  * typed spec only when no error was produced.
  */
-import { OMP_THINKING_LEVELS } from "../omp-model-presets/core";
+import {
+  OMP_MODEL_PRESETS_OMP_VERSION,
+  OMP_THINKING_LEVELS,
+  PRESET_RESERVED_NAMES,
+} from "../omp-model-presets/core";
 import { type Issue, err, hasErrors, warn } from "./issues";
 import {
   CLI_TARGETS,
@@ -421,6 +425,9 @@ function validateAgentVersions(d: Record<string, unknown>, base: string, issues:
   const versions = d.agent_versions;
   const profiles = isRecord(d.agent_profiles) ? Object.values(d.agent_profiles) : [];
   const needsOmpPin = profiles.some((profile) => isRecord(profile) && profile.provider === "omp");
+  const needsPresetVersion = profiles.some(
+    (profile) => isRecord(profile) && profile.provider === "omp" && profile.omp_model_presets !== undefined,
+  );
 
   if (versions === undefined) {
     if (needsOmpPin) issues.push(err(`${base}.agent_versions.omp`, "an exact OMP version pin is required"));
@@ -447,6 +454,18 @@ function validateAgentVersions(d: Record<string, unknown>, base: string, issues:
     if (!issues.some((issue) => issue.path === `${base}.agent_versions.omp`)) {
       issues.push(err(`${base}.agent_versions.omp`, "an exact OMP version pin is required"));
     }
+  }
+  if (
+    needsPresetVersion &&
+    versions.omp !== OMP_MODEL_PRESETS_OMP_VERSION &&
+    !issues.some((issue) => issue.path === `${base}.agent_versions.omp`)
+  ) {
+    issues.push(
+      err(
+        `${base}.agent_versions.omp`,
+        `must be exactly ${OMP_MODEL_PRESETS_OMP_VERSION} when omp_model_presets is configured`,
+      ),
+    );
   }
 }
 
@@ -855,9 +874,9 @@ function validateOmpModelPresets(raw: unknown, provider: unknown, base: string, 
     return;
   }
 
-  const allowedFields = new Set(["default_preset", "presets", "retry"]);
+  const allowedFields: Record<string, true> = { default_preset: true, aliases: true, presets: true, retry: true };
   for (const key of Object.keys(raw)) {
-    if (!allowedFields.has(key)) issues.push(err(`${base}.${key}`, "unknown OMP model presets field"));
+    if (!Object.hasOwn(allowedFields, key)) issues.push(err(`${base}.${key}`, "unknown OMP model presets field"));
   }
 
   const defaultPreset = raw.default_preset;
@@ -872,6 +891,27 @@ function validateOmpModelPresets(raw: unknown, provider: unknown, base: string, 
   }
   if (typeof defaultPreset === "string" && !Object.hasOwn(presets, defaultPreset)) {
     issues.push(err(`${base}.default_preset`, `'${defaultPreset}' is not declared in presets`));
+  }
+
+  const aliases = raw.aliases;
+  if (aliases !== undefined) {
+    if (!isRecord(aliases)) {
+      issues.push(err(`${base}.aliases`, "must be a mapping of alias name to canonical preset name"));
+    } else {
+      for (const [alias, target] of Object.entries(aliases)) {
+        const aliasPath = `${base}.aliases.${alias}`;
+        if (!OMP_PRESET_NAME_RE.test(alias)) {
+          issues.push(err(aliasPath, `'${alias}' must match ${OMP_PRESET_NAME_RE.source}`));
+        } else if ((PRESET_RESERVED_NAMES as readonly string[]).includes(alias)) {
+          issues.push(err(aliasPath, "is reserved by the /preset command"));
+        } else if (Object.hasOwn(presets, alias)) {
+          issues.push(err(aliasPath, "must not collide with a canonical preset name"));
+        }
+        if (!isNonEmptyString(target) || !Object.hasOwn(presets, target)) {
+          issues.push(err(aliasPath, "must name a declared canonical preset"));
+        }
+      }
+    }
   }
 
   const knownRoles = new Set<string>(OMP_MODEL_ROLE_IDS);
@@ -893,7 +933,8 @@ function validateOmpModelPresets(raw: unknown, provider: unknown, base: string, 
         const selector = roleMap[role];
         const separator = selector.lastIndexOf(":");
         const thinking = separator > 0 ? selector.slice(separator + 1) : "";
-        if (!OMP_THINKING_LEVEL_SET.has(thinking)) {
+        const bareTaskSelector = role === "task" && separator === -1;
+        if (!bareTaskSelector && !OMP_THINKING_LEVEL_SET.has(thinking)) {
           issues.push(
             err(
               `${presetPath}.${role}`,

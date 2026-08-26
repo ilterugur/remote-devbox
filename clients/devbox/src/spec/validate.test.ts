@@ -27,8 +27,8 @@ const completeOmpRetry = () => ({
   usage_reserve_policy: "auto",
   fallback_revert_policy: "cooldown-expiry",
   fallback_chains: {
-    "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-go/ox-alpha-free"],
-    "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-go/ox-alpha-free"],
+    "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-zen/mimo-v2.5-free"],
+    "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-zen/mimo-v2.5-free"],
   },
 });
 
@@ -274,9 +274,12 @@ test("an OMP profile requires and preserves an exact developer-level version pin
 });
 
 test("an OMP profile preserves declarative complete model presets", () => {
+  const roles = completeOmpRoles();
+  roles.task = "openai-codex/gpt-5.6-terra";
   const presets = {
     default_preset: "balanced",
-    presets: { balanced: completeOmpRoles() },
+    aliases: { codex: "balanced" },
+    presets: { balanced: roles },
     retry: completeOmpRetry(),
   };
   const raw = {
@@ -285,7 +288,7 @@ test("an OMP profile preserves declarative complete model presets", () => {
       {
         user: "dev-a",
         login_ssh_keys: [KEY],
-        agent_versions: { omp: "17.4.2" },
+        agent_versions: { omp: "18.0.5" },
         agent_profiles: { "omp-work": { provider: "omp", omp_model_presets: presets } },
       },
     ],
@@ -296,6 +299,30 @@ test("an OMP profile preserves declarative complete model presets", () => {
   expect((result.normalized?.devbox_developers as Record<string, any>[])[0]?.agent_profiles).toEqual({
     "omp-work": { provider: "omp", memory_space: null, omp_model_presets: presets },
   });
+});
+
+test("OMP model presets require the extension-supported OMP version", () => {
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "17.4.2" },
+        agent_profiles: {
+          "omp-work": {
+            provider: "omp",
+            omp_model_presets: {
+              default_preset: "balanced",
+              presets: { balanced: completeOmpRoles() },
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toContain("error:developers[0].agent_versions.omp");
 });
 
 test("OMP retry policy rejects unsafe percentages, incomplete policy, and malformed chains", () => {
@@ -371,6 +398,43 @@ test("OMP model presets require exactly every built-in role and an existing defa
   );
 });
 
+test("OMP model preset aliases require safe unique names and canonical targets", () => {
+  const raw = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        agent_versions: { omp: "18.0.5" },
+        agent_profiles: {
+          "omp-work": {
+            provider: "omp",
+            omp_model_presets: {
+              default_preset: "balanced",
+              aliases: {
+                balanced: "balanced",
+                "Bad Name": "balanced",
+                codex: "missing",
+                reset: "balanced",
+              },
+              presets: { balanced: completeOmpRoles() },
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  expect(paths(raw)).toEqual(
+    expect.arrayContaining([
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.aliases.balanced",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.aliases.Bad Name",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.aliases.codex",
+      "error:developers[0].agent_profiles.omp-work.omp_model_presets.aliases.reset",
+    ]),
+  );
+});
+
 test("OMP model presets reject non-OMP profiles, unknown fields, and empty selectors", () => {
   const roles = completeOmpRoles() as Record<string, unknown>;
   roles.commit = " ";
@@ -386,6 +450,7 @@ test("OMP model presets reject non-OMP profiles, unknown fields, and empty selec
             omp_model_presets: {
               default_preset: "balanced",
               api_key: "must-not-be-accepted",
+              constructor: "must-not-be-accepted",
               presets: { balanced: roles },
             },
           },
@@ -398,6 +463,7 @@ test("OMP model presets reject non-OMP profiles, unknown fields, and empty selec
     expect.arrayContaining([
       "error:developers[0].agent_profiles.claude-work.omp_model_presets",
       "error:developers[0].agent_profiles.claude-work.omp_model_presets.api_key",
+      "error:developers[0].agent_profiles.claude-work.omp_model_presets.constructor",
       "error:developers[0].agent_profiles.claude-work.omp_model_presets.presets.balanced.commit",
     ]),
   );

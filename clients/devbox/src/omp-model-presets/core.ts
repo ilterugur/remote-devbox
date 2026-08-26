@@ -1,4 +1,4 @@
-/** OMP 17.4.2's built-in role contract. Preset names and model selectors remain inventory data. */
+/** OMP 18.0.5's built-in role contract. Preset names and model selectors remain inventory data. */
 export const MODEL_ROLE_IDS = [
   "default",
   "smol",
@@ -14,6 +14,8 @@ export const MODEL_ROLE_IDS = [
 
 export const OMP_THINKING_LEVELS = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const PRESET_STATE_CUSTOM_TYPE = "omp-model-presets/state";
+export const OMP_MODEL_PRESETS_OMP_VERSION = "18.0.5";
+export const PRESET_RESERVED_NAMES = ["status", "list", "show", "reset"] as const;
 export const PRESET_STATE_VERSION = 1 as const;
 
 export type OmpModelRole = (typeof MODEL_ROLE_IDS)[number];
@@ -23,7 +25,7 @@ export type OmpRoleSelectors = Record<OmpModelRole, string>;
 export interface ParsedRoleSelection {
   selector: string;
   modelSelector: string;
-  thinking: OmpThinkingLevel;
+  thinking?: OmpThinkingLevel;
 }
 
 export interface ParsedPreset {
@@ -55,6 +57,7 @@ export type OmpRetrySettings = {
 export interface ParsedPresetDocument {
   defaultPreset: string;
   presets: Record<string, ParsedPreset>;
+  aliases: Record<string, string>;
   retry?: ParsedRetryPolicy;
 }
 
@@ -147,11 +150,13 @@ export function presetNamesForShow(
   argument: string,
   names: readonly string[],
   activePreset: string | null,
+  aliases: Readonly<Record<string, string>> = {},
 ): string[] {
   if (argument === "all") return [...names];
   if (argument.length > 0) {
-    if (!names.includes(argument)) throw new Error(`unknown OMP model preset '${argument}'`);
-    return [argument];
+    const canonical = Object.hasOwn(aliases, argument) ? aliases[argument]! : argument;
+    if (!names.includes(canonical)) throw new Error(`unknown OMP model preset '${argument}'`);
+    return [canonical];
   }
   if (!activePreset) {
     throw new Error("no active OMP model preset; use '/preset show <name>' or '/preset show all'");
@@ -167,12 +172,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseSelection(value: unknown, path: string): ParsedRoleSelection {
+function parseSelection(value: unknown, path: string, allowBare: boolean): ParsedRoleSelection {
   if (typeof value !== "string" || value.trim() !== value || value.length === 0) {
     throw new Error(`${path} must be a non-empty model selector`);
   }
   const separator = value.lastIndexOf(":");
   if (separator <= 0 || separator === value.length - 1) {
+    if (allowBare && !value.includes(":")) {
+      return { selector: value, modelSelector: value };
+    }
     throw new Error(`${path} must end with a supported thinking level`);
   }
   const modelSelector = value.slice(0, separator);
@@ -238,7 +246,9 @@ function parseRetryPolicy(raw: unknown): ParsedRetryPolicy | undefined {
 export function parsePresetDocument(raw: unknown): ParsedPresetDocument {
   if (!isRecord(raw)) throw new Error("OMP model preset document must be a mapping");
   for (const key of Object.keys(raw)) {
-    if (key !== "default_preset" && key !== "presets" && key !== "retry") throw new Error(`unknown OMP model preset field '${key}'`);
+    if (key !== "default_preset" && key !== "aliases" && key !== "presets" && key !== "retry") {
+      throw new Error(`unknown OMP model preset field '${key}'`);
+    }
   }
   if (typeof raw.default_preset !== "string" || !PRESET_NAME_RE.test(raw.default_preset)) {
     throw new Error("default_preset must be a safe preset name");
@@ -262,15 +272,31 @@ export function parsePresetDocument(raw: unknown): ParsedPresetDocument {
     const selectors = {} as OmpRoleSelectors;
     for (const role of MODEL_ROLE_IDS) {
       if (!Object.hasOwn(rawRoles, role)) throw new Error(`preset '${presetName}' is missing role '${role}'`);
-      const parsed = parseSelection(rawRoles[role], `preset '${presetName}' role '${role}'`);
+      const parsed = parseSelection(rawRoles[role], `preset '${presetName}' role '${role}'`, role === "task");
       parsedRoles[role] = parsed;
       selectors[role] = parsed.selector;
     }
     presets[presetName] = { roles: parsedRoles, selectors };
   }
 
+  const aliases: Record<string, string> = {};
+  if (raw.aliases !== undefined) {
+    if (!isRecord(raw.aliases)) throw new Error("aliases must be a mapping");
+    for (const [alias, target] of Object.entries(raw.aliases)) {
+      if (!PRESET_NAME_RE.test(alias)) throw new Error(`unsafe preset alias '${alias}'`);
+      if ((PRESET_RESERVED_NAMES as readonly string[]).includes(alias)) {
+        throw new Error(`preset alias '${alias}' is reserved by the /preset command`);
+      }
+      if (Object.hasOwn(presets, alias)) throw new Error(`preset alias '${alias}' collides with a canonical preset`);
+      if (typeof target !== "string" || !Object.hasOwn(presets, target)) {
+        throw new Error(`preset alias '${alias}' target '${String(target)}' is not declared`);
+      }
+      aliases[alias] = target;
+    }
+  }
+
   const retry = parseRetryPolicy(raw.retry);
-  return { defaultPreset: raw.default_preset, presets, ...(retry ? { retry } : {}) };
+  return { defaultPreset: raw.default_preset, aliases, presets, ...(retry ? { retry } : {}) };
 }
 
 function parseState(value: unknown): PresetState | undefined {
@@ -310,23 +336,33 @@ export function createPresetController<Model>(
     return result;
   };
 
-  const validated = async (name: string): Promise<{ preset: ParsedPreset; models: Record<OmpModelRole, Model> }> => {
+  const canonicalName = (name: string): string =>
+    Object.hasOwn(document.aliases, name) ? document.aliases[name]! : name;
+
+  const validated = async (
+    requestedName: string,
+  ): Promise<{ name: string; preset: ParsedPreset; models: Record<OmpModelRole, Model> }> => {
+    const name = canonicalName(requestedName);
     const preset = document.presets[name];
-    if (!preset) throw new Error(`unknown OMP model preset '${name}'`);
+    if (!preset) throw new Error(`unknown OMP model preset '${requestedName}'`);
 
     const models = {} as Record<OmpModelRole, Model>;
     for (const role of MODEL_ROLE_IDS) {
       const selection = preset.roles[role];
       const resolved = await runtime.resolveModel(selection.modelSelector);
       if (!resolved) throw new Error(`model '${selection.modelSelector}' for role '${role}' is unavailable or unauthenticated`);
-      if (resolved.supportedThinking && !resolved.supportedThinking.includes(selection.thinking)) {
+      if (
+        selection.thinking !== undefined &&
+        resolved.supportedThinking &&
+        !resolved.supportedThinking.includes(selection.thinking)
+      ) {
         throw new Error(
           `thinking level '${selection.thinking}' is unsupported by '${selection.modelSelector}' for role '${role}'`,
         );
       }
       models[role] = resolved.model;
     }
-    return { preset, models };
+    return { name, preset, models };
   };
 
   const restoreRoles = async (roles: OmpRoleSelectors | null): Promise<void> => {
@@ -334,8 +370,8 @@ export function createPresetController<Model>(
     else await runtime.clearRoles();
   };
 
-  const applyUnlocked = async (name: string): Promise<void> => {
-    const { preset, models } = await validated(name);
+  const applyUnlocked = async (requestedName: string): Promise<void> => {
+    const { name, preset, models } = await validated(requestedName);
     const previousPreset = activePreset;
     const previousRoles = activeRoles;
     const previousModel = runtime.currentModel();
@@ -346,7 +382,9 @@ export function createPresetController<Model>(
       if (!(await runtime.setModel(models.default))) {
         throw new Error(`could not select model '${preset.roles.default.modelSelector}'`);
       }
-      await runtime.setThinking(preset.roles.default.thinking);
+      const defaultThinking = preset.roles.default.thinking;
+      if (defaultThinking === undefined) throw new Error("default role must declare a thinking level");
+      await runtime.setThinking(defaultThinking);
       await runtime.appendState({ version: PRESET_STATE_VERSION, preset: name });
       activePreset = name;
       activeRoles = { ...preset.selectors };
@@ -406,9 +444,12 @@ export function createPresetController<Model>(
           activeRoles = null;
           return true;
         }
-        const { preset } = await validated(state.preset);
+        const { name, preset } = await validated(state.preset);
         await runtime.replaceRoles(preset.selectors);
-        activePreset = state.preset;
+        if (name !== state.preset) {
+          await runtime.appendState({ version: PRESET_STATE_VERSION, preset: name });
+        }
+        activePreset = name;
         activeRoles = { ...preset.selectors };
         return true;
       }),

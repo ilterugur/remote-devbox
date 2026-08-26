@@ -149,6 +149,7 @@ export interface OmpRetryPolicySpec {
 
 export interface OmpModelPresetsSpec {
   default_preset: string;
+  aliases?: Record<string, string>;
   presets: Record<string, OmpModelRoleMap>;
   retry?: OmpRetryPolicySpec;
 }

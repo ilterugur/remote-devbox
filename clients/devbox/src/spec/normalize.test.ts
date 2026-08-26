@@ -271,9 +271,10 @@ test("OMP model presets remain declarative data during normalization", () => {
           "omp-work": {
             provider: "omp",
             omp_model_presets: {
-              default_preset: "codex",
+              default_preset: "openai",
+              aliases: { codex: "openai" },
               presets: {
-                codex: {
+                openai: {
                   default: "openai-codex/gpt-5.6-sol:xhigh",
                   smol: "openai-codex/gpt-5.6-luna:medium",
                   slow: "openai-codex/gpt-5.6-sol:xhigh",
@@ -295,7 +296,7 @@ test("OMP model presets remain declarative data during normalization", () => {
                 fallback_chains: {
                   "openai-codex/gpt-5.6-sol": [
                     "anthropic/claude-opus-5:xhigh",
-                    "opencode-go/ox-alpha-free",
+                    "opencode-zen/mimo-v2.5-free",
                   ],
                 },
               },

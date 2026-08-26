@@ -49,6 +49,77 @@ test("the committed devbox.example.yml resolves with no errors", () => {
   expect(r.resolved!.developers.length).toBeGreaterThan(0);
 });
 
+test("the example uses the public OpenCode Zen model as the final OMP fallback", () => {
+  const profile = loadSpec(EXAMPLE_CONFIG).resolved!.developers
+    .flatMap((developer) => Object.values(developer.agent_profiles ?? {}))
+    .find((candidate) => candidate.provider === "omp");
+  const chains = Object.values(profile?.omp_model_presets?.retry?.fallback_chains ?? {});
+
+  expect(chains.length).toBeGreaterThan(0);
+  expect(chains.every((chain) => chain.at(-1) === "opencode-zen/mimo-v2.5-free")).toBe(true);
+});
+
+test("the example tiers OMP roles across balanced, provider-pure, and economical presets", () => {
+  const profile = loadSpec(EXAMPLE_CONFIG).resolved!.developers
+    .flatMap((developer) => Object.values(developer.agent_profiles ?? {}))
+    .find((candidate) => candidate.provider === "omp");
+
+  expect(profile?.omp_model_presets?.aliases).toEqual({
+    codex: "openai",
+    claude: "anthropic",
+  });
+  expect(profile?.omp_model_presets?.presets).toEqual({
+    balanced: {
+      default: "openai-codex/gpt-5.6-sol:medium",
+      smol: "opencode-go/gpt-5.6-luna:medium",
+      slow: "anthropic/claude-fable-5:xhigh",
+      vision: "anthropic/claude-sonnet-5:high",
+      plan: "anthropic/claude-opus-5:high",
+      designer: "anthropic/claude-sonnet-5:high",
+      commit: "opencode-go/gpt-5.6-luna:medium",
+      tiny: "opencode-go/mimo-v2.5:low",
+      task: "openai-codex/gpt-5.6-terra",
+      advisor: "anthropic/claude-opus-5:high",
+    },
+    openai: {
+      default: "openai-codex/gpt-5.6-sol:medium",
+      smol: "opencode-go/gpt-5.6-luna:medium",
+      slow: "openai-codex/gpt-5.6-sol:xhigh",
+      vision: "openai-codex/gpt-5.6-terra:high",
+      plan: "openai-codex/gpt-5.6-sol:high",
+      designer: "openai-codex/gpt-5.6-terra:high",
+      commit: "opencode-go/gpt-5.6-luna:medium",
+      tiny: "opencode-go/gpt-5.6-luna:low",
+      task: "openai-codex/gpt-5.6-terra",
+      advisor: "openai-codex/gpt-5.6-sol:high",
+    },
+    anthropic: {
+      default: "anthropic/claude-opus-5:high",
+      smol: "anthropic/claude-haiku-4-5:medium",
+      slow: "anthropic/claude-fable-5:xhigh",
+      vision: "anthropic/claude-sonnet-5:high",
+      plan: "anthropic/claude-opus-5:high",
+      designer: "anthropic/claude-sonnet-5:high",
+      commit: "anthropic/claude-haiku-4-5:medium",
+      tiny: "anthropic/claude-haiku-4-5:low",
+      task: "anthropic/claude-sonnet-5",
+      advisor: "anthropic/claude-opus-5:high",
+    },
+    opencode: {
+      default: "opencode-go/deepseek-v4-pro:max",
+      smol: "opencode-go/gpt-5.6-luna:medium",
+      slow: "opencode-go/kimi-k3:max",
+      vision: "opencode-go/deepseek-v4-flash-vision-exp:max",
+      plan: "opencode-go/kimi-k3:max",
+      designer: "opencode-go/kimi-k3:high",
+      commit: "opencode-go/gpt-5.6-luna:medium",
+      tiny: "opencode-go/mimo-v2.5:low",
+      task: "opencode-go/deepseek-v4-flash:max",
+      advisor: "opencode-go/kimi-k3:max",
+    },
+  });
+});
+
 test("the example's overrides resolve the way the comments claim", () => {
   const devs = loadSpec(EXAMPLE_CONFIG).resolved!.developers;
   const byName = (user: string, project: string) =>

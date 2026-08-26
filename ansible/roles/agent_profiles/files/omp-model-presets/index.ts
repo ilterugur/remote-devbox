@@ -11,6 +11,7 @@ import {
 
 import {
   PRESET_STATE_CUSTOM_TYPE,
+  OMP_MODEL_PRESETS_OMP_VERSION,
   createPresetController,
   formatPresetDetails,
   formatPresetList,
@@ -22,7 +23,6 @@ import {
   type PresetState,
 } from "./core";
 
-const SUPPORTED_OMP_VERSION = "17.4.2";
 type OmpModel = NonNullable<ExtensionContext["model"]>;
 
 function message(error: unknown): string {
@@ -30,8 +30,8 @@ function message(error: unknown): string {
 }
 
 export default function ompModelPresets(pi: ExtensionAPI): void {
-  if (VERSION !== SUPPORTED_OMP_VERSION) {
-    throw new Error(`omp-model-presets supports OMP ${SUPPORTED_OMP_VERSION}; found ${VERSION}`);
+  if (VERSION !== OMP_MODEL_PRESETS_OMP_VERSION) {
+    throw new Error(`omp-model-presets supports OMP ${OMP_MODEL_PRESETS_OMP_VERSION}; found ${VERSION}`);
   }
 
   const agentDir = process.env.PI_CODING_AGENT_DIR;
@@ -81,6 +81,7 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
     },
   };
   const controller = createPresetController(document, runtime);
+  const aliases = Object.keys(document.aliases);
 
   const useContext = async <T>(ctx: ExtensionContext, operation: () => Promise<T>): Promise<T> => {
     context = ctx;
@@ -101,8 +102,10 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
         "show",
         "show all",
         ...controller.list().map((name) => `show ${name}`),
+        ...aliases.map((name) => `show ${name}`),
         "reset",
         ...controller.list(),
+        ...aliases,
       ]
         .filter((value) => value.startsWith(prefix.trim()))
         .map((value) => ({ value, label: value })),
@@ -127,7 +130,7 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
           if (requested === "show" || requested.startsWith("show ")) {
             const argument = requested.slice("show".length).trim();
             const status = controller.status();
-            const names = presetNamesForShow(argument, controller.list(), status.activePreset);
+            const names = presetNamesForShow(argument, controller.list(), status.activePreset, document.aliases);
             ctx.ui.notify(formatPresetDetails(document, names, status), "info");
             return;
           }
@@ -137,7 +140,7 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
             return;
           }
           await controller.apply(requested);
-          ctx.ui.notify(`OMP model-role preset switched to ${requested}`, "info");
+          ctx.ui.notify(`OMP model-role preset switched to ${controller.status().activePreset}`, "info");
         });
       } catch (error) {
         notifyFailure(ctx, requested, error);

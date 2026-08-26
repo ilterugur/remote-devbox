@@ -20,6 +20,10 @@ const roles = (selector = "provider/primary:xhigh") =>
 
 const rawDocument = () => ({
   default_preset: "balanced",
+  aliases: {
+    codex: "alternate",
+    claude: "balanced",
+  },
   presets: {
     balanced: {
       ...roles(),
@@ -38,8 +42,8 @@ const rawRetryPolicy = () => ({
   usage_reserve_policy: "auto",
   fallback_revert_policy: "cooldown-expiry",
   fallback_chains: {
-    "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-go/ox-alpha-free"],
-    "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-go/ox-alpha-free"],
+    "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-zen/mimo-v2.5-free"],
+    "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-zen/mimo-v2.5-free"],
   },
 });
 
@@ -113,6 +117,48 @@ describe("parsePresetDocument", () => {
     });
   });
 
+  test("parses aliases and rejects collisions, reserved names, or unknown targets", () => {
+    const parsed = parsePresetDocument(rawDocument());
+
+    expect(parsed.aliases).toEqual({ codex: "alternate", claude: "balanced" });
+    expect(() =>
+      parsePresetDocument({ ...rawDocument(), aliases: { balanced: "alternate" } }),
+    ).toThrow("collides");
+    expect(() =>
+      parsePresetDocument({ ...rawDocument(), aliases: { codex: "missing" } }),
+    ).toThrow("not declared");
+    expect(() =>
+      parsePresetDocument({ ...rawDocument(), aliases: { reset: "balanced" } }),
+    ).toThrow("reserved");
+  });
+
+  test("keeps prototype-named canonical presets addressable", async () => {
+    const document = parsePresetDocument({
+      default_preset: "constructor",
+      presets: { constructor: roles() },
+    });
+    const runtime = new FakeRuntime();
+    const controller = createPresetController(document, runtime);
+
+    await controller.apply("constructor");
+
+    expect(controller.status().activePreset).toBe("constructor");
+    expect(runtime.states).toEqual([{ version: 1, preset: "constructor" }]);
+  });
+
+  test("preserves a bare task selector so the bundled task agent can keep auto thinking", () => {
+    const document = rawDocument();
+    document.presets.balanced.task = "provider/primary";
+
+    const parsed = parsePresetDocument(document);
+
+    expect(parsed.presets.balanced?.roles.task).toEqual({
+      selector: "provider/primary",
+      modelSelector: "provider/primary",
+    });
+    expect(parsed.presets.balanced?.selectors.task).toBe("provider/primary");
+  });
+
   test("parses a complete quota-aware retry policy without changing preset data", () => {
     const parsed = parsePresetDocument({ ...rawDocument(), retry: rawRetryPolicy() });
 
@@ -123,8 +169,8 @@ describe("parsePresetDocument", () => {
       usageReservePolicy: "auto",
       fallbackRevertPolicy: "cooldown-expiry",
       fallbackChains: {
-        "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-go/ox-alpha-free"],
-        "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-go/ox-alpha-free"],
+        "openai-codex/gpt-5.6-sol": ["anthropic/claude-opus-5:xhigh", "opencode-zen/mimo-v2.5-free"],
+        "anthropic/claude-opus-5": ["openai-codex/gpt-5.6-sol:xhigh", "opencode-zen/mimo-v2.5-free"],
       },
     });
     expect(parsed.presets.balanced?.selectors.default).toBe("provider/primary:xhigh");
@@ -159,7 +205,7 @@ describe("parsePresetDocument", () => {
 });
 
 describe("OMP retry settings", () => {
-  test("maps the declarative retry policy to OMP 17.4.2 setting paths", () => {
+  test("maps the declarative retry policy to OMP 18.0.5 setting paths", () => {
     const policy = parsePresetDocument({ ...rawDocument(), retry: rawRetryPolicy() }).retry!;
 
     expect(toOmpRetrySettings(policy)).toEqual({
@@ -236,14 +282,17 @@ describe("preset details", () => {
     ).toThrow("unknown OMP model preset 'missing'");
   });
 
-  test("selects the active, named, or all presets for the show command", () => {
-    const names = ["balanced", "codex", "claude"];
+  test("selects canonical presets through active names, aliases, or all", () => {
+    const document = parsePresetDocument(rawDocument());
+    const names = ["balanced", "alternate"];
 
-    expect(presetNamesForShow("", names, "balanced")).toEqual(["balanced"]);
-    expect(presetNamesForShow("codex", names, "balanced")).toEqual(["codex"]);
-    expect(presetNamesForShow("all", names, "balanced")).toEqual(names);
-    expect(() => presetNamesForShow("", names, null)).toThrow("no active OMP model preset");
-    expect(() => presetNamesForShow("missing", names, "balanced")).toThrow("unknown OMP model preset 'missing'");
+    expect(presetNamesForShow("", names, "balanced", document.aliases)).toEqual(["balanced"]);
+    expect(presetNamesForShow("codex", names, "balanced", document.aliases)).toEqual(["alternate"]);
+    expect(presetNamesForShow("all", names, "balanced", document.aliases)).toEqual(names);
+    expect(() => presetNamesForShow("", names, null, document.aliases)).toThrow("no active OMP model preset");
+    expect(() => presetNamesForShow("missing", names, "balanced", document.aliases)).toThrow(
+      "unknown OMP model preset 'missing'",
+    );
   });
 });
 
@@ -284,6 +333,17 @@ describe("preset controller", () => {
     expect(runtime.states).toEqual([{ version: 1, preset: "balanced" }]);
     expect(controller.status()).toEqual({ activePreset: "balanced", defaultPreset: "balanced" });
     expect(runtime.events.indexOf("replaceRoles")).toBeLessThan(runtime.events.indexOf("setModel:provider/primary"));
+  });
+
+  test("applies aliases as canonical presets and records only the canonical name", async () => {
+    const runtime = new FakeRuntime();
+    const controller = createPresetController(parsePresetDocument(rawDocument()), runtime);
+
+    await controller.apply("codex");
+
+    expect(runtime.roles).toEqual(rawDocument().presets.alternate);
+    expect(runtime.states).toEqual([{ version: 1, preset: "alternate" }]);
+    expect(controller.status().activePreset).toBe("alternate");
   });
 
   test("rejects unsupported thinking before any mutation", async () => {
@@ -366,6 +426,20 @@ describe("preset controller", () => {
     expect(runtime.thinking).toBe("low");
     expect(runtime.states).toEqual([]);
     expect(controller.status().activePreset).toBe("alternate");
+  });
+
+  test("restores legacy alias state as its canonical preset", async () => {
+    const runtime = new FakeRuntime();
+    const controller = createPresetController(parsePresetDocument(rawDocument()), runtime);
+
+    expect(
+      await controller.restore([
+        { customType: PRESET_STATE_CUSTOM_TYPE, data: { version: 1, preset: "codex" } },
+      ]),
+    ).toBe(true);
+    expect(runtime.roles).toEqual(rawDocument().presets.alternate);
+    expect(controller.status().activePreset).toBe("alternate");
+    expect(runtime.states).toEqual([{ version: 1, preset: "alternate" }]);
   });
 
   test("clears stale role overrides when switching to an unmanaged imported session", async () => {

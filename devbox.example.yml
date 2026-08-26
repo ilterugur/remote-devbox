@@ -271,7 +271,7 @@ developers:
     # Provider binaries shared by several profiles are pinned once per developer.
     # OMP rejects floating tags/ranges so a later `devbox apply` is a controlled upgrade.
     agent_versions:
-      omp: "17.4.2"
+      omp: "18.0.5"
 
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:
@@ -292,43 +292,58 @@ developers:
         # Presets are inventory data, not extension source. `/preset <name>` changes
         # the whole built-in role map atomically inside the current OMP session;
         # `/preset reset` returns to OMP's normal settings. A resumed session restores
-        # its own last choice, so one Paseo OMP provider can host all three strategies.
+        # its own last choice, so one Paseo OMP provider can host all four strategies.
         omp_model_presets:
           default_preset: balanced
+          aliases:
+            codex: openai
+            claude: anthropic
           presets:
             balanced:
-              default: openai-codex/gpt-5.6-sol:xhigh
-              smol: openai-codex/gpt-5.6-luna:medium
-              slow: anthropic/claude-opus-5:xhigh
-              vision: anthropic/claude-opus-5:xhigh
-              plan: anthropic/claude-opus-5:xhigh
-              designer: anthropic/claude-opus-5:xhigh
-              commit: openai-codex/gpt-5.6-luna:medium
-              tiny: openai-codex/gpt-5.6-luna:medium
-              task: openai-codex/gpt-5.6-sol:xhigh
-              advisor: anthropic/claude-opus-5:xhigh
-            codex:
-              default: openai-codex/gpt-5.6-sol:xhigh
-              smol: openai-codex/gpt-5.6-luna:medium
+              default: openai-codex/gpt-5.6-sol:medium
+              smol: opencode-go/gpt-5.6-luna:medium
+              slow: anthropic/claude-fable-5:xhigh
+              vision: anthropic/claude-sonnet-5:high
+              plan: anthropic/claude-opus-5:high
+              designer: anthropic/claude-sonnet-5:high
+              commit: opencode-go/gpt-5.6-luna:medium
+              tiny: opencode-go/mimo-v2.5:low
+              # No explicit effort: keep OMP's bundled task agent on auto thinking.
+              task: openai-codex/gpt-5.6-terra
+              advisor: anthropic/claude-opus-5:high
+            openai:
+              default: openai-codex/gpt-5.6-sol:medium
+              smol: opencode-go/gpt-5.6-luna:medium
               slow: openai-codex/gpt-5.6-sol:xhigh
-              vision: openai-codex/gpt-5.6-sol:xhigh
-              plan: openai-codex/gpt-5.6-sol:xhigh
-              designer: openai-codex/gpt-5.6-sol:xhigh
-              commit: openai-codex/gpt-5.6-luna:medium
-              tiny: openai-codex/gpt-5.6-luna:medium
-              task: openai-codex/gpt-5.6-sol:xhigh
-              advisor: openai-codex/gpt-5.6-sol:xhigh
-            claude:
-              default: anthropic/claude-opus-5:xhigh
+              vision: openai-codex/gpt-5.6-terra:high
+              plan: openai-codex/gpt-5.6-sol:high
+              designer: openai-codex/gpt-5.6-terra:high
+              commit: opencode-go/gpt-5.6-luna:medium
+              tiny: opencode-go/gpt-5.6-luna:low
+              task: openai-codex/gpt-5.6-terra
+              advisor: openai-codex/gpt-5.6-sol:high
+            anthropic:
+              default: anthropic/claude-opus-5:high
               smol: anthropic/claude-haiku-4-5:medium
-              slow: anthropic/claude-opus-5:xhigh
-              vision: anthropic/claude-opus-5:xhigh
-              plan: anthropic/claude-opus-5:xhigh
-              designer: anthropic/claude-opus-5:xhigh
+              slow: anthropic/claude-fable-5:xhigh
+              vision: anthropic/claude-sonnet-5:high
+              plan: anthropic/claude-opus-5:high
+              designer: anthropic/claude-sonnet-5:high
               commit: anthropic/claude-haiku-4-5:medium
-              tiny: anthropic/claude-haiku-4-5:medium
-              task: anthropic/claude-opus-5:xhigh
-              advisor: anthropic/claude-opus-5:xhigh
+              tiny: anthropic/claude-haiku-4-5:low
+              task: anthropic/claude-sonnet-5
+              advisor: anthropic/claude-opus-5:high
+            opencode:
+              default: opencode-go/deepseek-v4-pro:max
+              smol: opencode-go/gpt-5.6-luna:medium
+              slow: opencode-go/kimi-k3:max
+              vision: opencode-go/deepseek-v4-flash-vision-exp:max
+              plan: opencode-go/kimi-k3:max
+              designer: opencode-go/kimi-k3:high
+              commit: opencode-go/gpt-5.6-luna:medium
+              tiny: opencode-go/mimo-v2.5:low
+              task: opencode-go/deepseek-v4-flash:max
+              advisor: opencode-go/kimi-k3:max
           # OMP moves before the provider reaches zero, automatically returns after
           # cooldown, and keeps the expensive/economical model tiers aligned.
           retry:
@@ -340,16 +355,49 @@ developers:
             fallback_chains:
               openai-codex/gpt-5.6-sol:
                 - anthropic/claude-opus-5:xhigh
-                - opencode-go/ox-alpha-free
+                - opencode-zen/mimo-v2.5-free
               anthropic/claude-opus-5:
+                - openai-codex/gpt-5.6-sol:high
+                - opencode-zen/mimo-v2.5-free
+              anthropic/claude-fable-5:
+                - anthropic/claude-opus-5:xhigh
                 - openai-codex/gpt-5.6-sol:xhigh
-                - opencode-go/ox-alpha-free
+                - opencode-zen/mimo-v2.5-free
+              openai-codex/gpt-5.6-terra:
+                - anthropic/claude-sonnet-5
+                - opencode-zen/mimo-v2.5-free
+              anthropic/claude-sonnet-5:
+                - openai-codex/gpt-5.6-terra
+                - opencode-zen/mimo-v2.5-free
               openai-codex/gpt-5.6-luna:
                 - anthropic/claude-haiku-4-5:medium
-                - opencode-go/ox-alpha-free
+                - opencode-zen/mimo-v2.5-free
               anthropic/claude-haiku-4-5:
                 - openai-codex/gpt-5.6-luna:medium
-                - opencode-go/ox-alpha-free
+                - opencode-zen/mimo-v2.5-free
+              opencode-go/deepseek-v4-pro:
+                - openai-codex/gpt-5.6-sol:high
+                - anthropic/claude-opus-5:high
+                - opencode-zen/mimo-v2.5-free
+              opencode-go/kimi-k3:
+                - anthropic/claude-opus-5:xhigh
+                - openai-codex/gpt-5.6-sol:xhigh
+                - opencode-zen/mimo-v2.5-free
+              opencode-go/deepseek-v4-flash:
+                - openai-codex/gpt-5.6-terra
+                - anthropic/claude-sonnet-5
+                - opencode-zen/mimo-v2.5-free
+              opencode-go/deepseek-v4-flash-vision-exp:
+                - openai-codex/gpt-5.6-terra:high
+                - anthropic/claude-sonnet-5:high
+                - opencode-zen/mimo-v2.5-free
+              opencode-go/gpt-5.6-luna:
+                - openai-codex/gpt-5.6-luna:medium
+                - anthropic/claude-haiku-4-5:medium
+                - opencode-zen/mimo-v2.5-free
+              opencode-go/mimo-v2.5:
+                - openai-codex/gpt-5.6-luna:low
+                - opencode-zen/mimo-v2.5-free
     default_agent_profile: claude-work
 
     memory:
