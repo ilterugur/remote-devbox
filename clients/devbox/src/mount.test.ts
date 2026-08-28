@@ -1,14 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildMountRecoveryRemoteCmd,
+  buildRemoteMountProbe,
+  buildOwnedUnmountRemoteCmd,
   buildRcloneServeArgs,
   buildSshfsRemoteCmd,
   buildSshRArgs,
   decideMountRecovery,
   mountHealthFromEvidence,
+  decideMountStart,
   collectMountHealth,
   parseMountProbe,
+  parseMountIdentity,
   planMounts,
+  waitForLocalPort,
+  waitForRemoteMount,
+  processIdentityMatches,
 } from "./mount";
 import type { Config } from "./config";
 
@@ -26,17 +33,28 @@ describe("buildRcloneServeArgs", () => {
   });
 });
 
+describe("processIdentityMatches", () => {
+  test("requires the executable and every exact mount-specific argv fragment", () => {
+    const identity = "Fri Aug 28 01:02:03 2026 /usr/bin/ssh -T -o BatchMode=yes -R 127.0.0.1:5301:127.0.0.1:5301 devbox-work exec sshfs -f /home/work/mnt/desktop";
+    expect(processIdentityMatches(identity, "ssh", ["BatchMode=yes", "127.0.0.1:5301", "devbox-work", "exec sshfs -f", "/home/work/mnt/desktop"]))
+      .toBe(true);
+    expect(processIdentityMatches(identity, "ssh", ["devbox-other"])).toBe(false);
+    expect(processIdentityMatches(identity, "rclone", ["devbox-work"])).toBe(false);
+  });
+});
+
 describe("buildSshfsRemoteCmd", () => {
   test("makes the mountpoint, refuses an existing mount, and execs sshfs read-only", () => {
-    const cmd = buildSshfsRemoteCmd(5301, "/home/work/mnt/desktop", "/home/work/.cache/devbox-bridge/desktop.key");
+    const cmd = buildSshfsRemoteCmd(5301, "/home/work/mnt/desktop", "/home/work/.cache/devbox-bridge/desktop.key", "nonce-1");
     expect(cmd).toContain("mkdir -p '/home/work/mnt/desktop'");
     expect(cmd).toContain("mountpoint -q '/home/work/mnt/desktop'");
     expect(cmd).not.toContain("fusermount");
-    expect(cmd).toContain("exec sshfs -p 5301 mount@127.0.0.1:/ '/home/work/mnt/desktop'");
+    expect(cmd).toContain("exec sshfs -f -p 5301 mount@127.0.0.1:/ '/home/work/mnt/desktop'");
     expect(cmd).toContain("-o ro,");
     expect(cmd).toContain("IdentityFile='/home/work/.cache/devbox-bridge/desktop.key'");
     expect(cmd).toContain("reconnect");
     expect(cmd).toContain("StrictHostKeyChecking=no");
+    expect(cmd).toContain("fsname=devbox-nonce-1");
   });
 
   test("a clean disconnected recovery uses a normal unmount, never lazy/forced unmount", () => {
@@ -44,10 +62,40 @@ describe("buildSshfsRemoteCmd", () => {
       5301,
       "/home/work/mnt/desktop",
       "/home/work/.cache/devbox-bridge/desktop.key",
+      "nonce-1",
     );
-    expect(cmd).toContain("fusermount -u '/home/work/mnt/desktop'");
+    expect(cmd).toContain('fusermount -u "$mp"');
     expect(cmd).not.toContain("-uz");
     expect(cmd).not.toContain("-z");
+  });
+});
+
+describe("buildRemoteMountProbe", () => {
+  test("detects disconnected FUSE mounts from the mount table without statting the endpoint", () => {
+    const command = buildRemoteMountProbe("/home/work/mnt/desktop");
+    expect(command).toContain("findmnt -rn --nocanonicalize -M \"$mp\"");
+    expect(command).toContain("timeout 3 fuser -m \"$mp\"");
+    expect(command).toContain("handles=unknown");
+    expect(command).not.toContain('"$fuser_status" -eq 1');
+    expect(command).not.toContain("mountpoint -q");
+  });
+
+  test("verifies fuse.sshfs, read-only options and the exact startup nonce", () => {
+    const command = buildRemoteMountProbe("/home/work/mnt/desktop", "nonce-1");
+    expect(command).toContain("FSTYPE");
+    expect(command).toContain("OPTIONS");
+    expect(command).toContain("SOURCE");
+    expect(command).toContain("devbox-nonce-1");
+    expect(parseMountIdentity("mounted=1\nidentity=1\n")).toBe(true);
+    expect(parseMountIdentity("mounted=1\nidentity=0\n")).toBe(false);
+  });
+
+  test("owned unmount refuses a foreign or writable mount", () => {
+    const command = buildOwnedUnmountRemoteCmd("/home/work/mnt/desktop", "nonce-1");
+    expect(command).toContain("fuse.sshfs");
+    expect(command).toContain("devbox-nonce-1");
+    expect(command).toContain("mount identity mismatch; refusing unmount");
+    expect(command).toContain("fusermount -u");
   });
 });
 
@@ -90,16 +138,69 @@ describe("decideMountRecovery", () => {
   });
 });
 
+describe("decideMountStart", () => {
+  test("starts only for a proven absent mount", () => {
+    expect(decideMountStart({ status: "failed", reason: "mount_absent" }))
+      .toEqual({ action: "start", reason: "mount_absent" });
+  });
+
+  test("refuses duplicate startup when the remote mount is present or unknown", () => {
+    expect(decideMountStart({ status: "blocked", reason: "foreign_mount_process" }))
+      .toEqual({ action: "refuse", reason: "foreign_mount_process" });
+    expect(decideMountStart({ status: "unknown", reason: "mount_evidence_unknown" }))
+      .toEqual({ action: "refuse", reason: "mount_evidence_unknown" });
+    expect(decideMountStart({ status: "healthy" }))
+      .toEqual({ action: "skip", reason: "already_healthy" });
+  });
+});
+
+describe("waitForLocalPort", () => {
+  test("waits until the rclone listener accepts connections", () => {
+    const statuses = [1, 1, 0];
+    let pauses = 0;
+    expect(waitForLocalPort(5301, () => statuses.shift() ?? 1, () => { pauses++; }, 5)).toBe(true);
+    expect(pauses).toBe(2);
+  });
+
+  test("fails closed when the listener never becomes ready", () => {
+    let probes = 0;
+    expect(waitForLocalPort(5301, () => { probes++; return 1; }, () => {}, 3)).toBe(false);
+    expect(probes).toBe(3);
+  });
+});
+
+describe("waitForRemoteMount", () => {
+  test("waits for the remote mount to be present and reachable", () => {
+    const evidence = [
+      "mounted=0\nreachable=0\nhandles=0\n",
+      "mounted=1\nreachable=1\nhandles=unknown\nidentity=1\n",
+    ];
+    let pauses = 0;
+    expect(waitForRemoteMount("devbox-work", "/home/work/mnt/desktop", "nonce-1", () => ({
+      status: 0, stdout: evidence.shift() ?? "", stderr: "",
+    }), () => { pauses++; }, 3)).toBe(true);
+    expect(pauses).toBe(1);
+  });
+
+  test("fails closed on probe errors or a mount that never becomes reachable", () => {
+    expect(waitForRemoteMount("devbox-work", "/home/work/mnt/desktop", "nonce-1", () => ({
+      status: 255, stdout: "", stderr: "ssh failed",
+    }), () => {}, 2)).toBe(false);
+  });
+});
+
 test("collectMountHealth joins exact bridge ownership with sanitized remote evidence", () => {
   const commands: string[] = [];
   const result = collectMountHealth(cfg, "work", (command, args) => {
     commands.push([command, ...args].join(" "));
-    if (command === "ssh") return { status: 0, stdout: "mounted=1\nreachable=1\nhandles=0\n", stderr: "" };
-    if (args.includes("41")) return { status: 0, stdout: "/usr/bin/ssh\n", stderr: "" };
-    return { status: 0, stdout: "/opt/homebrew/bin/rclone\n", stderr: "" };
+    if (command === "ssh") return { status: 0, stdout: "mounted=1\nreachable=1\nhandles=0\nidentity=1\n", stderr: "" };
+    if (args.includes("41")) return { status: 0, stdout: "ssh-birth|ssh exact\n", stderr: "" };
+    return { status: 0, stdout: "rclone-birth|rclone exact\n", stderr: "" };
   }, [{
     profile: "work", label: "desktop", tunnelPort: 5301, sshPid: 41, rclonePid: 42,
-    remotePath: "/home/work/mnt/desktop", localPath: "/Users/me/Desktop", createdAt: "now",
+    remotePath: "/home/work/mnt/desktop", localPath: "/Users/me/Desktop",
+    sshIdentity: "ssh-birth|ssh exact", rcloneIdentity: "rclone-birth|rclone exact",
+    mountNonce: "nonce-1", createdAt: "now",
   }]);
   expect(result.find((item) => item.id === "client.mount.work.desktop")?.status).toBe("healthy");
   expect(result.find((item) => item.id === "client.mount.work.docs")?.status).toBe("blocked");
@@ -112,7 +213,8 @@ test("collectMountHealth joins exact bridge ownership with sanitized remote evid
 describe("buildSshRArgs", () => {
   test("forwards box:127.0.0.1:BP -> client 127.0.0.1:RP and runs the remote cmd", () => {
     expect(buildSshRArgs("devbox-work", 5301, 5301, "REMOTE")).toEqual([
-      "-T", "-R", "127.0.0.1:5301:127.0.0.1:5301", "devbox-work", "REMOTE",
+      "-T", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+      "-R", "127.0.0.1:5301:127.0.0.1:5301", "devbox-work", "REMOTE",
     ]);
   });
 });

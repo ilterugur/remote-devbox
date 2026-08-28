@@ -4,8 +4,10 @@
  * ~/.config/claude-devbox/bridges.json; sync sessions are owned by the engine and
  * are NOT duplicated here.
  */
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { cfgDir } from "./config";
@@ -36,6 +38,10 @@ export type LiveMount = {
   sshPid: number;
   remotePath: string;
   localPath: string;
+  /** Exact `ps` birth-time + argv fingerprint. Missing only on legacy state. */
+  rcloneIdentity?: string;
+  sshIdentity?: string;
+  mountNonce?: string;
   createdAt: string;
 };
 
@@ -43,15 +49,36 @@ export function readBridges(path: string = bridgesPath()): LiveMount[] {
   if (!existsSync(path)) return [];
   try {
     const v = JSON.parse(readFileSync(path, "utf8"));
-    return Array.isArray(v) ? (v as LiveMount[]) : [];
-  } catch {
-    return [];
+    if (!Array.isArray(v) || !v.every((entry) => isLiveMount(entry))) {
+      throw new Error("bridge state has an invalid shape");
+    }
+    return v as LiveMount[];
+  } catch (error) {
+    throw new Error(`invalid bridge state at ${path}: ${(error as Error).message}`);
   }
+}
+
+function isLiveMount(value: unknown): value is LiveMount {
+  if (!value || typeof value !== "object") return false;
+  const mount = value as Record<string, unknown>;
+  return ["profile", "label", "remotePath", "localPath", "createdAt"]
+    .every((key) => typeof mount[key] === "string")
+    && ["tunnelPort", "rclonePid", "sshPid"].every((key) =>
+      typeof mount[key] === "number" && Number.isSafeInteger(mount[key]))
+    && (mount.rcloneIdentity === undefined || typeof mount.rcloneIdentity === "string")
+    && (mount.sshIdentity === undefined || typeof mount.sshIdentity === "string")
+    && (mount.mountNonce === undefined || typeof mount.mountNonce === "string");
 }
 
 export function writeBridges(list: LiveMount[], path: string = bridgesPath()): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(list, null, 2) + "\n");
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(list, null, 2) + "\n", { mode: 0o600 });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 export function pidAlive(pid: number): boolean {
@@ -63,9 +90,74 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/** Drop entries whose rclone OR ssh process has died, persist, and return survivors. */
-export function reconcileBridges(path: string = bridgesPath()): LiveMount[] {
-  const kept = readBridges(path).filter((m) => pidAlive(m.rclonePid) && pidAlive(m.sshPid));
+export type ProcessIdentityLookup = (pid: number) => string | null | undefined;
+export type ProcessSignal = (pid: number) => void;
+
+export const defaultProcessIdentity: ProcessIdentityLookup = (pid) => {
+  const result = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" });
+  if (result.status === 1) return null;
+  if (result.status !== 0) return undefined;
+  const identity = result.stdout.trim();
+  return identity || null;
+};
+
+export type BridgeProcessAssessment = {
+  state: "live" | "stale" | "unknown";
+  ownedPids: number[];
+};
+
+export function assessBridgeProcesses(
+  bridge: LiveMount,
+  lookup: ProcessIdentityLookup = defaultProcessIdentity,
+): BridgeProcessAssessment {
+  if (!bridge.rcloneIdentity || !bridge.sshIdentity) return { state: "unknown", ownedPids: [] };
+  const rclone = lookup(bridge.rclonePid);
+  const ssh = lookup(bridge.sshPid);
+  if (rclone === undefined || ssh === undefined) return { state: "unknown", ownedPids: [] };
+  const ownedPids = [
+    ...(rclone === bridge.rcloneIdentity ? [bridge.rclonePid] : []),
+    ...(ssh === bridge.sshIdentity ? [bridge.sshPid] : []),
+  ];
+  return { state: ownedPids.length === 2 ? "live" : "stale", ownedPids };
+}
+
+export function stopOwnedBridgeProcesses(
+  bridge: LiveMount,
+  lookup: ProcessIdentityLookup = defaultProcessIdentity,
+  signal: ProcessSignal = (pid) => process.kill(pid),
+): { safe: boolean; signalledPids: number[] } {
+  let safe = true;
+  const signalledPids: number[] = [];
+  for (const [pid, expected] of [
+    [bridge.rclonePid, bridge.rcloneIdentity],
+    [bridge.sshPid, bridge.sshIdentity],
+  ] as const) {
+    if (!expected) { safe = false; continue; }
+    const observed = lookup(pid);
+    if (observed === null) continue;
+    if (observed === undefined || observed !== expected) { safe = false; continue; }
+    try { signal(pid); signalledPids.push(pid); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") safe = false;
+    }
+  }
+  return { safe, signalledPids };
+}
+
+/** Keep only exact live pairs; clean a surviving verified sibling before dropping stale state. */
+export function reconcileBridges(
+  path: string = bridgesPath(),
+  lookup: ProcessIdentityLookup = defaultProcessIdentity,
+  signal: ProcessSignal = (pid) => process.kill(pid),
+): LiveMount[] {
+  const kept = readBridges(path).filter((bridge) => {
+    const assessment = assessBridgeProcesses(bridge, lookup);
+    if (assessment.state === "live" || assessment.state === "unknown") return true;
+    const stopped = stopOwnedBridgeProcesses(bridge, lookup, signal);
+    // A signalled sibling remains tracked until a later pass proves it exited.
+    // Unknown ownership or signal failure also retains state fail-closed.
+    return !stopped.safe || stopped.signalledPids.length > 0;
+  });
   writeBridges(kept, path);
   return kept;
 }
