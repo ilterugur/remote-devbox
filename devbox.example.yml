@@ -247,6 +247,26 @@ developers:
     # above, because both daemons compete for the same machine.
     codex_remote_control: true
 
+    # Run the Paseo daemon as a managed user service. Paseo has no unit of its own:
+    # `paseo daemon start --foreground` keeps running wherever it was launched, so the
+    # launcher owns the cgroup every Paseo/omp agent session ends up in. Start it by
+    # hand over SSH and the whole fleet lands in that login session's scope — which
+    # belongs to whoever logged in, carries no ceiling, and outlives the session as an
+    # orphan. Neither `resources` above nor the heavy-job gate reaches it there.
+    paseo_daemon: true
+
+    # Required whenever paseo_daemon is set, and deliberately not inherited from
+    # `remote_control.resources`: this one unit aggregates EVERY agent session the
+    # developer runs, so the 12G default that suits a single project's session would
+    # kill the whole fleet the first time the unit starts. Measure the idle fleet, then
+    # leave a few GB of band above it — enough that one runaway build reaches the hard
+    # wall and is killed alone, not so much that the fleet parks inside MemoryHigh and
+    # throttles every session together.
+    paseo_resources:
+      memory_high: 40G
+      memory_max: 44G
+      memory_swap_max: 4G
+
     git_identities:
       work:
         name: "Dev A"
@@ -292,7 +312,7 @@ developers:
         # Presets are inventory data, not extension source. `/preset <name>` changes
         # the whole built-in role map atomically inside the current OMP session;
         # `/preset reset` returns to OMP's normal settings. A resumed session restores
-        # its own last choice, so one Paseo OMP provider can host all four strategies.
+        # its own last choice, so one Paseo OMP provider can host all five strategies.
         omp_model_presets:
           default_preset: balanced
           aliases:
@@ -344,6 +364,17 @@ developers:
               tiny: opencode-go/mimo-v2.5:low
               task: opencode-go/deepseek-v4-flash:max
               advisor: opencode-go/kimi-k3:max
+            cursor:
+              default: cursor/composer-2.5:inherit
+              smol: cursor/grok-4.6:high
+              slow: cursor/claude-opus-5-thinking-xhigh:inherit
+              vision: cursor/gemini-3.1-pro:high
+              plan: cursor/claude-opus-5-high:inherit
+              designer: cursor/claude-sonnet-5-high:inherit
+              commit: cursor/composer-2.5:inherit
+              tiny: cursor/gpt-5.4-nano:low
+              task: cursor/gpt-5.6-terra
+              advisor: cursor/claude-opus-5-high:inherit
           # OMP moves before the provider reaches zero, automatically returns after
           # cooldown, and keeps the expensive/economical model tiers aligned.
           retry:
@@ -397,6 +428,44 @@ developers:
                 - opencode-zen/mimo-v2.5-free
               opencode-go/mimo-v2.5:
                 - openai-codex/gpt-5.6-luna:low
+                - opencode-zen/mimo-v2.5-free
+              cursor/composer-2.5:
+                - cursor/grok-4.6
+                - cursor/claude-opus-5-high
+                - openai-codex/gpt-5.6-sol:medium
+                - opencode-zen/mimo-v2.5-free
+              cursor/grok-4.6:
+                - cursor/composer-2.5
+                - cursor/gpt-5.6-terra
+                - opencode-zen/mimo-v2.5-free
+              cursor/claude-opus-5-thinking-xhigh:
+                - cursor/claude-opus-5-high
+                - cursor/grok-4.6
+                - anthropic/claude-opus-5:xhigh
+                - opencode-zen/mimo-v2.5-free
+              cursor/claude-opus-5-high:
+                - cursor/grok-4.6
+                - cursor/claude-sonnet-5-high
+                - anthropic/claude-opus-5:high
+                - opencode-zen/mimo-v2.5-free
+              cursor/claude-sonnet-5-high:
+                - cursor/gpt-5.6-terra
+                - cursor/grok-4.6
+                - anthropic/claude-sonnet-5:high
+                - opencode-zen/mimo-v2.5-free
+              cursor/gemini-3.1-pro:
+                - cursor/claude-sonnet-5-high
+                - cursor/grok-4.6
+                - anthropic/claude-sonnet-5:high
+                - opencode-zen/mimo-v2.5-free
+              cursor/gpt-5.6-terra:
+                - cursor/claude-sonnet-5-high
+                - cursor/grok-4.6
+                - openai-codex/gpt-5.6-terra
+                - opencode-zen/mimo-v2.5-free
+              cursor/gpt-5.4-nano:
+                - cursor/grok-4.6
+                - cursor/composer-2.5
                 - opencode-zen/mimo-v2.5-free
     default_agent_profile: claude-work
 

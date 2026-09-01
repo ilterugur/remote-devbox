@@ -49,6 +49,9 @@
               - >-
                 'export PATH="/usr/local/lib/agent-devbox/heavy-command-gate:$PATH"'
                 in gate_env.content | b64decode
+              - >-
+                'DEVBOX_BUN_KILL_GUARD="/usr/local/lib/agent-devbox/process-kill-guard.ts"'
+                in gate_env.content | b64decode
               - "'DEVBOX_HEAVY_JOB_CATEGORIES=\"build,typecheck,generate\"' in gate_env.content | b64decode"
               - "'DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=\"1800\"' in gate_env.content | b64decode"
               - "'DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=\"5\"' in gate_env.content | b64decode"

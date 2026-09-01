@@ -141,6 +141,12 @@ function developerLines(
     lines.push(row("codex rc", "always-on daemon · own CODEX_HOME (codex-remote-control)", indent));
   }
 
+  if (dev.paseo_daemon) {
+    lines.push(
+      row("paseo", `managed daemon · ceiling ${dev.paseo_resources?.memory_max ?? "unset"}`, indent),
+    );
+  }
+
   if (dev.memory?.enabled) {
     const instances = Object.entries(dev.memory.instances ?? {})
       .map(([k, v]) => `${k}→${v.llm_provider}`)

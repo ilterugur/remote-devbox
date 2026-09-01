@@ -790,6 +790,55 @@ test("developers[].codex_host_resources reuses the service resource rules", () =
   expect(paths(spec)).toContain("error:developers[0].codex_host_resources.oom_policy");
 });
 
+// The one ceiling with no safe inherited default: this unit holds every agent session
+// the developer runs, so an unstated wall is an operator mistake, not a defaulting
+// opportunity.
+test("developers[].paseo_daemon requires a stated memory_max", () => {
+  const spec = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        paseo_daemon: true,
+      },
+    ],
+  };
+  expect(paths(spec)).toContain("error:developers[0].paseo_resources.memory_max");
+});
+
+test("developers[].paseo_resources reuses the service resource rules", () => {
+  const spec = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        paseo_daemon: true,
+        paseo_resources: { memory_max: "plenty", oom_policy: "restart" },
+      },
+    ],
+  };
+  expect(paths(spec)).toContain("error:developers[0].paseo_resources.memory_max");
+  expect(paths(spec)).toContain("error:developers[0].paseo_resources.oom_policy");
+});
+
+test("a stated paseo ceiling validates clean", () => {
+  const spec = {
+    ...minimal(),
+    developers: [
+      {
+        user: "dev-a",
+        login_ssh_keys: [KEY],
+        paseo_daemon: true,
+        paseo_resources: { memory_high: "40G", memory_max: "44G", memory_swap_max: "4G" },
+      },
+    ],
+  };
+  expect(paths(spec)).not.toContain("error:developers[0].paseo_resources.memory_max");
+  expect(paths(spec)).not.toContain("error:developers[0].paseo_daemon");
+});
+
 test("memory sizes accept systemd units, B aliases and bounded percentages", () => {
   for (const value of ["32G", "32GB", "20%", "1%", "100%", ""]) {
     expect(

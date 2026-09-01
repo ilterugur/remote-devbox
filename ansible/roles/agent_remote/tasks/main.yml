@@ -188,6 +188,220 @@
   changed_when: true
   tags: [heavy_gate]
 
+# ── Paseo daemon ──────────────────────────────────────────────────────────────
+# Writing the unit does not touch the supervisor that is actually holding the fleet, so
+# it is safe on its own; taking over from that supervisor is what drops live sessions,
+# and that sits behind devbox_paseo_activate.
+#
+# One caveat found on this box 2026-08-31: a hand-written paseo-daemon.service was
+# already present AND enabled, crash-looping 1686 times against the hand-started
+# supervisor that owns the socket. Replacing its definition is still safe — the loop
+# keeps failing for the same reason — but the next auto-restart attempt will use the
+# managed definition rather than the old one, and this template's StartLimitBurst
+# finally stops the loop.
+- name: Write the managed Paseo daemon service
+  ansible.builtin.template:
+    src: paseo-daemon.service.j2
+    dest: "/home/{{ row.user }}/.config/systemd/user/paseo-daemon.service"
+    owner: "{{ row.user }}"
+    group: "{{ row.user }}"
+    mode: "0600"
+  loop: "{{ devbox_paseo_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  register: paseo_service
+  tags: [heavy_gate, paseo]
+
+# Adoption. Found here 2026-08-31: a `paseo-daemon.service.d/heavy-gate.conf` stamped
+# "Managed by Ansible" that nothing in this repo writes — an orphan from an earlier
+# implementation that no longer exists. A drop-in is merged after the unit file, so its
+# hardcoded PATH and DEVBOX_HEAVY_JOB_MEMORY_MAX would win over the managed unit's and
+# silently diverge from devbox.yml. The managed unit carries both itself.
+- name: Remove the superseded hand-written Paseo drop-in
+  ansible.builtin.file:
+    path: "/home/{{ row.user }}/.config/systemd/user/paseo-daemon.service.d"
+    state: absent
+  loop: "{{ devbox_paseo_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  register: paseo_dropin
+  tags: [heavy_gate, paseo]
+
+- name: Reload the user manager of each Paseo developer
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ row.user }}@ daemon-reload"
+  loop: "{{ devbox_paseo_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  changed_when: false
+  tags: [heavy_gate, paseo]
+
+# Report the pending takeover rather than performing it. A supervisor outside the unit's
+# own cgroup is the whole defect being fixed, so an operator reading a run needs to see
+# that it is still there — silence would read as "already managed".
+#
+# What "outside" means has to be decided by cgroup, not by process name. Measured
+# 2026-09-01: this box had paseo-daemon.service at ActiveState=active with MainPID=1264954,
+# and that same PID — plus the supervisor and daemon under it — already inside
+# /user.slice/user-1004.slice/user@1004.service/app.slice/paseo-daemon.service. Nothing
+# needed taking over. An earlier version of this task matched on `pgrep -f 'paseo daemon
+# start'` alone, so it found the unit's OWN main process and told the operator to run the
+# activation anyway. That activation stops the supervisor and drops every live agent
+# session — 17 of them at the time — to fix a defect that was not there.
+#
+# The prefix match rather than equality is deliberate: a supervisor re-execing into a
+# child cgroup of the unit is still the unit's, and must not read as unmanaged.
+- name: Detect a Paseo supervisor running outside the managed unit
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      user={{ row.user | quote }}
+      show() {
+        systemctl --user --machine="$user@" show paseo-daemon.service -p "$1" --value 2>/dev/null | tr -d '\n'
+      }
+      state=$(show ActiveState)
+      unit_cg=$(show ControlGroup)
+      main_pid=$(show MainPID)
+      managed=""
+      unmanaged=""
+      for pid in $(pgrep -u "$user" -f 'paseo daemon start' 2>/dev/null); do
+        proc_cg=$(sed -n 's/^0:://p' "/proc/$pid/cgroup" 2>/dev/null | tr -d '\n')
+        owned=no
+        if [ -n "$unit_cg" ]; then
+          case "$proc_cg" in
+            "$unit_cg" | "$unit_cg"/*) owned=yes ;;
+          esac
+        fi
+        if [ "$pid" = "$main_pid" ]; then
+          owned=yes
+        fi
+        if [ "$owned" = yes ]; then
+          managed="${managed:+$managed,}$pid"
+        else
+          unmanaged="${unmanaged:+$unmanaged,}$pid"
+        fi
+      done
+      printf '{"state":"%s","control_group":"%s","main_pid":"%s","managed":"%s","unmanaged":"%s"}\n' \
+        "$state" "$unit_cg" "$main_pid" "$managed" "$unmanaged"
+  loop: "{{ devbox_paseo_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  register: paseo_state
+  changed_when: false
+  failed_when: false
+  # Reads only — systemctl show, pgrep, /proc. Running it under --check is safe, and it
+  # is what makes a dry run report the real ownership state instead of a placeholder.
+  # Without this the task is skipped, stdout comes back as "" rather than undefined, and
+  # every from_json below fails on the empty string.
+  check_mode: false
+  tags: [heavy_gate, paseo]
+
+- name: Report the pending Paseo takeover
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.row.user }}: unit file written, NOT activated
+      (state: {{ (item.stdout | default('{}', true) | from_json).state | default('unknown') }};
+      supervisor outside the unit: {{ (item.stdout | default('{}', true) | from_json).unmanaged }}).
+      Re-run with -e devbox_paseo_activate=true to stop the unmanaged supervisor and
+      start the managed unit. That drops every live agent session for this developer.
+  loop: "{{ paseo_state.results | default([]) }}"
+  loop_control:
+    label: "{{ item.row.user }}"
+  when:
+    - not devbox_paseo_activate | bool
+    - (item.stdout | default('{}', true) | from_json).unmanaged | default('') | length > 0
+  tags: [heavy_gate, paseo]
+
+# Say it out loud when there is nothing to take over. The whole point of the report above
+# is that an operator can tell "still unmanaged" from "already fine", and that only works
+# if the second case is stated rather than implied by the absence of the first.
+- name: Report that the Paseo supervisor is already inside the managed unit
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.row.user }}: paseo-daemon.service is
+      {{ (item.stdout | default('{}', true) | from_json).state | default('unknown') }} and already owns its
+      fleet (MainPID {{ (item.stdout | default('{}', true) | from_json).main_pid }},
+      cgroup {{ (item.stdout | default('{}', true) | from_json).control_group }}).
+      No takeover needed — do NOT pass devbox_paseo_activate, it would drop every live
+      agent session to change nothing.
+  loop: "{{ paseo_state.results | default([]) }}"
+  loop_control:
+    label: "{{ item.row.user }}"
+  when:
+    - not devbox_paseo_activate | bool
+    - (item.stdout | default('{}', true) | from_json).unmanaged | default('') | length == 0
+  tags: [heavy_gate, paseo]
+
+# Activation, in the only order that cannot leave two supervisors fighting over one
+# daemon socket: stop whatever is running outside the unit first, then start the unit.
+#
+# Kill the PIDs the detection above proved are outside, not everything whose command line
+# says 'paseo daemon start'. A name match here hits the unit's own MainPID whenever the
+# supervisor is already managed, and with KillMode=control-group that takes the whole
+# fleet down on the way to "fixing" a unit that was already correct.
+- name: Stop the unmanaged Paseo supervisor before takeover
+  ansible.builtin.command:
+    argv: >-
+      {{ ['kill'] + ((item.stdout | default('{}', true) | from_json).unmanaged.split(',')
+         | reject('equalto', '') | list) }}
+  loop: "{{ paseo_state.results | default([]) }}"
+  loop_control:
+    label: "{{ item.row.user }}"
+  register: paseo_kill
+  # kill exits 1 when the PID is already gone, which is the desired end state.
+  failed_when: paseo_kill.rc not in [0, 1]
+  changed_when: paseo_kill.rc == 0
+  when:
+    - devbox_paseo_activate | bool
+    - (item.stdout | default('{}', true) | from_json).unmanaged | default('') | length > 0
+  tags: [heavy_gate, paseo]
+
+- name: Enable and start the managed Paseo daemon
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ row.user }}@ enable --now paseo-daemon.service"
+  loop: "{{ devbox_paseo_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  changed_when: true
+  when: devbox_paseo_activate | bool
+  tags: [heavy_gate, paseo]
+
+# The point of the unit is the cgroup it puts the fleet in. Assert it rather than trust
+# it: a unit that started but left the fleet in a foreign scope has fixed nothing.
+- name: Verify the managed Paseo daemon owns its own cgroup
+  ansible.builtin.command:
+    cmd: >-
+      systemctl --user --machine={{ row.user }}@ show paseo-daemon.service
+      -p ActiveState -p ControlGroup -p MemoryMax
+  loop: "{{ devbox_paseo_units }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}"
+  register: paseo_verify
+  changed_when: false
+  when: devbox_paseo_activate | bool
+  tags: [heavy_gate, paseo]
+
+- name: Fail when the managed Paseo daemon did not take ownership
+  ansible.builtin.assert:
+    that:
+      - "'ActiveState=active' in item.stdout"
+      - "'/user.slice/user-' in item.stdout"
+      - "'MemoryMax=infinity' not in item.stdout"
+    fail_msg: >-
+      paseo-daemon.service for {{ item.row.user }} is not contained:
+      {{ item.stdout | default('no output') }}
+  loop: "{{ paseo_verify.results | default([]) }}"
+  loop_control:
+    label: "{{ item.row.user }}"
+  when: devbox_paseo_activate | bool
+  tags: [heavy_gate, paseo]
+
 - name: Generate a boot/recovery resume companion unit per Remote Control server
   ansible.builtin.template:
     src: agent-rc-resume.service.j2

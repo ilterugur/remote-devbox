@@ -111,20 +111,86 @@ is_heavy_command() {
   return 1
 }
 
+runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+lock_dir="$runtime_dir/agent-devbox"
+lock_path="$lock_dir/heavy-job.lock"
+scope_marker_path="$lock_dir/heavy-job.scope"
+scope_bootstrap_arg=--devbox-heavy-job-scope-bootstrap-v1
+
+current_cgroup_identity() {
+  local _hierarchy _controllers cgroup cgroup_inode
+  IFS=: read -r _hierarchy _controllers cgroup < /proc/self/cgroup || return 1
+  [[ -n "$cgroup" ]] || return 1
+  cgroup_inode=$(stat -Lc '%d:%i' "/sys/fs/cgroup$cgroup") || return 1
+  printf '%s\t%s\n' "$cgroup" "$cgroup_inode"
+}
+
+# systemd-run starts this script inside the bounded scope before the real command. The
+# marker survives environment filtering by task runners such as Turbo; its cgroup inode
+# prevents a stale file or a reused unit name from granting reentry to unrelated work.
+if [[ "$command_name" == "$(basename "$script_path")" &&
+      "${1:-}" == "$scope_bootstrap_arg" ]]; then
+  shift
+  [[ $# -gt 0 ]] || exit 64
+  umask 077
+  mkdir -p "$lock_dir"
+  IFS=$'\t' read -r scope_cgroup scope_inode < <(current_cgroup_identity)
+  marker_tmp="${scope_marker_path}.$$"
+  cleanup_scope_marker() {
+    local marked_cgroup= marked_inode=
+    rm -f -- "$marker_tmp"
+    if [[ -r "$scope_marker_path" ]]; then
+      IFS=$'\t' read -r marked_cgroup marked_inode < "$scope_marker_path" || true
+      if [[ "$marked_cgroup" == "$scope_cgroup" && "$marked_inode" == "$scope_inode" ]]; then
+        rm -f -- "$scope_marker_path"
+      fi
+    fi
+  }
+  trap cleanup_scope_marker EXIT
+  printf '%s\t%s\n' "$scope_cgroup" "$scope_inode" >"$marker_tmp"
+  mv -f -- "$marker_tmp" "$scope_marker_path"
+  set +e
+  "$@"
+  command_status=$?
+  set -e
+  exit "$command_status"
+fi
+
+
 real_command=$(resolve_real_command) || {
   echo "devbox: cannot resolve the real '$command_name' outside $gate_dir" >&2
   exit 127
 }
 
-if ! is_heavy_command "$@"; then
-  exec "$real_command" "$@"
+real_command_argv=("$real_command")
+bun_kill_guard=${DEVBOX_BUN_KILL_GUARD:-}
+if [[ "$command_name" == bun && -n "$bun_kill_guard" && -r "$bun_kill_guard" ]]; then
+  real_command_argv+=(--preload "$bun_kill_guard")
 fi
 
-runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-lock_dir="$runtime_dir/agent-devbox"
-lock_path="$lock_dir/heavy-job.lock"
+if ! is_heavy_command "$@"; then
+  exec "${real_command_argv[@]}" "$@"
+fi
+
 umask 077
 mkdir -p "$lock_dir"
+
+# Turbo strict mode deliberately removes arbitrary DEVBOX_* variables. If this process
+# is still in the exact bounded scope registered by the lock owner, it is nested work
+# from that job and must not wait on its own lock. Different cgroups still serialize.
+if [[ -r "$scope_marker_path" ]]; then
+  marked_cgroup=
+  marked_inode=
+  current_cgroup=
+  current_inode=
+  IFS=$'\t' read -r marked_cgroup marked_inode < "$scope_marker_path" || true
+  IFS=$'\t' read -r current_cgroup current_inode < <(current_cgroup_identity) || true
+  if [[ -n "$marked_cgroup" &&
+        "$marked_cgroup" == "$current_cgroup" &&
+        "$marked_inode" == "$current_inode" ]]; then
+    exec "${real_command_argv[@]}" "$@"
+  fi
+fi
 
 # A nested command may legitimately resolve through the shim again. Accept the
 # inherited descriptor only when it points at this exact lock and still owns it.
@@ -132,7 +198,7 @@ inherited_fd=${DEVBOX_HEAVY_JOB_FD:-}
 if [[ "$inherited_fd" =~ ^[0-9]+$ && -e "/proc/$$/fd/$inherited_fd" ]]; then
   inherited_path=$(readlink -f "/proc/$$/fd/$inherited_fd" 2>/dev/null || true)
   if [[ "$inherited_path" == "$lock_path" ]] && /usr/bin/flock -n "$inherited_fd"; then
-    exec "$real_command" "$@"
+    exec "${real_command_argv[@]}" "$@"
   fi
 fi
 
@@ -161,7 +227,7 @@ if [[ "$owner_pid" =~ ^[0-9]+$ && "$owner_start" =~ ^[0-9]+$ && "$owner_fd" =~ ^
     shopt -u varredir_close 2>/dev/null || true
     exec {probe_fd}>>"$lock_path"
     if ! /usr/bin/flock -n "$probe_fd"; then
-      exec "$real_command" "$@"
+      exec "${real_command_argv[@]}" "$@"
     fi
     /usr/bin/flock -u "$probe_fd"
     exec {probe_fd}>&-
@@ -226,15 +292,44 @@ export DEVBOX_HEAVY_JOB_OWNER_FD=$slot_fd
 # cgroup stalled 73% of the time at ~3100 throttle events a second, its sockets were
 # refused memory 74k times, and every live session on that host dropped. A scope of
 # its own makes the runaway the only casualty.
-memory_max=${DEVBOX_HEAVY_JOB_MEMORY_MAX:-}
+# An unset budget used to mean "unbounded". That is only ever reached when a process
+# tree escaped provisioning: the role templates inject this via Environment=, so a
+# daemon started by hand from another user's SSH session hands its whole agent fleet a
+# gate with no ceiling. Measured 2026-08-31: three host-wide stalls in ninety minutes,
+# each one `bun tsc --noEmit` in a Paseo worktree reaching 25-33G RSS. The gate
+# recognised every one as heavy and serialised it, then ran it unbounded. The kernel's
+# global OOM killer took unrelated sessions down instead. Default the wall, so an
+# unprovisioned caller is contained too; `infinity` stays the explicit opt-out.
+memory_max=${DEVBOX_HEAVY_JOB_MEMORY_MAX:-8G}
+if [[ "$memory_max" == infinity ]]; then
+  memory_max=
+fi
+
+# systemd parses 8G; Go does not. Verified 2026-08-31: GOMEMLIMIT=8G aborts every Go
+# binary with "fatal error: malformed GOMEMLIMIT", so passing the systemd spelling
+# straight through turned this hint into an instant kill for the TypeScript 7 compiler
+# it was added to bound. Go wants the IEC spelling.
+go_mem_limit() {
+  case "$1" in
+    *KiB | *MiB | *GiB | *TiB | *B) printf '%s\n' "$1" ;;
+    *[Kk]) printf '%sKiB\n' "${1%?}" ;;
+    *[Mm]) printf '%sMiB\n' "${1%?}" ;;
+    *[Gg]) printf '%sGiB\n' "${1%?}" ;;
+    *[Tt]) printf '%sTiB\n' "${1%?}" ;;
+    *[0-9]) printf '%sB\n' "$1" ;;
+    *) return 1 ;;
+  esac
+}
 
 # The TypeScript 7 compiler is a statically linked Go binary, so --max-old-space-size
 # cannot reach it; GOMEMLIMIT is the knob that makes its GC work instead of balloon.
-# Node-based tools ignore GOMEMLIMIT and read NODE_OPTIONS, so offer both and let each
-# runtime take the one it understands. Neither replaces the scope: they are cooperative
-# hints, and the cgroup is the wall that holds when a runtime ignores them.
+# Bun reads neither, which is why the scope below is the wall and this is only a hint:
+# the runaways measured above were all `bun tsc`, and nothing short of the cgroup
+# stopped them.
 if [[ -n "$memory_max" ]]; then
-  export GOMEMLIMIT="${GOMEMLIMIT:-$memory_max}"
+  if go_hint=$(go_mem_limit "$memory_max"); then
+    export GOMEMLIMIT="${GOMEMLIMIT:-$go_hint}"
+  fi
 fi
 
 # Fail open, and decide that BEFORE running anything. systemd-run exits 1 when it
@@ -259,7 +354,7 @@ if scope_available; then
     -p "MemoryMax=$memory_max" \
     -p "MemorySwapMax=0" \
     -p "OOMPolicy=continue" \
-    -- "$real_command" "$@"
+    -- "$script_path" "$scope_bootstrap_arg" "${real_command_argv[@]}" "$@"
 fi
 
-exec "$real_command" "$@"
+exec "${real_command_argv[@]}" "$@"

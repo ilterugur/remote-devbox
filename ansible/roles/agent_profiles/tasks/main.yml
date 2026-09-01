@@ -48,6 +48,15 @@
     mode: "0755"
   tags: [heavy_gate]
 
+- name: Install the Bun UID-wide signal guard
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-process-kill-guard.ts"
+    dest: /usr/local/lib/agent-devbox/process-kill-guard.ts
+    owner: root
+    group: root
+    mode: "0444"
+  tags: [heavy_gate]
+
 - name: Inspect heavy-command shim paths before linking
   ansible.builtin.stat:
     path: "/usr/local/lib/agent-devbox/heavy-command-gate/{{ item }}"

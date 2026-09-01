@@ -445,6 +445,26 @@ export interface DeveloperSpec {
    * the unit carries the heavy-job gate and the host resource limits that a daemon
    * started by hand does not. */
   codex_remote_control?: boolean;
+  /** Run the Paseo daemon as a managed user service for this developer.
+   *
+   * Paseo's own `paseo daemon start` is a foreground supervisor, so whoever launches it
+   * owns its cgroup. Started from an interactive SSH session it lands in THAT session's
+   * scope — and when the session leader dies the supervisor reparents to init while its
+   * cgroup stays behind, under a slice belonging to the wrong user with no ceiling at
+   * all. Measured 2026-08-31 on this box: 136 processes of one developer sat in another
+   * user's login scope at `MemoryMax=infinity`, so neither the per-developer wall nor
+   * the heavy-job gate reached the agent fleet, and four separate `bun tsc` runaways
+   * (16-33 GB RSS each) drove the host into global OOM instead of dying alone.
+   *
+   * Declared here so the unit carries what a hand-started supervisor cannot: the
+   * developer's own slice, the heavy-job gate on PATH, and a hard MemoryMax. */
+  paseo_daemon?: boolean;
+  /** Resource ceiling for the Paseo daemon unit. Required when `paseo_daemon` is set:
+   * this unit aggregates every agent session the developer runs, so the box-wide
+   * `remote_control.resources` default (12G) is not a safe fallback — measured baseline
+   * on this box is 28 GB across 14 sessions, and starting under a 12G wall would kill
+   * the fleet on the first apply. State the ceiling from measurement instead. */
+  paseo_resources?: RcResourceSpec;
   /** Overrides host.heavy_job_gate for this Linux developer. */
   heavy_job_gate?: HeavyJobGateSpec;
   container_engine?: EngineId;

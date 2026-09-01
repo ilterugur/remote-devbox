@@ -1,0 +1,143 @@
+---
+# Paseo ships no unit of its own, so the launcher owns the cgroup its whole agent fleet
+# lives in. Hand-started over SSH on 2026-08-31 that put 136 of one developer's processes
+# in another user's login scope at MemoryMax=infinity — no per-developer wall, no
+# reachable user manager for the heavy-job gate's per-job scope, and four bun tsc runaways
+# at 16-33 GB that each took the host to global OOM. Everything asserted below is one of
+# the things a hand-started supervisor cannot carry.
+- name: Verify paseo daemon service rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    paseo_row:
+      user: dev-a
+      heavy_job_gate_enabled: true
+      heavy_job_gate_categories: [build, typecheck, generate, test]
+      heavy_job_gate_wait_timeout_sec: 1800
+      heavy_job_gate_warn_after_sec: 5
+      heavy_job_gate_memory_max: "8G"
+      resources:
+        memory_high: "40G"
+        memory_max: "44G"
+        memory_swap_max: "4G"
+    paseo_row_ungated:
+      user: dev-a
+      heavy_job_gate_enabled: false
+      resources:
+        memory_max: "44G"
+
+  tasks:
+    - name: Render and assert
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-paseo-unit-policy-
+          register: render_dir
+
+        - name: Render the paseo daemon service
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/paseo-daemon.service.j2"
+            dest: "{{ render_dir.path }}/paseo-daemon.service"
+            mode: "0600"
+          vars:
+            row: "{{ paseo_row }}"
+
+        - name: Read the paseo daemon service
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/paseo-daemon.service"
+          register: paseo_unit
+
+        - name: Assert the ceiling and the OOM hardening reach the unit file
+          ansible.builtin.assert:
+            that:
+              - "'MemoryHigh=40G' in paseo_unit.content | b64decode"
+              - "'MemoryMax=44G' in paseo_unit.content | b64decode"
+              - "'MemorySwapMax=4G' in paseo_unit.content | b64decode"
+              # The wall must kill the runaway child, not restart the unit and drop
+              # every live session along with it.
+              - "'OOMPolicy=continue' in paseo_unit.content | b64decode"
+              # An exclusion, not the ranking hint `avoid`: parent-slice oomd must never
+              # select a unit that already carries a hard MemoryMax.
+              - "'ManagedOOMPreference=omit' in paseo_unit.content | b64decode"
+              - "'ManagedOOMPreference=avoid' not in paseo_unit.content | b64decode"
+              - "'KillMode=control-group' in paseo_unit.content | b64decode"
+              - "'TimeoutStopSec=30' in paseo_unit.content | b64decode"
+
+        - name: Assert the gate reaches the fleet through this unit's environment
+          ansible.builtin.assert:
+            that:
+              - "'Environment=TMPDIR=/var/tmp/devbox-scratch/dev-a' in paseo_unit.content | b64decode"
+              - "'Environment=PATH=/usr/local/lib/agent-devbox/heavy-command-gate:/home/dev-a/.local/share/mise/shims:/home/dev-a/.local/bin:/usr/local/bin:/usr/bin:/bin' in paseo_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_CATEGORIES=build,typecheck,generate,test' in paseo_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC=1800' in paseo_unit.content | b64decode"
+              - "'Environment=DEVBOX_HEAVY_JOB_WARN_AFTER_SEC=5' in paseo_unit.content | b64decode"
+              # Without this the gate recognises a heavy job, serialises it, then runs it
+              # unbounded — which is exactly how the 33 GB tsc happened.
+              - "'Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX=8G' in paseo_unit.content | b64decode"
+
+        # A version-resolved path would break on the next node upgrade: paseo is an npm
+        # global under a mise-managed node, so installs/node/<v>/bin/paseo moves with the
+        # patch and installs/node/lts/bin/paseo disappears across a major.
+        - name: Assert ExecStart goes through the mise shim, not a resolved install path
+          ansible.builtin.assert:
+            that:
+              - "'ExecStart=/home/dev-a/.local/share/mise/shims/paseo daemon start --foreground' in paseo_unit.content | b64decode"
+              - "'installs/node' not in paseo_unit.content | b64decode"
+              - "'WantedBy=default.target' in paseo_unit.content | b64decode"
+
+        # `paseo daemon start` exits 1 when another daemon holds the socket. Without a
+        # start limit that is a permanent loop: a hand-written unit on this box reached
+        # NRestarts=1686, each attempt 2.06s of CPU and 347M peak, against a
+        # hand-started supervisor it could never displace.
+        - name: Assert the restart loop is bounded and the tailnet is ordered first
+          ansible.builtin.assert:
+            that:
+              - "'StartLimitIntervalSec=60' in paseo_unit.content | b64decode"
+              - "'StartLimitBurst=5' in paseo_unit.content | b64decode"
+              - "'After=network-online.target tailscaled.service' in paseo_unit.content | b64decode"
+
+        # Line-anchored, not substring: a Jinja comment with a leading dash strips the
+        # newline before it, and an earlier revision of this template rendered
+        # "OOMPolicy=continueManagedOOMPreference=omit" as one line. Both substrings were
+        # present, so a substring assertion passed while systemd saw one unknown key.
+        - name: Assert every directive is on its own line
+          ansible.builtin.assert:
+            that:
+              - "'\nOOMPolicy=continue\n' in paseo_unit.content | b64decode"
+              - "'\nManagedOOMPreference=omit\n' in paseo_unit.content | b64decode"
+              - "'\nMemoryMax=44G\n' in paseo_unit.content | b64decode"
+              - "'\nMemorySwapMax=4G\n' in paseo_unit.content | b64decode"
+              - "'continueManagedOOM' not in paseo_unit.content | b64decode"
+
+        - name: Render the paseo daemon service with the gate disabled
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/paseo-daemon.service.j2"
+            dest: "{{ render_dir.path }}/paseo-daemon-ungated.service"
+            mode: "0600"
+          vars:
+            row: "{{ paseo_row_ungated }}"
+
+        - name: Read the ungated paseo daemon service
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/paseo-daemon-ungated.service"
+          register: paseo_unit_ungated
+
+        # Opting out of the gate must drop the gate, never the containment: the ceiling
+        # is what keeps a runaway off the host whether or not jobs are queued.
+        - name: Assert an opted-out gate leaves the ceiling intact
+          ansible.builtin.assert:
+            that:
+              - "'heavy-command-gate' not in paseo_unit_ungated.content | b64decode"
+              - "'DEVBOX_HEAVY_JOB' not in paseo_unit_ungated.content | b64decode"
+              - "'MemoryMax=44G' in paseo_unit_ungated.content | b64decode"
+              - "'ManagedOOMPreference=omit' in paseo_unit_ungated.content | b64decode"
+
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

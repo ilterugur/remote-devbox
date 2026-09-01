@@ -410,6 +410,17 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   if (d.codex_remote_control !== undefined && typeof d.codex_remote_control !== "boolean") {
     issues.push(err(`${base}.codex_remote_control`, "must be true or false"));
   }
+  validateResources(d.paseo_resources, `${base}.paseo_resources`, issues, { allowServiceKnobs: true });
+  if (d.paseo_daemon !== undefined && typeof d.paseo_daemon !== "boolean") {
+    issues.push(err(`${base}.paseo_daemon`, "must be true or false"));
+  }
+  // No inherited default for this one ceiling. Every other service here can fall back to
+  // the box-wide RC resources, but the Paseo daemon aggregates every agent session the
+  // developer runs: the 12G RC default would put a measured 28 GB fleet under a hard wall
+  // and kill it on the first apply. Make the operator state a measured number.
+  if (d.paseo_daemon === true && !(isRecord(d.paseo_resources) && d.paseo_resources.memory_max !== undefined)) {
+    issues.push(err(`${base}.paseo_resources.memory_max`, "required when paseo_daemon is true"));
+  }
   validateAgentConfig(d.agent_config, `${base}.agent_config`, issues);
   validateGitIdentities(d, base, issues);
   validateAgentVersions(d, base, issues);

@@ -62,6 +62,7 @@ devbox_remote_control:
 devbox_rc_units: []
 devbox_codex_units: []
 devbox_codex_remote_control_units: []
+devbox_paseo_units: []
 
 devbox_developers:
   - user: dev-a
