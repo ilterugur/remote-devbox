@@ -30,6 +30,10 @@ cat >"$tmp/real-bin/fake-command" <<'EOF'
 set -euo pipefail
 
 state_dir=${DEVBOX_GATE_TEST_STATE:?}
+
+if [[ -n "${DEVBOX_GATE_CAPTURE_ARGS:-}" ]]; then
+  printf '%s\n' "$@" >"$DEVBOX_GATE_CAPTURE_ARGS"
+fi
 exec 8>>"$state_dir/counter.lock"
 flock 8
 active=$(cat "$state_dir/active" 2>/dev/null || echo 0)
@@ -41,7 +45,19 @@ if (( active > maximum )); then
 fi
 flock -u 8
 
-if [[ " $* " == *" build:nested "* ]]; then
+if [[ " $* " == *" build:nested-stripped "* ]]; then
+  # Turbo's strict environment drops the gate's DEVBOX_* ownership variables. The
+  # nested command still belongs to the same bounded scope and must not queue behind it.
+  (
+    inherited_fd=${DEVBOX_HEAVY_JOB_FD:?}
+    eval "exec ${inherited_fd}>&-"
+    env -u DEVBOX_HEAVY_JOB_FD \
+      -u DEVBOX_HEAVY_JOB_OWNER_PID \
+      -u DEVBOX_HEAVY_JOB_OWNER_START \
+      -u DEVBOX_HEAVY_JOB_OWNER_FD \
+      bun ./scripts/generate-declarations.ts
+  )
+elif [[ " $* " == *" build:nested "* ]]; then
   # Node/Bun subprocess launchers can close non-stdio descriptors. The parent still
   # owns the slot, so a nested shim must validate that ancestor instead of deadlocking.
   (
@@ -136,6 +152,14 @@ wait "$light_a"
 wait "$light_b"
 [[ $(cat "$tmp/maximum") == 2 ]] || fail "light commands were serialized"
 
+guard_path="$tmp/process-kill-guard.ts"
+touch "$guard_path"
+DEVBOX_BUN_KILL_GUARD="$guard_path" DEVBOX_GATE_CAPTURE_ARGS="$tmp/guard.args" bun --version
+mapfile -t guard_args <"$tmp/guard.args"
+[[ "${guard_args[0]-}" == --preload && "${guard_args[1]-}" == "$guard_path" &&
+   "${guard_args[2]-}" == --version ]] \
+  || fail "bun did not preload the UID-wide signal guard: ${guard_args[*]-}"
+
 # A direct `tsc` is the heaviest thing an agent runs and the only one mise does not
 # shadow on PATH, so it is the one command that always reached the gate. It was also
 # the one the gate declined: its case arm set a status the function then discarded by
@@ -202,8 +226,8 @@ if command -v systemd-run >/dev/null 2>&1 &&
     || fail "gated job stayed in the ambient cgroup: $scope_cgroup"
   [[ "$scope_cgroup" == *.scope ]] \
     || fail "gated job did not run inside its own scope: $scope_cgroup"
-  [[ "$scope_out" == *"GOMEMLIMIT=1G"* ]] \
-    || fail "gated job did not receive GOMEMLIMIT: $scope_out"
+  [[ "$scope_out" == *"GOMEMLIMIT=1GiB"* ]] \
+    || fail "gated job did not receive GOMEMLIMIT in Go's spelling: $scope_out"
 
   # A scope that does not actually carry the ceiling is theatre.
   [[ "$scope_out" == *"MEMMAX=1073741824"* ]] \
@@ -224,6 +248,26 @@ if command -v systemd-run >/dev/null 2>&1 &&
   DEVBOX_HEAVY_JOB_MEMORY_MAX=1G timeout 5 bun run build:nested
   [[ $(cat "$tmp/active") == 0 ]] || fail "scoped nested heavy command leaked active state"
 
+  # Turbo also strips every DEVBOX_* ownership variable in strict mode. Scope identity
+  # must be enough to recognize the nested work without weakening cross-scope locking.
+  reset_counter
+  DEVBOX_HEAVY_JOB_MEMORY_MAX=1G timeout 5 bun run build:nested-stripped
+  [[ $(cat "$tmp/active") == 0 ]] || fail "scope-local nested command leaked active state"
+
+  # The hole that took the host down three times on 2026-08-31: a fleet whose ancestor
+  # daemon was started outside the user's systemd manager inherits no budget, and an
+  # unbounded `bun tsc` then reached 33G. An absent budget must still land in a scope
+  # that carries the default ceiling.
+  reset_counter
+  scope_out=$(next build 2>/dev/null) || fail "gate did not run with a defaulted ceiling"
+  [[ "$(printf '%s\n' "$scope_out" | head -1)" == *.scope ]] \
+    || fail "unbudgeted heavy job ran unscoped: $scope_out"
+  [[ "$scope_out" == *"MEMMAX=8589934592"* ]] \
+    || fail "defaulted scope carried no 8G ceiling: $scope_out"
+  [[ "$scope_out" == *"GOMEMLIMIT=8GiB"* ]] \
+    || fail "defaulted scope carried no Go hint: $scope_out"
+
+
   echo "heavy command gate: scope containment OK"
 else
   echo "heavy command gate: SKIP scope containment (no reachable systemd user manager)"
@@ -240,9 +284,13 @@ scope_out=$(
 [[ "$(printf '%s\n' "$scope_out" | head -1)" == "$ambient_cgroup" ]] \
   || fail "expected an unscoped run without a user manager, got $scope_out"
 
-# No ceiling configured is the untouched path: no scope, and no GOMEMLIMIT invented.
-scope_out=$(next build 2>/dev/null) || fail "gate did not run without a ceiling"
+# `infinity` is the explicit opt-out: the caller asked for no ceiling, so no scope and
+# no GOMEMLIMIT invented either.
+scope_out=$(DEVBOX_HEAVY_JOB_MEMORY_MAX=infinity next build 2>/dev/null) \
+  || fail "gate did not run with the ceiling opted out"
+[[ "$(printf '%s\n' "$scope_out" | head -1)" == "$ambient_cgroup" ]] \
+  || fail "opted-out job was scoped anyway: $scope_out"
 [[ "$scope_out" == *"GOMEMLIMIT=unset"* ]] \
-  || fail "gate invented a GOMEMLIMIT with no ceiling configured: $scope_out"
+  || fail "gate invented a GOMEMLIMIT with the ceiling opted out: $scope_out"
 
 echo "heavy command gate: PASS"

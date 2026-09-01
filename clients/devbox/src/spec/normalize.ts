@@ -177,6 +177,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_rc_units: normalizeRcUnits(resolved),
     devbox_codex_units: normalizeCodexUnits(resolved, hostHeavyJobGate),
     devbox_codex_remote_control_units: normalizeCodexRemoteControlUnits(resolved, hostHeavyJobGate),
+    devbox_paseo_units: normalizePaseoUnits(resolved, hostHeavyJobGate),
     devbox_developers: resolved.developers.map((dev) =>
       normalizeDeveloper(dev, tailscale, client, clientPorts, hostHeavyJobGate),
     ),
@@ -336,6 +337,45 @@ function codexUnitEnvelope(
     heavy_job_gate_memory_max: heavyJobGate.memory_max,
     resources,
   };
+}
+
+/**
+ * The Paseo daemon, one unit per developer that asks for it.
+ *
+ * Paseo ships no service definition: `paseo daemon start --foreground` is a supervisor
+ * that keeps running wherever it was launched, so whoever starts it decides the cgroup
+ * its entire agent fleet lives in. Start it from an interactive SSH session and the
+ * fleet lands in that session's scope; when the session leader exits, the supervisor
+ * reparents to init and the cgroup stays behind it. Measured 2026-08-31: 136 processes
+ * belonging to one developer sat in ANOTHER user's login scope at `MemoryMax=infinity`,
+ * so the developer's own 56G/4G wall governed nothing, and `systemd-run --user` was not
+ * even reachable (no `XDG_RUNTIME_DIR`), which silently disabled the heavy-job gate's
+ * per-job scope. Four `bun tsc` runaways at 16-33 GB RSS followed, each one taking the
+ * host to global OOM rather than dying alone.
+ *
+ * Unlike the Codex daemons this envelope does NOT start from the box-wide RC resources.
+ * Those default to a 12G ceiling, which is right for one project's session and fatal
+ * for a unit that aggregates every agent session the developer runs — the measured
+ * baseline here is 28 GB across 14 sessions. `paseo_resources.memory_max` is required
+ * instead (see validate.ts), so the ceiling is always a number someone measured.
+ */
+function normalizePaseoUnits(
+  resolved: ResolvedSpec,
+  hostHeavyJobGate: NormalizedHeavyJobGate,
+): Record<string, unknown>[] {
+  return resolved.developers.flatMap((dev) => {
+    if (!dev.paseo_daemon) return [];
+    const heavyJobGate = normalizeHeavyJobGate(hostHeavyJobGate, dev.heavy_job_gate);
+    return [{
+      user: dev.user,
+      heavy_job_gate_enabled: heavyJobGate.enabled,
+      heavy_job_gate_categories: HEAVY_JOB_CATEGORIES.filter((category) => heavyJobGate.categories[category]),
+      heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
+      heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
+      heavy_job_gate_memory_max: heavyJobGate.memory_max,
+      resources: normalizeDirectMemoryResources({ ...(dev.paseo_resources ?? {}) }, true),
+    }];
+  });
 }
 
 function normalizeDeveloper(

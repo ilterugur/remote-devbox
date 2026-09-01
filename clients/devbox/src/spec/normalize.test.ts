@@ -242,6 +242,53 @@ test("codex remote control shares the code-mode host's resolved resource envelop
   expect(rc.resources).toEqual(host.resources);
 });
 
+test("the paseo daemon is opt-in and off by default", () => {
+  expect(normalize(resolved).devbox_paseo_units).toEqual([]);
+});
+
+// The gate settings are the point of managing this unit: a hand-started supervisor
+// resolves bun/node/tsc straight from mise and inherits no budget, so every heavy job
+// its agents spawn runs unqueued and unbounded.
+test("an opted-in developer gets a paseo unit carrying the gate and its stated ceiling", () => {
+  const units = normalize({
+    ...resolved,
+    developers: [{
+      ...resolved.developers[0]!,
+      paseo_daemon: true,
+      paseo_resources: { memory_high: "40G", memory_max: "44G", memory_swap_max: "4G" },
+    }],
+  }).devbox_paseo_units as Record<string, unknown>[];
+
+  expect(units).toHaveLength(1);
+  expect(units[0]).toMatchObject({
+    user: "dev-a",
+    heavy_job_gate_enabled: true,
+    heavy_job_gate_categories: ["build", "typecheck", "generate", "test"],
+  });
+  expect(units[0]!.resources).toEqual({
+    memory_high: "40G",
+    memory_max: "44G",
+    memory_swap_max: "4G",
+  });
+});
+
+// Unlike every other service ceiling here, this one must not inherit the box-wide RC
+// resources. That default is 12G, which is right for one project's session and fatal
+// for a unit holding a developer's entire measured 28 GB fleet.
+test("the paseo ceiling is never inherited from remote_control.resources", () => {
+  const units = normalize({
+    ...resolved,
+    remote_control: { resources: { memory_high: "8G", memory_max: "12G", memory_swap_max: "1G" } },
+    developers: [{
+      ...resolved.developers[0]!,
+      paseo_daemon: true,
+      paseo_resources: { memory_max: "44G" },
+    }],
+  }).devbox_paseo_units as Record<string, unknown>[];
+
+  expect(units[0]!.resources).toEqual({ memory_max: "44G" });
+});
+
 test("absent optionals become concrete values, never undefined", () => {
   const dev = dev0();
   expect(dev.adopt_existing).toBe(false);

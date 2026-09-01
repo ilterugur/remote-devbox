@@ -1,0 +1,85 @@
+{# Managed by Ansible (remote-devbox). The Paseo daemon: one supervisor per developer,
+   parent of every Paseo/omp agent session that developer runs.
+
+   Paseo ships no unit of its own — `paseo daemon start --foreground` simply keeps
+   running wherever it was launched. That makes the launcher, not Paseo, the owner of
+   the cgroup the whole agent fleet lives in, and this unit exists to take that
+   ownership back. Measured 2026-08-31 on this box, with the supervisor hand-started
+   from a devbox-admin SSH session:
+
+     - Its 136 processes sat in `user-1001.slice/session-19313.scope` — another user's
+       login scope, at MemoryMax=infinity. The developer's own 56G/4G wall governed
+       nothing, so the kernel's GLOBAL OOM killer was the only limit left.
+     - No XDG_RUNTIME_DIR reached the fleet, so `systemd-run --user --scope` was
+       unreachable and the heavy-job gate silently fell back to running jobs unbounded.
+     - No DEVBOX_HEAVY_JOB_MEMORY_MAX reached it either, which was the second half of
+       the same hole.
+     - Four `bun tsc --noEmit` runaways followed (16G, 17G, 25G, 33G RSS), each one
+       exhausting 10 GB of swap and stalling every session on the host.
+
+   ExecStart goes through mise's shim rather than a resolved path: Paseo is an npm
+   global under a mise-managed node, so `installs/node/<version>/bin/paseo` moves on
+   every node upgrade and `installs/node/lts/bin/paseo` disappears across a node major
+   (npm globals do not follow). The shim resolves at exec time and survives both. #}
+{% set L = row.resources %}
+[Unit]
+Description=Paseo daemon ({{ row.user }})
+{# Paseo reaches its relay over the tailnet here, so tailscaled has to be up first or
+   the daemon starts by failing over to a path it did not need. #}
+After=network-online.target tailscaled.service
+Wants=network-online.target
+{# The guard a hand-written unit on this box was missing. `paseo daemon start` exits 1
+   when another daemon already holds the socket, and with Restart= and no start limit
+   that becomes a permanent loop: measured 2026-08-31, NRestarts=1686 against a
+   hand-started supervisor, each attempt burning 2.06s of CPU and peaking at 347M
+   before dying — roughly an hour of CPU and a 350M alloc/free cycle every five seconds
+   on a host that was already out of memory. Five failures in a minute is enough
+   evidence that something else owns the socket; stop and stay stopped. #}
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+{# Disk-backed scratch, for the same reason as the Codex units: /tmp is a tmpfs at half
+   of RAM, and an agent build writing there competes with the memory it is bounded by. #}
+Environment=TMPDIR=/var/tmp/devbox-scratch/{{ row.user }}
+Environment=PATH={% if row.heavy_job_gate_enabled | default(true) %}/usr/local/lib/agent-devbox/heavy-command-gate:{% endif %}/home/{{ row.user }}/.local/share/mise/shims:/home/{{ row.user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+{% if row.heavy_job_gate_enabled | default(true) %}Environment=DEVBOX_HEAVY_JOB_CATEGORIES={{ row.heavy_job_gate_categories | default(['build', 'typecheck', 'generate', 'test']) | join(',') }}
+Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC={{ row.heavy_job_gate_wait_timeout_sec | default(1800) }}
+Environment=DEVBOX_HEAVY_JOB_WARN_AFTER_SEC={{ row.heavy_job_gate_warn_after_sec | default(5) }}
+Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX={{ row.heavy_job_gate_memory_max | default('8G') }}
+{% endif %}
+ExecStart=/home/{{ row.user }}/.local/share/mise/shims/paseo daemon start --foreground
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+{% if 'memory_high' in L %}MemoryHigh={{ L.memory_high }}
+{% endif %}
+{%- if 'memory_max' in L %}MemoryMax={{ L.memory_max }}
+{% endif %}
+{%- if 'memory_swap_max' in L %}MemorySwapMax={{ L.memory_swap_max }}
+{% endif %}
+{%- if 'cpu_weight' in L %}CPUWeight={{ L.cpu_weight }}
+{% endif %}
+{%- if 'cpu_quota' in L %}CPUQuota={{ L.cpu_quota }}
+{% endif %}
+{%- if 'io_weight' in L %}IOWeight={{ L.io_weight }}
+{% endif %}
+{%- if 'nice' in L %}Nice={{ L.nice }}
+{% endif %}
+{%- if 'oom_score_adjust' in L %}OOMScoreAdjust={{ L.oom_score_adjust }}
+{% endif %}
+{#- The unit's MemoryMax is a wall the kernel enforces by killing the largest task
+    inside it, which for this failure mode is always the runaway build and never the
+    supervisor. `continue` keeps that a per-runaway casualty instead of a unit restart
+    that would drop every live session with it. #}
+OOMPolicy={{ L.oom_policy | default('continue') }}
+{# Same reasoning as the Codex code-mode host: this unit aggregates every agent session
+   for the developer and already carries a hard MemoryMax, so parent-slice oomd must
+   not select it and take all of them down together. `omit` is an exclusion, not the
+   ranking hint `avoid` is. #}
+ManagedOOMPreference=omit
+
+[Install]
+WantedBy=default.target

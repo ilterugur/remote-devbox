@@ -117,6 +117,18 @@ test("the example tiers OMP roles across balanced, provider-pure, and economical
       task: "opencode-go/deepseek-v4-flash:max",
       advisor: "opencode-go/kimi-k3:max",
     },
+    cursor: {
+      default: "cursor/composer-2.5:inherit",
+      smol: "cursor/grok-4.6:high",
+      slow: "cursor/claude-opus-5-thinking-xhigh:inherit",
+      vision: "cursor/gemini-3.1-pro:high",
+      plan: "cursor/claude-opus-5-high:inherit",
+      designer: "cursor/claude-sonnet-5-high:inherit",
+      commit: "cursor/composer-2.5:inherit",
+      tiny: "cursor/gpt-5.4-nano:low",
+      task: "cursor/gpt-5.6-terra",
+      advisor: "cursor/claude-opus-5-high:inherit",
+    },
   });
 });
 
