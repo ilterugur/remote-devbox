@@ -10,20 +10,30 @@ import {
 } from "./config";
 import { normalizePath, pathsOverlap, syncDiskRoot } from "./bridge";
 import { STORE_ROOT } from "./app-configs/registry";
-import { DEFAULT_IGNORES, engineFor, type SyncEngine, type SyncStatus } from "./sync/engine";
+import {
+  DEFAULT_IGNORES, engineFor, type SyncAutostart, type SyncEngine, type SyncStatus,
+} from "./sync/engine";
 import type { LocalHealthResult } from "./health";
 
 export type SyncPlan = { localRoot: string; remoteRoot: string; host: string; engine: EngineId; ignores: string[] };
 
-export function syncHealthFromStatus(profile: string, evidence: SyncStatus): LocalHealthResult {
+export function syncHealthFromStatus(
+  profile: string,
+  evidence: SyncStatus,
+  autostart: SyncAutostart | null = null,
+): LocalHealthResult {
   const observed = [
     `session ${evidence.name}`,
     `state ${evidence.state || "unknown"}`,
     evidence.conflicts === null ? "conflicts unknown" : `conflicts ${evidence.conflicts}`,
+    ...(autostart ? [`login autostart ${autostart.registered ? "registered" : "not registered"}`] : []),
   ];
   const base = {
     id: `client.sync.${profile}`,
-    expected: ["sync session active with exactly zero conflicts"],
+    expected: [
+      "sync session active with exactly zero conflicts",
+      ...(autostart ? ["client sync daemon registered for login autostart"] : []),
+    ],
     observed,
     recovery: "automatic" as const,
   };
@@ -36,6 +46,11 @@ export function syncHealthFromStatus(profile: string, evidence: SyncStatus): Loc
   if (/paused/i.test(evidence.state)) return { ...base, status: "degraded", reason: "sync_paused" };
   if (/disconnected|offline|error|halted/i.test(evidence.state)) {
     return { ...base, status: "failed", reason: "sync_disconnected" };
+  }
+  // A session that is syncing right now but whose daemon nothing supervises is not
+  // healthy: it stops at the next reboot and reports nothing while it is stopped.
+  if (autostart && !autostart.registered) {
+    return { ...base, status: "degraded", reason: "sync_autostart_unregistered" };
   }
   return { ...base, status: "healthy" };
 }
@@ -79,19 +94,28 @@ export async function collectSyncHealth(
       recovery: "automatic",
     };
   }
-  return syncHealthFromStatus(profile, evidence);
+  return syncHealthFromStatus(profile, evidence, engine.autostart?.() ?? null);
 }
 
 export type SyncRecoveryDecision =
-  | { action: "up" | "resume" | "skip"; reason: string }
+  | { action: "up" | "resume" | "autostart" | "skip"; reason: string }
   | { action: "refuse"; reason: string };
 
-export function decideSyncRecovery(evidence: SyncStatus): SyncRecoveryDecision {
+export function decideSyncRecovery(
+  evidence: SyncStatus,
+  autostart: SyncAutostart | null = null,
+): SyncRecoveryDecision {
   if (evidence.conflicts === null) return { action: "refuse", reason: "sync_conflicts_unknown" };
   if (evidence.conflicts > 0) return { action: "refuse", reason: "sync_conflicts" };
   if (/paused/i.test(evidence.state)) return { action: "resume", reason: "sync_paused" };
   if (/disconnected|offline|error|halted/i.test(evidence.state)) {
     return { action: "up", reason: "sync_disconnected" };
+  }
+  // Session evidence is clean, so the only thing left to fix is the supervisor. Ordered
+  // last on purpose: registering it restarts the daemon, which is the wrong move while
+  // a session is mid-conflict or mid-reconnect.
+  if (autostart && !autostart.registered) {
+    return { action: "autostart", reason: "sync_autostart_unregistered" };
   }
   return { action: "skip", reason: "already_healthy" };
 }
@@ -99,20 +123,26 @@ export function decideSyncRecovery(evidence: SyncStatus): SyncRecoveryDecision {
 export interface SyncRecoveryActions {
   up: (session: string) => Promise<void>;
   resume: (session: string) => Promise<void>;
+  autostart: (session: string) => Promise<void>;
 }
 
 export async function recoverSync(
   evidence: SyncStatus,
   actions: SyncRecoveryActions,
+  autostart: SyncAutostart | null = null,
 ): Promise<{ status: "recovered" | "skipped" | "blocked" | "failed"; reason: string }> {
-  const decision = decideSyncRecovery(evidence);
+  const decision = decideSyncRecovery(evidence, autostart);
   if (decision.action === "refuse") return { status: "blocked", reason: decision.reason };
   if (decision.action === "skip") return { status: "skipped", reason: decision.reason };
   try {
     await actions[decision.action](evidence.name);
     return {
       status: "recovered",
-      reason: decision.action === "resume" ? "sync_resumed" : "sync_started",
+      reason: decision.action === "resume"
+        ? "sync_resumed"
+        : decision.action === "autostart"
+          ? "sync_autostart_registered"
+          : "sync_started",
     };
   } catch {
     return { status: "failed", reason: "sync_action_failed" };
@@ -133,7 +163,8 @@ export async function recoverSyncLive(
   }
   const evidence = statuses.find((candidate) => candidate.name === `devbox-${profile}`);
   if (!evidence) return { status: "blocked", reason: "sync_session_missing" };
-  const health = syncHealthFromStatus(profile, evidence);
+  const autostart = engine.autostart?.() ?? null;
+  const health = syncHealthFromStatus(profile, evidence, autostart);
   if (health.reason !== expectedReason || (health.status !== "failed" && health.status !== "degraded")) {
     return { status: "blocked", reason: "sync_evidence_changed" };
   }
@@ -142,7 +173,13 @@ export async function recoverSyncLive(
     // without deleting or recreating it. The "up" decision is semantic, not a recreate.
     up: async () => engine.resume(profile),
     resume: async () => engine.resume(profile),
-  });
+    // Report failure from the re-probe, not from the call: installing the supervisor is
+    // several best-effort steps that never throw.
+    autostart: async () => {
+      engine.ensureAutostart?.();
+      if (!engine.autostart?.()?.registered) throw new Error("autostart not registered");
+    },
+  }, autostart);
   if (result.status === "recovered") return { status: "acted", reason: result.reason };
   if (result.status === "failed") return { status: "failed", reason: result.reason };
   return { status: "blocked", reason: result.reason };

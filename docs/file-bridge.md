@@ -64,6 +64,15 @@ dirs (`node_modules`, `dist`, `build`, `.next`, `target`), and OS/editor cruft (
 recreating the session (`devbox sync down && devbox sync up`). Keep git history on the box as your
 real undo.
 
+`devbox sync up` also hands the client-side Mutagen daemon to launchd (`mutagen daemon
+register` + `io.mutagen.mutagen`), so the disk syncs again after a reboot without anyone
+typing a command. That matters because nothing complains when it is missing: an
+unsupervised daemon simply stops at logout, and the next mutagen command starts one and
+makes the gap invisible. `devbox doctor` therefore reports the supervisor as its own
+evidence line — a session that is syncing right now but whose daemon is not registered
+is `degraded` (`sync_autostart_unregistered`), and `devbox recover client.sync.<profile>`
+installs it.
+
 ### Using Syncthing instead of Mutagen
 
 Set `sync_engine: syncthing` for the profile, re-run the playbook with `--tags syncthing`

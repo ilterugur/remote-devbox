@@ -739,7 +739,8 @@ const launchctl = (...args: string[]) => spawnSync("launchctl", args, { encoding
 
 const domain = (): string => `gui/${process.getuid?.() ?? 0}`;
 
-function isLoaded(label: string): boolean {
+/** True when launchd currently owns `label` in this user's GUI domain. */
+export function isLoaded(label: string): boolean {
   return launchctl("print", `${domain()}/${label}`).status === 0;
 }
 

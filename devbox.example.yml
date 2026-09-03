@@ -291,7 +291,7 @@ developers:
     # Provider binaries shared by several profiles are pinned once per developer.
     # OMP rejects floating tags/ranges so a later `devbox apply` is a controlled upgrade.
     agent_versions:
-      omp: "18.0.5"
+      omp: "18.1.2"
 
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:

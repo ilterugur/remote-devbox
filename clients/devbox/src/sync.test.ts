@@ -111,20 +111,45 @@ describe("syncHealthFromStatus", () => {
       reason: "sync_session_missing",
     });
   });
+
+  test("a syncing session whose daemon nothing supervises is degraded, not healthy", () => {
+    const result = syncHealthFromStatus("work", status("Watching for changes", 0), { registered: false });
+    expect(result).toMatchObject({ status: "degraded", reason: "sync_autostart_unregistered" });
+    expect(result.observed).toContain("login autostart not registered");
+    expect(syncHealthFromStatus("work", status("Watching for changes", 0), { registered: true }).status)
+      .toBe("healthy");
+    // A real failure still wins: the supervisor is the last thing to report.
+    expect(syncHealthFromStatus("work", status("Disconnected", 0), { registered: false }).reason)
+      .toBe("sync_disconnected");
+  });
+
+  test("an engine with no client daemon reports no autostart evidence at all", async () => {
+    const engine: SyncEngine = {
+      id: "syncthing",
+      up: async () => {}, down: async () => {}, pause: async () => {}, resume: async () => {},
+      status: async () => [status("Watching", 0)],
+    };
+    const result = await collectSyncHealth(base, "work", engine);
+    expect(result?.status).toBe("healthy");
+    expect(result?.observed.join(" ")).not.toContain("autostart");
+  });
 });
 
 describe("recoverSync", () => {
   test("runs only the bounded action selected with exactly zero conflicts", async () => {
     const actions: string[] = [];
-    expect(await recoverSync(status("Disconnected", 0), {
-      up: async (name) => { actions.push(`up:${name}`); },
-      resume: async (name) => { actions.push(`resume:${name}`); },
-    })).toEqual({ status: "recovered", reason: "sync_started" });
-    expect(await recoverSync(status("paused", 0), {
-      up: async (name) => { actions.push(`up:${name}`); },
-      resume: async (name) => { actions.push(`resume:${name}`); },
-    })).toEqual({ status: "recovered", reason: "sync_resumed" });
-    expect(actions).toEqual(["up:devbox-work", "resume:devbox-work"]);
+    const record = {
+      up: async (name: string) => { actions.push(`up:${name}`); },
+      resume: async (name: string) => { actions.push(`resume:${name}`); },
+      autostart: async (name: string) => { actions.push(`autostart:${name}`); },
+    };
+    expect(await recoverSync(status("Disconnected", 0), record))
+      .toEqual({ status: "recovered", reason: "sync_started" });
+    expect(await recoverSync(status("paused", 0), record))
+      .toEqual({ status: "recovered", reason: "sync_resumed" });
+    expect(await recoverSync(status("Watching for changes", 0), record, { registered: false }))
+      .toEqual({ status: "recovered", reason: "sync_autostart_registered" });
+    expect(actions).toEqual(["up:devbox-work", "resume:devbox-work", "autostart:devbox-work"]);
   });
 
   test("never mutates conflicts, unknown conflict counts, or an active session", async () => {
@@ -137,6 +162,7 @@ describe("recoverSync", () => {
       const result = await recoverSync(evidence, {
         up: async () => { called = true; },
         resume: async () => { called = true; },
+        autostart: async () => { called = true; },
       });
       expect(called).toBe(false);
       expect(result.status).not.toBe("recovered");
@@ -146,6 +172,17 @@ describe("recoverSync", () => {
   test("the pure decision table exposes the conflict boundary", () => {
     expect(decideSyncRecovery(status("Disconnected", 3))).toEqual({ action: "refuse", reason: "sync_conflicts" });
     expect(decideSyncRecovery(status("Disconnected", null))).toEqual({ action: "refuse", reason: "sync_conflicts_unknown" });
+  });
+
+  test("a broken session is fixed before its supervisor, and conflicts before either", () => {
+    const unregistered = { registered: false };
+    expect(decideSyncRecovery(status("Disconnected", 0), unregistered).action).toBe("up");
+    expect(decideSyncRecovery(status("paused", 0), unregistered).action).toBe("resume");
+    expect(decideSyncRecovery(status("Disconnected", 2), unregistered).action).toBe("refuse");
+    expect(decideSyncRecovery(status("Watching for changes", 0), unregistered)).toEqual({
+      action: "autostart", reason: "sync_autostart_unregistered",
+    });
+    expect(decideSyncRecovery(status("Watching for changes", 0), { registered: true }).action).toBe("skip");
   });
 
   test("live recovery re-probes the exact named session before resuming it", async () => {
@@ -164,6 +201,25 @@ describe("recoverSync", () => {
     expect(calls).toEqual(["resume:work"]);
     expect(await recoverSyncLive(base, "work", "sync_paused", engine)).toEqual({
       status: "blocked", reason: "sync_evidence_changed",
+    });
+  });
+
+  test("live autostart recovery reports the re-probe, not the best-effort call", async () => {
+    const engine = (installs: boolean): SyncEngine => {
+      let registered = false;
+      return {
+        id: "mutagen",
+        up: async () => {}, down: async () => {}, pause: async () => {}, resume: async () => {},
+        status: async () => [status("Watching for changes", 0)],
+        autostart: () => ({ registered }),
+        ensureAutostart: () => { registered = installs; },
+      };
+    };
+    expect(await recoverSyncLive(base, "work", "sync_autostart_unregistered", engine(true))).toEqual({
+      status: "acted", reason: "sync_autostart_registered",
+    });
+    expect(await recoverSyncLive(base, "work", "sync_autostart_unregistered", engine(false))).toEqual({
+      status: "failed", reason: "sync_action_failed",
     });
   });
 });

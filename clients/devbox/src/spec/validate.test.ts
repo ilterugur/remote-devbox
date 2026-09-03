@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { OMP_MODEL_PRESETS_OMP_VERSION } from "../omp-model-presets/core";
 import { hasErrors } from "./issues";
 import { normalize } from "./normalize";
 import { validateReferences } from "./references";
@@ -288,7 +289,7 @@ test("an OMP profile preserves declarative complete model presets", () => {
       {
         user: "dev-a",
         login_ssh_keys: [KEY],
-        agent_versions: { omp: "18.0.5" },
+        agent_versions: { omp: OMP_MODEL_PRESETS_OMP_VERSION },
         agent_profiles: { "omp-work": { provider: "omp", omp_model_presets: presets } },
       },
     ],
@@ -405,7 +406,7 @@ test("OMP model preset aliases require safe unique names and canonical targets",
       {
         user: "dev-a",
         login_ssh_keys: [KEY],
-        agent_versions: { omp: "18.0.5" },
+        agent_versions: { omp: OMP_MODEL_PRESETS_OMP_VERSION },
         agent_profiles: {
           "omp-work": {
             provider: "omp",

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { buildCreateArgs, buildStatusArgs, parseStatusOutput, sessionName, goAgentFile } from "./mutagen";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  buildCreateArgs, buildStatusArgs, ensureDaemonAutostart, MUTAGEN_AGENT_LABEL, parseStatusOutput,
+  sessionName, goAgentFile,
+} from "./mutagen";
 
 describe("goAgentFile", () => {
   test("maps uname -m to the mutagen agent bundle filename", () => {
@@ -73,4 +79,102 @@ describe("parseStatusOutput", () => {
       { name: "devbox-work", state: "", conflicts: null },
     ]);
   });
+});
+
+/**
+ * Fake `mutagen` and `launchctl` on PATH, plus a fake HOME for the plist. Every
+ * invocation appends its argv to one log, because the ORDER is the contract: mutagen
+ * refuses `daemon register` while a daemon runs, so a register that is not preceded by
+ * a stop silently does nothing — which is exactly how a client ends up with a sync
+ * that never comes back after a reboot.
+ *
+ * `refusals` models the real race: `daemon stop` returns before the process is gone, so
+ * the first N registers answer "unable to alter registration while daemon is running".
+ */
+function withFakeDaemonTools(
+  behavior: { loaded?: boolean; refusals?: number },
+  fn: (log: () => string[], home: string) => void,
+): void {
+  const root = mkdtempSync(join(tmpdir(), "devbox-mutagen-autostart-"));
+  const bin = join(root, "bin");
+  const home = join(root, "home");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+  const logFile = join(root, "calls.log");
+  writeFileSync(logFile, "");
+
+  // `launchctl print` decides "already loaded"; `bootstrap` always succeeds. `mutagen
+  // daemon register` writes the plist the real one writes, so the fs branch is real.
+  const plist = join(home, "Library", "LaunchAgents", `${MUTAGEN_AGENT_LABEL}.plist`);
+  writeFileSync(
+    join(bin, "launchctl"),
+    `#!/bin/sh\necho "launchctl $*" >> ${logFile}\n[ "$1" = print ] && exit ${behavior.loaded ? 0 : 1}\nexit 0\n`,
+  );
+  const refusals = behavior.refusals ?? 0;
+  writeFileSync(
+    join(bin, "mutagen"),
+    `#!/bin/sh\necho "mutagen $*" >> ${logFile}\n`
+      + `if [ "$2" = register ]; then\n`
+      + `  tries=$(grep -c "daemon register" ${logFile})\n`
+      + `  [ "$tries" -le ${refusals} ] && exit 1\n`
+      + `  printf '' > ${plist}\n`
+      + `fi\nexit 0\n`,
+  );
+  chmodSync(join(bin, "launchctl"), 0o755);
+  chmodSync(join(bin, "mutagen"), 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath}`;
+  try {
+    fn(() => readFileSync(logFile, "utf8").split("\n").filter(Boolean), home);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
+const darwinOnly = process.platform === "darwin" ? describe : describe.skip;
+
+darwinOnly("ensureDaemonAutostart", () => {
+  test("stops the daemon before registering it, then hands the restart to launchd", () => {
+    withFakeDaemonTools({}, (log, home) => {
+      ensureDaemonAutostart(home);
+      const calls = log();
+      const stop = calls.indexOf("mutagen daemon stop");
+      const register = calls.indexOf("mutagen daemon register");
+      expect(stop).toBeGreaterThanOrEqual(0);
+      expect(register).toBeGreaterThan(stop);
+      expect(calls.some((c) => c.startsWith("launchctl bootstrap"))).toBe(true);
+      expect(calls.at(-1)).toBe("mutagen daemon start");
+      expect(existsSync(join(home, "Library", "LaunchAgents", `${MUTAGEN_AGENT_LABEL}.plist`))).toBe(true);
+    });
+  });
+
+  test("an already-loaded agent is left alone — no stop, no restart", () => {
+    withFakeDaemonTools({ loaded: true }, (log, home) => {
+      ensureDaemonAutostart(home);
+      expect(log().some((c) => c.startsWith("mutagen"))).toBe(false);
+    });
+  });
+
+  test("registers through the shutdown window instead of giving up on the first refusal", () => {
+    withFakeDaemonTools({ refusals: 3 }, (log, home) => {
+      ensureDaemonAutostart(home);
+      expect(log().filter((c) => c === "mutagen daemon register")).toHaveLength(4);
+      expect(existsSync(join(home, "Library", "LaunchAgents", `${MUTAGEN_AGENT_LABEL}.plist`))).toBe(true);
+      expect(log().some((c) => c.startsWith("launchctl bootstrap"))).toBe(true);
+    });
+  });
+
+  // The bound it asserts is 30 attempts a tenth of a second apart, so the test cannot
+  // finish inside the default 5s budget on a loaded machine.
+  test("a permanently refused registration restarts the daemon it stopped, and bounds its retries", () => {
+    withFakeDaemonTools({ refusals: 999 }, (log, home) => {
+      ensureDaemonAutostart(home);
+      const calls = log().filter((c) => c.startsWith("mutagen"));
+      expect(calls[0]).toBe("mutagen daemon stop");
+      expect(calls.at(-1)).toBe("mutagen daemon start");
+      expect(calls.filter((c) => c === "mutagen daemon register")).toHaveLength(30);
+      expect(log().some((c) => c.startsWith("launchctl bootstrap"))).toBe(false);
+    });
+  }, 30_000);
 });

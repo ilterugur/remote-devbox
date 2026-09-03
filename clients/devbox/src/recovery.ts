@@ -90,7 +90,7 @@ const REGISTRY: RegisteredPattern[] = [
     "mount_absent", "mount_disconnected_clean",
   ]),
   registration("client.sync.*", /^client\.sync\.[a-z_][a-z0-9_-]{0,31}$/, "automatic", "client-sync", [
-    "sync_disconnected", "sync_paused",
+    "sync_disconnected", "sync_paused", "sync_autostart_unregistered",
   ]),
   registration("box.transport", /^box\.transport$/, "none", "none", []),
   registration("box.snapshot", /^box\.snapshot$/, "none", "none", []),

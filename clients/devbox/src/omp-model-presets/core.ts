@@ -1,4 +1,4 @@
-/** OMP 18.0.5's built-in role contract. Preset names and model selectors remain inventory data. */
+/** OMP 18.1.2's built-in role contract. Preset names and model selectors remain inventory data. */
 export const MODEL_ROLE_IDS = [
   "default",
   "smol",
@@ -14,7 +14,7 @@ export const MODEL_ROLE_IDS = [
 
 export const OMP_THINKING_LEVELS = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const PRESET_STATE_CUSTOM_TYPE = "omp-model-presets/state";
-export const OMP_MODEL_PRESETS_OMP_VERSION = "18.0.5";
+export const OMP_MODEL_PRESETS_OMP_VERSION = "18.1.2";
 export const PRESET_RESERVED_NAMES = ["status", "list", "show", "reset"] as const;
 export const PRESET_STATE_VERSION = 1 as const;
 

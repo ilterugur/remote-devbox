@@ -6,10 +6,14 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { bootstrapAgent, isLoaded, plistPath } from "../agent";
 import { die } from "../config";
-import type { SyncEngine, SyncStatus, SyncUpOpts } from "./engine";
+import type { SyncAutostart, SyncEngine, SyncStatus, SyncUpOpts } from "./engine";
+
+/** The label `mutagen daemon register` writes on macOS (KeepAlive, Aqua session). */
+export const MUTAGEN_AGENT_LABEL = "io.mutagen.mutagen";
 
 export const sessionName = (profile: string): string => `devbox-${profile}`;
 
@@ -22,6 +26,62 @@ export function goAgentFile(uname: string): string | null {
 }
 
 const sshb = (host: string, cmd: string) => spawnSync("ssh", ["-o", "BatchMode=yes", host, cmd], { encoding: "utf8" });
+
+/** Bounded wait for the daemon to actually exit after `daemon stop` (3s at 0.1s each). */
+const REGISTER_ATTEMPTS = 30;
+
+/**
+ * Make the Mutagen daemon launchd's problem rather than a side effect of the last
+ * `devbox` command that happened to run.
+ *
+ * Without this the disk stops syncing at every reboot, silently and for as long as
+ * nobody runs a devbox command: the daemon is started on demand by whichever mutagen
+ * subcommand needs it, so an interactive `devbox sync status` "fixes" it and hides
+ * how long the box and the client had been drifting apart. Measured on a client
+ * booted 3h earlier: zero sync, 442-file disk, no error anywhere.
+ *
+ * `mutagen daemon register` writes the plist but REFUSES while a daemon is running,
+ * and it never starts what it registered — so registration has to stop the daemon
+ * first and hand the restart to launchd. The stop is not destructive: sessions live in
+ * the daemon's own on-disk database and resume when it comes back.
+ *
+ * `daemon stop` returns when the daemon has ACCEPTED the shutdown, not when its process
+ * is gone, so a register fired straight after it still loses the race ("unable to alter
+ * registration while daemon is running"). Retry in tenths of a second, bounded — the
+ * same shape as the launchd waits in agent.ts, and for the same reason: the state either
+ * resolves quickly or never does.
+ */
+export function ensureDaemonAutostart(home: string = homedir()): void {
+  if (process.platform !== "darwin") return; // registration is launchd-shaped
+  if (isLoaded(MUTAGEN_AGENT_LABEL)) return;
+  const plist = plistPath(MUTAGEN_AGENT_LABEL, home);
+  // env is passed explicitly on every spawn below: Bun resolves the executable against
+  // a PATH snapshot taken at process start otherwise, which makes a test's fake
+  // `mutagen`/`launchctl` unreachable (same reason agent.ts does it).
+  const daemon = (verb: string) =>
+    spawnSync("mutagen", ["daemon", verb], { stdio: "ignore", env: process.env });
+  if (!existsSync(plist)) {
+    daemon("stop");
+    let registered = daemon("register").status === 0;
+    for (let attempt = 1; attempt < REGISTER_ATTEMPTS && !registered; attempt++) {
+      spawnSync("/bin/sleep", ["0.1"]);
+      registered = daemon("register").status === 0;
+    }
+    if (!registered) {
+      // Put back exactly what we stopped rather than leaving the client with neither a
+      // registered daemon nor a running one.
+      daemon("start");
+      return;
+    }
+  }
+  try {
+    bootstrapAgent(MUTAGEN_AGENT_LABEL, plist);
+  } catch {
+    // launchd refused the label; the daemon below still gets the sync running now.
+  }
+  // No-op ("already running") once launchd started it from the plist.
+  daemon("start");
+}
 
 /**
  * Pre-stage the Mutagen agent on the box so `mutagen sync create` doesn't have to copy it.
@@ -108,14 +168,27 @@ export class MutagenEngine implements SyncEngine {
   // Mutagen is driven by synchronous spawnSync; the methods are async only to satisfy
   // the SyncEngine contract (Syncthing genuinely needs async).
   async up(o: SyncUpOpts): Promise<void> {
+    // FIRST, and outside the idempotence check below: the existence probe is itself a
+    // mutagen subcommand, so it starts the daemon, and `daemon register` refuses once
+    // that has happened. Registering here is also the only path that reaches a client
+    // whose session was created before this existed.
+    ensureDaemonAutostart();
     // idempotent: skip if the named session exists. Use the exit code of
     // `mutagen sync list <name>` (robust — does NOT depend on --template field paths).
     const exists = spawnSync("mutagen", ["sync", "list", sessionName(o.profile)], { stdio: "ignore" }).status === 0;
     if (exists) return;
-    spawnSync("mutagen", ["daemon", "register"], { stdio: "ignore" }); // best-effort login autostart
     ensureBoxAgent(o.host); // pre-stage the agent (hardened-box scp drops +x) — best-effort
     const r = mutagen(buildCreateArgs(o));
     if (r.status !== 0) die(`mutagen sync create failed (exit ${r.status})`);
+  }
+
+  autostart(): SyncAutostart | null {
+    if (process.platform !== "darwin") return null;
+    return { registered: isLoaded(MUTAGEN_AGENT_LABEL) };
+  }
+
+  ensureAutostart(): void {
+    ensureDaemonAutostart();
   }
 
   async down(profile: string): Promise<void> {

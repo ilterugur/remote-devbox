@@ -11,6 +11,14 @@ import { SyncthingEngine } from "./syncthing";
 export type SyncStatus = { name: string; state: string; conflicts: number | null };
 export type SyncUpOpts = { profile: string; host: string; localRoot: string; remoteRoot: string; ignores: string[] };
 
+/**
+ * Whether the engine's client-side supervisor will bring the sync back by itself after
+ * a reboot or logout. An engine that keeps no client daemon (Syncthing runs as a box
+ * systemd unit) has nothing to prove here and omits `autostart` entirely — `null` and
+ * an absent method both mean "not applicable", never "broken".
+ */
+export type SyncAutostart = { registered: boolean };
+
 export interface SyncEngine {
   id: EngineId;
   up(o: SyncUpOpts): Promise<void>;
@@ -18,6 +26,10 @@ export interface SyncEngine {
   status(): Promise<SyncStatus[]>;
   pause(profile: string): Promise<void>;
   resume(profile: string): Promise<void>;
+  /** Client-supervisor evidence, or null when this engine has no client daemon. */
+  autostart?(): SyncAutostart | null;
+  /** Install that supervisor. Only meaningful on an engine that reports autostart. */
+  ensureAutostart?(): void;
 }
 
 /**
