@@ -30,6 +30,7 @@ import { pickUI } from "./picker";
 import { runPush } from "./push";
 import { runPull } from "./pull";
 import { runAdd } from "./add";
+import { DEFAULT_AGENT_PROFILE, accountArgs, runAccount } from "./account";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import {
   runAgentDown,
@@ -322,6 +323,30 @@ cli
         spawn: opts.spawn,
         capacity: opts.capacity == null ? undefined : Number(opts.capacity),
       });
+    },
+  );
+
+cli
+  .command("account [action] [label]", "swap the Claude account for this client, or a box profile (action: ls|status|add|use|rm|gc)")
+  .option("-p, --profile <profile>", "run on the box for this profile instead of locally")
+  .option("--agent-profile <name>", `box agent profile to act on (default: ${DEFAULT_AGENT_PROFILE})`)
+  .option("--json", "machine-readable output (ls, status)")
+  .option("--force", "swap even while claude is running (use)")
+  .option("--keep <n>", "swap backups to retain (gc)")
+  .action(
+    (
+      action: string | undefined,
+      label: string | undefined,
+      opts: { profile?: string; agentProfile?: string; json?: boolean; force?: boolean; keep?: string | number },
+    ) => {
+      // The engine's own default view, so a bare `devbox account` lists what is parked.
+      let argv: string[];
+      try {
+        argv = accountArgs(action ?? "ls", label, { json: opts.json, force: opts.force, keep: opts.keep });
+      } catch (e) {
+        die((e as Error).message);
+      }
+      process.exit(runAccount(argv, { profile: opts.profile, agentProfile: opts.agentProfile }));
     },
   );
 

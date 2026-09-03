@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { defaultDesktopAccess, defaultSshAccess, resolveSpec } from "./resolve";
+import { AGENT_CONFIG_ENV, defaultDesktopAccess, defaultSshAccess, resolveSpec } from "./resolve";
 import type { DeveloperSpec, DevboxSpec } from "./types";
 
 const ID = { name: "N", email: "e@example.com" };
@@ -197,6 +197,14 @@ test("every project gets an RC unit, named after the developer and project by de
   expect(rc.name).toBe("dev-a · p");
   expect(rc.spawn).toBe("worktree");
   expect(rc.capacity).toBe(4);
+});
+
+// Resolved here rather than in the template so one map decides it for RC units, the
+// launcher and the account wrapper alike.
+test("the RC unit carries the provider's config-dir variable and the profile tree", () => {
+  const rc = p0(rcSpec({})).remote_control!;
+  expect(rc.config_env).toBe(AGENT_CONFIG_ENV.claude);
+  expect(rc.config_dir).toBe("/home/dev-a/.agent-profiles/claude-main");
 });
 
 test("the agent name comes from the resolved profile's provider", () => {

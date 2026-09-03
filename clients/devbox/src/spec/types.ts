@@ -508,6 +508,14 @@ export interface ResolvedRcUnit {
   agent: string;
   /** The profile whose launcher environment the session has to reproduce. */
   agent_profile: string;
+  /**
+   * The provider's config-dir variable and the profile tree it must point at. The unit
+   * carries both because an RC session execs the agent binary directly instead of going
+   * through the profile launcher: without them it reads the developer's default tree and
+   * runs a different login than the one `remote-devbox-login` wrote.
+   */
+  config_env: string;
+  config_dir: string;
   name: string;
   spawn: RcSpawn;
   capacity: number;

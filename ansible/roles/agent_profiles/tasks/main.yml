@@ -407,6 +407,36 @@
     group: root
     mode: "0755"
 
+# The swap engine is one implementation for both platforms: the client runs it locally
+# from an embedded copy, the box runs this one. Root-owned and world-readable — it reads
+# and rewrites a developer's credential, so it must not be a file that developer can edit
+# before the wrapper runs it as them.
+- name: Ensure the devbox share dir exists
+  ansible.builtin.file:
+    path: /usr/local/share/remote-devbox
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy the account swap engine
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-account.sh"
+    dest: /usr/local/share/remote-devbox/devbox-account.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+# Manual only: it parks one account and restores another on request. Nothing in it reads
+# a usage limit or picks an account, and nothing may be added that does.
+- name: Install the account swap helper
+  ansible.builtin.template:
+    src: devbox-agent-account.sh.j2
+    dest: /usr/local/bin/remote-devbox-account
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Agent profiles that still need an interactive login
   ansible.builtin.debug:
     msg: >-

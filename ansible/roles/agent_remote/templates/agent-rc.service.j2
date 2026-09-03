@@ -43,10 +43,13 @@ Environment=PATH=/home/{{ row.user }}/.local/bin:/usr/local/sbin:/usr/local/bin:
    gigabytes of scratch behind, which is a memory outage rather than a disk one. Point
    sessions at disk-backed scratch instead; the oomd role declares the directory. #}
 Environment=TMPDIR=/var/tmp/devbox-scratch/{{ row.user }}
-{# Do NOT set CLAUDE_CONFIG_DIR: it would make claude look for config at
-   ~/.claude/.claude.json, but login + interactive sessions use Claude's default
-   (~/.claude.json in HOME). The run script defaults its credential-check path to
-   ~/.claude on its own. #}
+{# The profile IS the config dir. `remote-devbox-login` drives the profile launcher,
+   which exports this variable before it execs the agent — so a unit without it reads
+   the developer's DEFAULT tree while /login wrote the profile's, and the always-on
+   server then serves a different account than the one you logged in as. Two credential
+   trees with no bridge. agent-rc-run honours CLAUDE_CONFIG_DIR already; the row names
+   the variable because it differs per provider (CODEX_HOME, PI_CODING_AGENT_DIR). #}
+Environment={{ row.config_env }}={{ row.config_dir }}
 Environment=CLAUDE_RC_PROJECT_DIR={{ row.project_dir }}
 {# Quote values: names like "Example Monorepo" contain spaces — unquoted, systemd
    parses everything after the space as a second, invalid env assignment. #}

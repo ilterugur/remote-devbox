@@ -13,6 +13,7 @@
  */
 import { type Issue, err, hasErrors } from "./issues";
 import type {
+  AgentProvider,
   DesktopAccess,
   SshAccess,
   DeveloperSpec,
@@ -139,6 +140,17 @@ export const RC_DEFAULTS = {
 };
 
 /**
+ * The variable that redirects a provider's whole config/credential tree, mirroring
+ * `config_env` in `ansible/roles/agent_profiles/vars/main.yml`. Keyed by the provider
+ * union, so a new agent cannot be added without naming the variable that isolates it.
+ */
+export const AGENT_CONFIG_ENV: Readonly<Record<AgentProvider, string>> = {
+  claude: "CLAUDE_CONFIG_DIR",
+  codex: "CODEX_HOME",
+  omp: "PI_CODING_AGENT_DIR",
+};
+
+/**
  * One unit per project, or null when Remote Control does not apply. The agent profile
  * must already be resolved: the unit runs that profile's provider binary, so a project
  * with no profile has nothing to run.
@@ -160,6 +172,12 @@ export function resolveRemoteControl(
   return {
     agent: provider,
     agent_profile: agentProfile,
+    // The launcher exports this pair for interactive sessions; the unit has to repeat it
+    // because it execs the binary directly. Leave it out and Remote Control reads the
+    // developer's default tree while `/login` writes the profile's — two credential
+    // trees, no bridge, and the phone talks to a different account than the box does.
+    config_env: AGENT_CONFIG_ENV[provider],
+    config_dir: `/home/${dev.user}/.agent-profiles/${agentProfile}`,
     name: override?.name ?? `${dev.user} · ${project.name}`,
     spawn: override?.spawn ?? box.spawn ?? RC_DEFAULTS.spawn,
     capacity: override?.capacity ?? box.capacity ?? RC_DEFAULTS.capacity,

@@ -35,7 +35,8 @@ const PROJECT_NAME_RE = /^[A-Za-z0-9._-]+$/;
 const XKB_NAME_RE = /^[a-z0-9_+-]+$/;
 const ENGINES: readonly string[] = ["podman-rootless", "docker-rootless", "none"] satisfies EngineId[];
 const SSH_ACCESS: readonly string[] = ["public", "tailnet"] satisfies SshAccess[];
-const PROVIDERS: readonly string[] = ["claude", "codex", "omp"];
+/** Exported so the provider→config-env map in resolve.ts can be proven to cover it. */
+export const PROVIDERS: readonly string[] = ["claude", "codex", "omp"];
 const VERSIONED_PROVIDERS: readonly string[] = ["omp"];
 const EXACT_AGENT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];

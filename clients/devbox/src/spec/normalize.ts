@@ -238,6 +238,8 @@ function normalizeRcUnits(resolved: ResolvedSpec): Record<string, unknown>[] {
           project: p.name,
           agent: rc.agent,
           agent_profile: rc.agent_profile,
+          config_env: rc.config_env,
+          config_dir: rc.config_dir,
           name: rc.name,
           spawn: rc.spawn,
           capacity: rc.capacity,

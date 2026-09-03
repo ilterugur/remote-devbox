@@ -1,0 +1,143 @@
+---
+# A Remote Control unit execs the agent binary directly instead of going through the
+# profile launcher, so the unit is the only place that can tell the session which config
+# tree to read. Without the env line below, `remote-devbox-login` writes the profile's
+# tree while the always-on server reads the developer's default one — the phone then
+# talks to a different account than the box does, and no error is ever printed.
+#
+#   ansible-playbook ansible/tests/rc-config-dir-policy.yml
+- name: Verify remote control units bind to their profile's config dir
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_facts:
+      getent_passwd:
+        dev-a: ["x", "1004"]
+    devbox_remote_control:
+      autorestart: { enabled: true, restart_sec: 10, burst: 10, interval: 600 }
+      resume: { on_boot: false }
+    # The three rows the client normalizer produces, one per provider. `config_env` and
+    # `config_dir` come from the row on purpose: the variable differs per provider, so a
+    # template that hard-coded CLAUDE_CONFIG_DIR would silently mis-point codex and omp.
+    claude_row:
+      user: dev-a
+      agent: claude
+      project: p
+      name: Claude
+      spawn: worktree
+      capacity: 32
+      agent_profile: claude-main
+      config_env: CLAUDE_CONFIG_DIR
+      config_dir: /home/dev-a/.agent-profiles/claude-main
+      project_dir: /home/dev-a/projects/p
+      build_env: {}
+      resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300, oom_policy: continue }
+    codex_row:
+      user: dev-a
+      agent: codex
+      project: q
+      name: Codex
+      spawn: worktree
+      capacity: 32
+      agent_profile: codex-main
+      config_env: CODEX_HOME
+      config_dir: /home/dev-a/.agent-profiles/codex-main
+      project_dir: /home/dev-a/projects/q
+      build_env: {}
+      resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300, oom_policy: continue }
+    omp_row:
+      user: dev-a
+      agent: omp
+      project: r
+      name: OMP
+      spawn: worktree
+      capacity: 32
+      agent_profile: omp-main
+      config_env: PI_CODING_AGENT_DIR
+      config_dir: /home/dev-a/.agent-profiles/omp-main
+      project_dir: /home/dev-a/projects/r
+      build_env: {}
+      resources: { cpu_weight: 80, io_weight: 80, nice: 5, oom_score_adjust: 300, oom_policy: continue }
+
+  tasks:
+    - name: Render and verify one unit per provider in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-rc-config-dir-policy-
+          register: render_dir
+
+        - name: Render the claude unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/agent-rc.service.j2"
+            dest: "{{ render_dir.path }}/claude.service"
+            mode: "0600"
+          vars:
+            row: "{{ claude_row }}"
+
+        - name: Render the codex unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/agent-rc.service.j2"
+            dest: "{{ render_dir.path }}/codex.service"
+            mode: "0600"
+          vars:
+            row: "{{ codex_row }}"
+
+        - name: Render the omp unit
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/agent-rc.service.j2"
+            dest: "{{ render_dir.path }}/omp.service"
+            mode: "0600"
+          vars:
+            row: "{{ omp_row }}"
+
+        - name: Read the claude unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/claude.service"
+          register: claude_unit
+
+        - name: Read the codex unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/codex.service"
+          register: codex_unit
+
+        - name: Read the omp unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/omp.service"
+          register: omp_unit
+
+        - name: Assert each unit exports its own provider's config-dir variable
+          ansible.builtin.assert:
+            that:
+              - "'Environment=CLAUDE_CONFIG_DIR=/home/dev-a/.agent-profiles/claude-main' in claude_unit.content | b64decode"
+              - "'Environment=CODEX_HOME=/home/dev-a/.agent-profiles/codex-main' in codex_unit.content | b64decode"
+              - "'Environment=PI_CODING_AGENT_DIR=/home/dev-a/.agent-profiles/omp-main' in omp_unit.content | b64decode"
+
+        # The variable is per provider. Leaking claude's into a codex unit would point
+        # codex at a tree it does not use, which reads as "logged out" with no clue why.
+        - name: Assert no unit carries another provider's config-dir variable
+          ansible.builtin.assert:
+            that:
+              - "'CODEX_HOME' not in claude_unit.content | b64decode"
+              - "'PI_CODING_AGENT_DIR' not in claude_unit.content | b64decode"
+              - "'CLAUDE_CONFIG_DIR' not in codex_unit.content | b64decode"
+              - "'PI_CODING_AGENT_DIR' not in codex_unit.content | b64decode"
+              - "'CLAUDE_CONFIG_DIR' not in omp_unit.content | b64decode"
+              - "'CODEX_HOME' not in omp_unit.content | b64decode"
+
+        # The defect this file exists to prevent: a unit falling back to the developer's
+        # default tree, which is a different login from the profile's.
+        - name: Assert no unit is pointed at the developer's default config tree
+          ansible.builtin.assert:
+            that:
+              - "'/home/dev-a/.claude' not in claude_unit.content | b64decode"
+              - "'/home/dev-a/.codex' not in codex_unit.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

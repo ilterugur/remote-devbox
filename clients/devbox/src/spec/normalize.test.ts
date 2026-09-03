@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { normalize, renderVars } from "./normalize";
-import { resolveSpec } from "./resolve";
-import type { DevboxSpec, ResolvedSpec } from "./types";
+import { AGENT_CONFIG_ENV, resolveSpec } from "./resolve";
+import { PROVIDERS } from "./validate";
+import type { AgentProvider, DevboxSpec, ResolvedSpec } from "./types";
 
 const resolved: ResolvedSpec = {
   config_version: 3,
@@ -47,6 +48,8 @@ const rcResolved = (): ResolvedSpec => ({
           remote_control: {
             agent: "claude",
             agent_profile: "claude-main",
+            config_env: "CLAUDE_CONFIG_DIR",
+            config_dir: "/home/dev-a/.agent-profiles/claude-main",
             name: "dev-a · p",
             spawn: "worktree",
             capacity: 4,
@@ -105,6 +108,8 @@ test("rc units are a flat list across developers and projects", () => {
     project: "p",
     agent: "claude",
     agent_profile: "claude-main",
+    config_env: "CLAUDE_CONFIG_DIR",
+    config_dir: "/home/dev-a/.agent-profiles/claude-main",
     name: "dev-a · p",
     spawn: "worktree",
     capacity: 4,
@@ -116,6 +121,44 @@ test("rc units are a flat list across developers and projects", () => {
 
 test("a project with no unit contributes nothing to the list", () => {
   expect(normalize(resolved).devbox_rc_units).toEqual([]);
+});
+
+// An RC unit execs the agent binary directly instead of going through the profile
+// launcher, so the row is the only thing that can tell it which config tree to read.
+// Drop these two keys and Remote Control quietly serves the developer's default tree
+// while `/login` writes the profile's — a different account on the phone than on the box.
+test("every provider's rc row names the config-dir variable and the profile tree", () => {
+  const cases: [AgentProvider, string][] = [
+    ["claude", "CLAUDE_CONFIG_DIR"],
+    ["codex", "CODEX_HOME"],
+    ["omp", "PI_CODING_AGENT_DIR"],
+  ];
+  for (const [provider, env] of cases) {
+    const declared: DevboxSpec = {
+      ...resolved,
+      developers: [
+        {
+          ...resolved.developers[0]!,
+          agent_profiles: { [`${provider}-main`]: { provider } },
+          default_agent_profile: `${provider}-main`,
+          projects: [{ name: "p", repo: "git@github.com:example/p.git" }],
+        },
+      ],
+    };
+    const units = normalize(resolveSpec(declared).resolved!).devbox_rc_units as Record<string, unknown>[];
+    expect(units[0]).toMatchObject({
+      agent: provider,
+      config_env: env,
+      config_dir: `/home/dev-a/.agent-profiles/${provider}-main`,
+    });
+  }
+});
+
+// The map is keyed by the provider union, so TypeScript catches a new agent added to the
+// union. Nothing catches one added only to validate's runtime list — this does.
+test("the provider→config-env map covers every provider validation accepts", () => {
+  expect(Object.keys(AGENT_CONFIG_ENV).sort()).toEqual([...PROVIDERS].sort());
+  for (const provider of PROVIDERS) expect(AGENT_CONFIG_ENV[provider as AgentProvider]).toBeTruthy();
 });
 
 /** `resolved`, with agent profiles: one codex login, one claude login. */

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# Swap which Claude account a profile is logged in as. One profile keeps ONE config tree:
+# MCP servers, skills, settings, plugins and projects/ history are shared by both
+# accounts, so a swap moves nothing but the credential and its identity keys.
+#
+#   sudo remote-devbox-account                          # what this box knows
+#   sudo remote-devbox-account <dev> <profile> ls
+#   sudo remote-devbox-account <dev> <profile> add work # adopt whoever is logged in now
+#   sudo remote-devbox-account <dev> <profile> use work
+#
+# Manual only, by design: nothing here reads a usage limit or picks an account for you.
+# Logging in stays `sudo remote-devbox-login <dev> <profile>`; this parks and restores
+# what that login produced, nothing more.
+set -euo pipefail
+
+ENGINE=/usr/local/share/remote-devbox/devbox-account.sh
+
+if [[ $EUID -ne 0 ]]; then
+  echo "remote-devbox-account: run me with sudo (it switches to the developer)." >&2
+  exit 1
+fi
+
+# developer:profile — Claude profiles only. Codex and omp already hold several logins in
+# one config tree, so they have nothing to park.
+PROFILES=(
+{% for p in _devbox_agent_profiles | selectattr('provider', 'equalto', 'claude') %}
+  "{{ p.user }}:{{ p.name }}"
+{% endfor %}
+)
+
+# Checked before anything reads the array: with no Claude profile there is no pair to
+# name, and every message below would be an empty list.
+if [[ -z "${PROFILES[*]:-}" ]]; then
+  echo "remote-devbox-account: no Claude agent profile is declared on this box." >&2
+  exit 1
+fi
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: sudo remote-devbox-account <developer> <profile> <verb> [args...]
+
+verbs:
+  ls [--json]              the labels this profile holds, and which one is active
+  status [--json]          active label plus what the config tree actually contains
+  add <label>              adopt the account logged in right now under this label
+  use <label> [--force]    the swap (refused while claude runs, unless --force)
+  rm <label>
+  gc [--keep N]            prune parked backups (newest 3 kept by default)
+USAGE
+  echo "known developer/profile pairs:" >&2
+  printf '  %s\n' "${PROFILES[@]}" >&2
+  exit 1
+}
+
+[[ $# -ge 3 ]] || usage
+
+dev="$1"
+profile="$2"
+verb="$3"
+shift 3
+
+matched=0
+for entry in "${PROFILES[@]}"; do
+  [[ "$entry" == "$dev:$profile" ]] || continue
+  matched=1
+  break
+done
+
+if [[ $matched -eq 0 ]]; then
+  echo "remote-devbox-account: no Claude agent profile '$dev/$profile'." >&2
+  printf '  known: %s\n' "${PROFILES[@]}" >&2
+  exit 1
+fi
+
+# `sudo -u ... env VAR=...`, not `sudo -i`: a login shell would discard the config dir we
+# point the engine at, and it would then park and restore the developer's DEFAULT tree —
+# the exact confusion the per-profile split exists to prevent.
+set +e
+sudo -u "$dev" env \
+  "HOME=/home/$dev" \
+  "CLAUDE_CONFIG_DIR=/home/$dev/.agent-profiles/$profile" \
+  DEVBOX_ACCOUNT_STORE=file \
+  "$ENGINE" "$verb" "$@"
+rc=$?
+set -e
+
+if [[ $rc -ne 0 || "$verb" != "use" ]]; then
+  exit "$rc"
+fi
+
+# The always-on Remote Control servers read the credential once, at session start, so
+# until they restart the phone keeps talking to the account that was just parked.
+#
+# `systemctl restart 'agent-rc-*-DEV-*'` cannot express this: systemd patterns match a
+# whole unit name, never an embedded segment, and the boundary between developer and
+# project is also a dash (`agent-rc-claude-dev-a-p` contains `-dev-` as surely as
+# `-dev-a-`). So enumerate the Claude session units — the name is
+# agent-rc-claude-<dev>-<project>.service, which already excludes Codex/omp units and the
+# oneshot agent-rc-resume-* orchestrators — then ask each candidate who it runs as and
+# which profile it carries. Restarting a unit of another profile (or another agent) would
+# drop live phone sessions that this swap did not touch.
+echo
+restarted=0
+while read -r unit; do
+  [[ -n "$unit" ]] || continue
+  [[ "$(systemctl show --property=User --value "$unit" 2>/dev/null)" == "$dev" ]] || continue
+  # Environment= is a space-separated list of K=V tokens; a profile name never contains a
+  # space, so padding both sides makes this an exact token match rather than a prefix one.
+  unit_env=" $(systemctl show --property=Environment --value "$unit" 2>/dev/null) "
+  [[ "$unit_env" == *" CLAUDE_RC_AGENT_PROFILE=$profile "* ]] || continue
+  restarted=1
+  # Reported, never fatal: the credential is already swapped, and failing here would
+  # claim the swap failed when it did not.
+  if systemctl restart "$unit"; then
+    echo "restarted $unit"
+  else
+    echo "remote-devbox-account: WARNING $unit did not restart — the swap itself succeeded." >&2
+    echo "  it is still serving the previous account; retry: sudo systemctl restart $unit" >&2
+  fi
+done < <(systemctl list-units --all --plain --no-legend 'agent-rc-claude-*.service' | awk '{ print $1 }')
+
+if [[ $restarted -eq 0 ]]; then
+  echo "no Remote Control unit runs $dev/$profile; nothing to restart."
+fi
