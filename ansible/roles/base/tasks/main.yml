@@ -129,9 +129,14 @@
   register: active_swap
   changed_when: false
 
+# Compared against the parsed device list, not a substring of the whole output: with
+# another swap device present whose name merely STARTS with this path — `/swapfile2`
+# beside `/swapfile`, which is exactly what a hand-added file during an incident looks
+# like — a substring test matches, the enable is skipped, and the box is left with swap
+# in fstab but none active until it reboots. Observed 2026-09-05 after a resize.
 - name: Enable swap (idempotent — also recovers if it was turned off)
   ansible.builtin.command: "swapon {{ swap_file }}"
-  when: swap_file not in active_swap.stdout
+  when: swap_file not in (active_swap.stdout_lines | map('trim') | list)
   changed_when: true
 
 # ── zram (compressed RAM swap) ───────────────────────────────────────────────
