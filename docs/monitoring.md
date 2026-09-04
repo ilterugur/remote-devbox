@@ -95,6 +95,21 @@ The role joins the `netdata` service account to the group of each developer that
 fleet. Blast radius is exactly "files that developer made group-readable": homes here are
 0700, so nothing inside one is exposed, and no other developer gains anything.
 
+## Why alarms rather than an automatic killer
+
+`systemd-oomd` runs here, with `ManagedOOMMemoryPressure=kill` at 90% for 20s on each
+developer's `user@<uid>.service`. It never fired during the 2026-09-04 stall, and that was
+correct: the fleet is essentially all of that user manager's memory, and
+`paseo-daemon.service` carries `ManagedOOMPreference=omit` on purpose, because killing it
+kills every live session at once. Every other child is small. oomd had nothing it was
+allowed to kill, so it did nothing.
+
+That is the shape of the problem, not a misconfiguration: a fleet-driven stall has no
+proportionate victim. Adding a second killer (`nohang`, `earlyoom`) puts it in front of the
+same choice. What resolves these is capacity and ceilings that fit — and a signal that
+arrives while there is still time to act, which is what this role provides. oomd stays as
+the emergency brake for everything else below the user manager.
+
 ## Reaching it
 
 `access` uses the same vocabulary as `desktop.access`, and works the same way: the agent
