@@ -18,6 +18,8 @@ import {
   type CliTarget,
   type DevboxSpec,
   type EngineId,
+  MONITORING_ACCESS,
+  type MonitoringAccess,
   OMP_MODEL_ROLE_IDS,
   type RcSpawn,
   SERVICE_RESOURCE_KEYS,
@@ -195,6 +197,41 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
     issues.push(err("host.locales", "must be a list of locale names"));
   }
   validateHeavyJobGate(h.heavy_job_gate, "host.heavy_job_gate", issues);
+  const mon = h.monitoring;
+  if (mon !== undefined) {
+    if (!isRecord(mon)) {
+      issues.push(err("host.monitoring", "must be a mapping"));
+    } else {
+      if (typeof mon.enabled !== "boolean") {
+        issues.push(err("host.monitoring.enabled", "must be true or false"));
+      }
+      const port = mon.port;
+      if (port !== undefined && !(typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535)) {
+        issues.push(err("host.monitoring.port", "must be a TCP port in 1..65535"));
+      }
+      const access = mon.access;
+      if (access !== undefined) {
+        if (!Array.isArray(access) || access.length === 0) {
+          issues.push(err("host.monitoring.access", `must be a non-empty list of ${MONITORING_ACCESS.join(", ")}`));
+        } else {
+          for (const entry of access) {
+            if (!MONITORING_ACCESS.includes(entry as MonitoringAccess)) {
+              issues.push(err("host.monitoring.access", `unknown access "${String(entry)}"`));
+            }
+          }
+        }
+      }
+      const days = mon.retention_days;
+      if (days !== undefined && !(typeof days === "number" && Number.isInteger(days) && days > 0)) {
+        issues.push(err("host.monitoring.retention_days", "must be a positive integer"));
+      }
+      const max = mon.memory_max;
+      const canonicalMax = typeof max === "string" ? canonicalMemorySize(max) : null;
+      if (max !== undefined && !(canonicalMax && !canonicalMax.endsWith("%"))) {
+        issues.push(err("host.monitoring.memory_max", "must be an absolute systemd size like '512M'"));
+      }
+    }
+  }
   const z = h.zram;
   if (z !== undefined) {
     if (!isRecord(z)) {

@@ -1,0 +1,18 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart netdata
+  ansible.builtin.systemd_service:
+    name: netdata
+    state: restarted
+
+# Alarm changes do not need the collectors to be dropped and re-created; a health reload
+# keeps every chart's history intact, which matters because the history is the reason this
+# is installed.
+- name: Reload netdata health
+  ansible.builtin.command:
+    cmd: netdatacli reload-health
+  changed_when: true
+  failed_when: false

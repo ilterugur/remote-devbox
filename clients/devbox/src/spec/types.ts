@@ -79,6 +79,41 @@ export interface HostSpec {
   swappiness?: number;
   /** Serialize memory-heavy agent commands per Linux developer. Defaults on. */
   heavy_job_gate?: HeavyJobGateSpec;
+  /** Host metrics dashboard and alarms. Off unless declared. */
+  monitoring?: MonitoringSpec;
+}
+
+/**
+ * Who may reach the metrics dashboard. Same vocabulary as `desktop.access`, and for the
+ * same reason: the service binds only the addresses named here, so a path left out has no
+ * listener at all rather than a listener behind a firewall rule.
+ *
+ * `tunnel` binds loopback only and is reached over `ssh -L` — the client CLI publishes that
+ * forward, so the dashboard needs no Tailscale and is never exposed to the network.
+ */
+export type MonitoringAccess = "tunnel" | "tailnet" | "unsafe-public";
+
+export const MONITORING_ACCESS: MonitoringAccess[] = ["tunnel", "tailnet", "unsafe-public"];
+
+/**
+ * Host metrics with per-process, per-cgroup and PSI resolution.
+ *
+ * Every host stall on this box so far was diagnosed by hand from `memory.swap.events`,
+ * `memory.pressure` and per-process RSS — the three signals a summary dashboard does not
+ * carry. This exists so the next one is read off a chart instead of reconstructed.
+ */
+export interface MonitoringSpec {
+  enabled: boolean;
+  /** Dashboard port on the box. Loopback-bound under `tunnel`. */
+  port?: number;
+  /** Defaults to `["tunnel"]`: loopback only, reached over the client's SSH forward. */
+  access?: MonitoringAccess[];
+  /** Metric retention on disk. The default keeps a fortnight, enough to compare a stall
+   * against the same hour a week earlier. */
+  retention_days?: number;
+  /** Hard memory ceiling for the agent's own unit, so the monitor can never become the
+   * thing that exhausts the host it watches. */
+  memory_max?: string;
 }
 
 export interface NetworkSpec {

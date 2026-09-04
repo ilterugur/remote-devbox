@@ -157,6 +157,11 @@
       # A single loopback-only CDP endpoint exists only when failover is explicitly
       # enabled. The emitted client config later exposes it solely to chrome_user.
       browser_failover: "{{ devbox_browser.failover }}"
+      # The metrics dashboard, box-level: one agent serves the whole host, so the client
+      # publishes exactly one forward for it. `access` travels along because only
+      # "tunnel" makes the box bind loopback, and a forward to nothing is worth warning
+      # about at describe time rather than discovering as a refused connection.
+      monitoring: "{{ devbox_host.monitoring | default({'enabled': false}, true) }}"
     _devbox_developer_names: "{{ devbox_developers | map(attribute='user') | list }}"
     _devbox_account_names: "{{ [devbox_operator.user] + _devbox_developer_names }}"
     _devbox_account_projects: "{{ [[]] + (devbox_developers | map(attribute='projects') | list) }}"

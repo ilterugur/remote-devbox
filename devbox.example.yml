@@ -42,6 +42,13 @@ host:
     # and every session sharing that cgroup drops. Each gated job runs in a scope of
     # its own, so a runaway is the only casualty. '' disables the scope.
     memory_max: 8G
+  # Sizing note for a box running an agent fleet rather than one build at a time: a fleet
+  # of mostly-idle sessions holds tens of GB of cold anonymous heap, and swap is where that
+  # belongs. Undersized swap does not merely limit paging — it pins the working set
+  # resident, so the kernel reclaims page cache instead and the whole box thrashes.
+  # Measured on a 64 GB box with 20 sessions: a 4G ceiling produced 103.7M refused
+  # offloads and 97% kernel CPU; 24G returned it to a load of 3. Size it against the
+  # fleet's cold heap, and keep developers[].resources.memory_swap_max in step.
   swap_size: 8G
   # Size bound for the tmpfs behind /tmp. Everything written there is resident memory
   # that can only be swapped, never dropped, and the distro default is half of RAM —
@@ -71,6 +78,16 @@ host:
   #   enabled: true
   #   memory_pressure_limit: 60%      # per developer user manager
   #   memory_pressure_duration_sec: 20
+  # Host metrics that answer "why is it slow": per-process memory over time, per-cgroup
+  # limit counters (memory.events, memory.swap.events) and PSI, with alarms for each.
+  # `tunnel` binds loopback only and is reached over the SSH forward the client CLI
+  # publishes — no Tailscale, no inbound port. See docs/monitoring.md.
+  # monitoring:
+  #   enabled: true
+  #   access: [tunnel]        # tunnel | tailnet | unsafe-public
+  #   port: 19999
+  #   retention_days: 14
+  #   memory_max: 768M        # the monitor's own hard ceiling
 
 # Shared toolchain, installed once via mise and resolved on every developer PATH.
 runtimes:

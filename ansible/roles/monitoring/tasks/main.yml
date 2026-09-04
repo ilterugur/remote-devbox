@@ -1,0 +1,190 @@
+---
+# Host metrics with the three resolutions this box has repeatedly needed and never had:
+# per-process memory over time, per-cgroup memory/swap/throttling, and PSI.
+#
+# Every stall here was diagnosed by hand. The 2026-09-04 incident took an hour and the
+# answer was one counter — `memory.swap.events` reading `fail 103702118` on a cgroup whose
+# MemorySwapMax was 4G — while the visible symptoms (load 78, 97% kernel time, 500 MB/s of
+# reads) pointed at everything except the cause. netdata is chosen over a summary dashboard
+# for exactly that: a host chart showing "swap full, load high" is the report we already had
+# from `free` and `uptime`.
+#
+# The agent is bound to loopback unless the config says otherwise, and reached over the
+# client's SSH forward, so this adds no network surface.
+
+- name: Create the APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: _devbox_monitoring.enabled
+
+# netdata is absent from Ubuntu's own archive (verified on 26.04: no candidate), so the
+# vendor repository is the only packaged path. It publishes per-codename suites; preflight
+# below proves this release is carried before anything is installed.
+- name: Install the netdata repository signing key
+  ansible.builtin.get_url:
+    url: https://repo.netdata.cloud/netdatabot.gpg.key
+    dest: /etc/apt/keyrings/netdata.asc
+    owner: root
+    group: root
+    mode: "0644"
+  when: _devbox_monitoring.enabled
+
+- name: Require the vendor repository to carry this Ubuntu release
+  ansible.builtin.uri:
+    url: "{{ _devbox_monitoring_repo_base }}/{{ _devbox_monitoring_suite }}/InRelease"
+    method: HEAD
+    status_code: [200]
+  register: _monitoring_suite
+  changed_when: false
+  when: _devbox_monitoring.enabled
+
+- name: Configure the netdata repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/netdata.asc] {{ _devbox_monitoring_repo_base }}/ {{ _devbox_monitoring_suite }}/"
+    filename: netdata
+    state: present
+  when: _devbox_monitoring.enabled
+
+- name: Install netdata
+  ansible.builtin.apt:
+    name: netdata
+    state: present
+    update_cache: true
+  when: _devbox_monitoring.enabled
+  notify: Restart netdata
+
+# netdata v2 charts a cgroup's RAM usage but not what the kernel does when that cgroup hits
+# one of its own ceilings — and those counters are what named the 2026-09-04 stall
+# (`memory.swap.events: max 103701842`). This plugin adds them. It reads only
+# world-readable files under /sys/fs/cgroup, so it runs as the unprivileged netdata user.
+- name: Install the cgroup limit-accounting plugin
+  ansible.builtin.copy:
+    src: devbox-cgroup-limits.plugin
+    dest: /usr/libexec/netdata/plugins.d/devbox-cgroup-limits.plugin
+    owner: root
+    group: netdata
+    mode: "0755"
+  when: _devbox_monitoring.enabled
+  notify: Restart netdata
+
+# The vendor package ships a config that binds every interface and phones home. Both are
+# replaced wholesale rather than patched: a partial override leaves the default listener in
+# place, which is the one thing this must not do.
+- name: Configure netdata
+  ansible.builtin.template:
+    src: netdata.conf.j2
+    dest: /etc/netdata/netdata.conf
+    owner: root
+    group: netdata
+    mode: "0640"
+  when: _devbox_monitoring.enabled
+  notify: Restart netdata
+
+# Stock alarms cover CPU, disk and RAM totals. These four are the signals that actually
+# preceded the incidents on this box, and none of them are in the stock set at these
+# thresholds.
+- name: Install the alarms for this box's measured failure modes
+  ansible.builtin.template:
+    src: health-devbox.conf.j2
+    dest: /etc/netdata/health.d/devbox.conf
+    owner: root
+    group: netdata
+    mode: "0640"
+  when: _devbox_monitoring.enabled
+  notify: Reload netdata health
+
+- name: Create the netdata unit override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/netdata.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: _devbox_monitoring.enabled
+
+- name: Bound the monitor's own footprint
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/netdata.service.d/10-devbox-limits.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (remote-devbox).
+      #
+      # A monitor that can exhaust the host it watches is worse than no monitor: it would
+      # add to the pressure it exists to report, and it would do so exactly when the host
+      # is already short. The ceiling is hard, and OOMPolicy keeps a kill local to it.
+      [Service]
+      MemoryMax={{ _devbox_monitoring.memory_max }}
+      MemoryHigh={{ _devbox_monitoring.memory_max }}
+      OOMPolicy=continue
+      # Collecting metrics must always lose a race against the work being measured.
+      Nice=10
+      CPUWeight=20
+      IOWeight=20
+      ManagedOOMPreference=avoid
+  when: _devbox_monitoring.enabled
+  notify:
+    - Reload systemd
+    - Restart netdata
+
+- name: Enable and start netdata
+  ansible.builtin.systemd_service:
+    name: netdata
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: _devbox_monitoring.enabled
+
+- name: Flush monitoring handlers before verifying the listener
+  ansible.builtin.meta: flush_handlers
+
+# The whole security argument for `tunnel` is that there is no listener to reach from the
+# network. Prove it rather than assert it: a config typo that silently rebinds 0.0.0.0 is
+# the failure this catches, and it is invisible in a firewall-only check.
+- name: Read the addresses netdata actually bound
+  ansible.builtin.command:
+    cmd: ss -Hltn
+  register: _monitoring_listeners
+  changed_when: false
+  when: _devbox_monitoring.enabled
+
+- name: Require the dashboard to be bound only where access declares
+  ansible.builtin.assert:
+    that:
+      - _bound | length > 0
+      - _bound | reject('in', _devbox_monitoring_binds) | list | length == 0
+    fail_msg: >-
+      netdata listens on {{ _bound | join(', ') }}, but host.monitoring.access
+      ({{ _devbox_monitoring.access | join(', ') }}) permits only
+      {{ _devbox_monitoring_binds | join(', ') }}.
+    success_msg: "netdata owns {{ _bound | join(', ') }}"
+  vars:
+    # `ss -Hltn` column 4 is the local address; keep the rows for this port only.
+    _bound: >-
+      {{ _monitoring_listeners.stdout_lines | map('split') | map(attribute=3)
+         | select('match', '.*:' ~ _devbox_monitoring.port ~ '$') | list }}
+  when: _devbox_monitoring.enabled
+
+- name: Report where the dashboard can be reached
+  ansible.builtin.debug:
+    msg: >-
+      netdata is up. {{ 'Reach it over the client SSH forward at http://localhost:'
+      ~ _devbox_monitoring.port ~ ' (devbox mount up publishes it).'
+      if 'tunnel' in _devbox_monitoring.access else '' }}
+      {{ 'Tailnet: http://' ~ ansible_facts.tailscale0.ipv4.address ~ ':' ~ _devbox_monitoring.port ~ '.'
+      if 'tailnet' in _devbox_monitoring.access and ansible_facts.tailscale0 is defined else '' }}
+  when: _devbox_monitoring.enabled
+
+- name: Stop and disable netdata when monitoring is turned off
+  ansible.builtin.systemd_service:
+    name: netdata
+    enabled: false
+    state: stopped
+  when: not _devbox_monitoring.enabled
+  # It may never have been installed, which is the only failure worth swallowing here.
+  failed_when: false

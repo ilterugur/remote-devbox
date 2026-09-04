@@ -14,7 +14,7 @@ import { ensureClientTransport } from "./install";
 import { resolveEntry, type ResolvedEntry } from "./app-configs/registry";
 import { assignClientPorts } from "./spec/client-ports";
 import { defaultDesktopAccess } from "./spec/resolve";
-import type { DesktopAccess } from "./spec/types";
+import type { DesktopAccess, MonitoringAccess } from "./spec/types";
 
 /**
  * Where this client's config lives. `remote-devbox` is canonical — it is what the
@@ -67,7 +67,14 @@ export type Profile = {
 // `repoPath` is a checkout of this repo, and only an operator has one: it is what makes
 // `devbox add --write` and the live profile read below possible. The box cannot know it,
 // so the installer leaves it out and an operator sets it by hand.
-export type Config = { prefix: string; default: string; locale: string; launch: string; host?: string; repoPath?: string; profiles: Profile[] };
+/**
+ * The box's metrics dashboard, box-level rather than per-profile because there is one
+ * agent for the whole host. `access` travels with it for the same reason it does on
+ * desktop: a forward is only a door when something is listening behind it, and only
+ * "tunnel" makes the box bind loopback.
+ */
+export type MonitoringConfig = { port: number; access?: MonitoringAccess[] };
+export type Config = { prefix: string; default: string; locale: string; launch: string; host?: string; repoPath?: string; profiles: Profile[]; monitoring?: MonitoringConfig };
 
 export function die(msg: string): never {
   if (process.env.NODE_ENV === "test") throw new Error(msg); // testable: don't kill the runner

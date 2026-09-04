@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+Per-cgroup limit accounting, as a netdata external plugin.
+
+netdata v2 charts a cgroup's RAM usage (`systemd.service.memory.ram.usage`) but not what
+the kernel does when that cgroup reaches one of its own ceilings. Those counters are the
+ones that actually name a stall:
+
+  memory.events        high  — times the cgroup was throttled at MemoryHigh
+                       max   — times an allocation was blocked at MemoryMax
+                       oom_kill
+  memory.swap.events   max   — times a swap-out was refused at MemorySwapMax
+                       fail  — times swap allocation failed for any reason
+
+On 2026-09-04 this box read `fail 103702118` on one slice while every visible metric said
+"memory is tight". Without these counters that hour of hunting repeats; with them the
+answer is a chart. Everything read here is world-readable under /sys/fs/cgroup, so the
+plugin runs as the unprivileged netdata user with no capabilities.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+# The plugin protocol hands the interval as argv[1]; netdata restarts the plugin when its
+# configured interval changes, so this is read once.
+INTERVAL = max(1, int(sys.argv[1]) if len(sys.argv) > 1 else 5)
+# Below this a cgroup is a login shell or a one-shot unit: charting every one of them costs
+# cardinality and hides the handful that matter. The fleet, the Codex host and the DB
+# containers are all orders of magnitude above it.
+MIN_BYTES = 256 * 1024 * 1024
+# A ceiling this large is systemd's "infinity" in practice; a cgroup without a real limit
+# cannot be refused by one, so it has nothing to report here.
+UNLIMITED = "max"
+PRIORITY = 90_000
+
+
+def read_text(path: Path) -> str | None:
+    try:
+        return path.read_text()
+    except OSError:
+        return None
+
+
+def read_int(path: Path) -> int | None:
+    raw = read_text(path)
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if raw == UNLIMITED:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def read_keyed(path: Path) -> dict[str, int]:
+    raw = read_text(path)
+    if raw is None:
+        return {}
+    out: dict[str, int] = {}
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            try:
+                out[parts[0]] = int(parts[1])
+            except ValueError:
+                continue
+    return out
+
+
+def read_pressure_some_avg10(path: Path) -> float | None:
+    raw = read_text(path)
+    if raw is None:
+        return None
+    for line in raw.splitlines():
+        if not line.startswith("some "):
+            continue
+        for field in line.split():
+            if field.startswith("avg10="):
+                try:
+                    return float(field.split("=", 1)[1])
+                except ValueError:
+                    return None
+    return None
+
+
+def chart_id(relative: str) -> str:
+    """A netdata chart id may not contain '/' or '.', which every cgroup path does."""
+    cleaned = relative.strip("/").replace("/", "_").replace(".", "-")
+    return cleaned or "root"
+
+
+class Cgroup:
+    __slots__ = ("path", "name", "cid", "declared")
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.name = str(path.relative_to(CGROUP_ROOT))
+        self.cid = chart_id(self.name)
+        self.declared = False
+
+    def declare(self) -> None:
+        # One family per cgroup keeps the dashboard grouped the way the box is organised,
+        # while the contexts stay shared so a single alarm template covers every cgroup.
+        family = self.name
+        print(
+            f"CHART devbox_cgroup_limits.{self.cid}_throttle '' "
+            f"'Memory limit events for {self.name}' events/s '{family}' "
+            f"devbox.cgroup_limit_events line {PRIORITY} {INTERVAL} '' "
+            f"devbox-cgroup-limits '{self.name}'"
+        )
+        print("DIMENSION high throttled incremental 1 1")
+        print("DIMENSION max blocked incremental 1 1")
+        print("DIMENSION oom_kill oom_killed incremental 1 1")
+
+        print(
+            f"CHART devbox_cgroup_limits.{self.cid}_swap_refused '' "
+            f"'Swap refusals for {self.name}' refusals/s '{family}' "
+            f"devbox.cgroup_swap_refusals line {PRIORITY + 1} {INTERVAL} '' "
+            f"devbox-cgroup-limits '{self.name}'"
+        )
+        # `max` is the one that means "this cgroup's own MemorySwapMax refused it", which is
+        # a configuration fault. `fail` also counts a full swap device, which is capacity.
+        print("DIMENSION max refused_by_limit incremental 1 1")
+        print("DIMENSION fail failed incremental 1 1")
+
+        print(
+            f"CHART devbox_cgroup_limits.{self.cid}_swap_used '' "
+            f"'Swap headroom for {self.name}' % '{family}' "
+            f"devbox.cgroup_swap_utilization line {PRIORITY + 2} {INTERVAL} '' "
+            f"devbox-cgroup-limits '{self.name}'"
+        )
+        print("DIMENSION used percentage_of_ceiling absolute 1 100")
+
+        print(
+            f"CHART devbox_cgroup_limits.{self.cid}_pressure '' "
+            f"'Memory stall for {self.name}' % '{family}' "
+            f"devbox.cgroup_memory_pressure line {PRIORITY + 3} {INTERVAL} '' "
+            f"devbox-cgroup-limits '{self.name}'"
+        )
+        print("DIMENSION some stalled absolute 1 100")
+        self.declared = True
+
+    def emit(self) -> None:
+        events = read_keyed(self.path / "memory.events")
+        swap_events = read_keyed(self.path / "memory.swap.events")
+        swap_current = read_int(self.path / "memory.swap.current")
+        swap_max = read_int(self.path / "memory.swap.max")
+        pressure = read_pressure_some_avg10(self.path / "memory.pressure")
+
+        if events:
+            print(f"BEGIN devbox_cgroup_limits.{self.cid}_throttle")
+            for key in ("high", "max", "oom_kill"):
+                if key in events:
+                    print(f"SET {key} = {events[key]}")
+            print("END")
+
+        if swap_events:
+            print(f"BEGIN devbox_cgroup_limits.{self.cid}_swap_refused")
+            for key in ("max", "fail"):
+                if key in swap_events:
+                    print(f"SET {key} = {swap_events[key]}")
+            print("END")
+
+        # Only meaningful against a real ceiling: with MemorySwapMax=infinity there is no
+        # headroom to run out of, and a percentage of infinity is not a number.
+        if swap_current is not None and swap_max:
+            print(f"BEGIN devbox_cgroup_limits.{self.cid}_swap_used")
+            print(f"SET used = {int(swap_current * 10_000 / swap_max)}")
+            print("END")
+
+        if pressure is not None:
+            print(f"BEGIN devbox_cgroup_limits.{self.cid}_pressure")
+            print(f"SET some = {int(pressure * 100)}")
+            print("END")
+
+
+def discover() -> list[Cgroup]:
+    """
+    Cgroups worth charting: they have the limit counters, and they are large enough that a
+    ceiling could plausibly bite. Re-run periodically because units come and go.
+    """
+    found: list[Cgroup] = []
+    for dirpath, dirnames, filenames in os.walk(CGROUP_ROOT):
+        if "memory.swap.events" not in filenames and "memory.events" not in filenames:
+            continue
+        path = Path(dirpath)
+        if path == CGROUP_ROOT:
+            continue
+        current = read_int(path / "memory.current")
+        limited = read_int(path / "memory.max") or read_int(path / "memory.high")
+        swap_limited = read_int(path / "memory.swap.max")
+        # A small cgroup with an explicit ceiling still matters: the ceiling is the point.
+        if (current is None or current < MIN_BYTES) and not (limited or swap_limited):
+            continue
+        found.append(Cgroup(path))
+        # Descending into a leaf's own children is what turns 100 cgroups into thousands;
+        # the interesting hierarchy on this box is at most a few levels deep.
+        if len(path.relative_to(CGROUP_ROOT).parts) >= 6:
+            dirnames.clear()
+    return found
+
+
+def main() -> int:
+    known: dict[str, Cgroup] = {}
+    rediscover_every = max(1, 60 // INTERVAL)
+    tick = 0
+    while True:
+        if tick % rediscover_every == 0:
+            for cgroup in discover():
+                known.setdefault(cgroup.name, cgroup)
+            # A unit that has gone away stops producing values; netdata retires the chart
+            # on its own once it goes stale, so nothing is removed here.
+            known = {name: cgroup for name, cgroup in known.items() if cgroup.path.exists()}
+        for cgroup in known.values():
+            if not cgroup.declared:
+                cgroup.declare()
+            cgroup.emit()
+        sys.stdout.flush()
+        tick += 1
+        try:
+            # netdata sends nothing on stdin; sleeping is the whole loop contract.
+            import time
+
+            time.sleep(INTERVAL)
+        except KeyboardInterrupt:
+            return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # netdata closed the pipe: it is shutting the plugin down, which is not an error.
+        sys.exit(0)

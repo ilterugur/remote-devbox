@@ -1,0 +1,20 @@
+---
+# The normalized block the client writes; `enabled: false` keeps the role inert on a box
+# that never asked for a monitor.
+_devbox_monitoring: "{{ devbox_host.monitoring | default({'enabled': false}, true) }}"
+
+# A flat repository: the index lives at <base>/<codename>/InRelease while the Filename
+# fields inside it are relative to <base> and already carry the codename. Pointing apt at
+# the index directory instead resolves every package under <codename>/<codename>/ and 404s.
+_devbox_monitoring_repo_base: https://repo.netdata.cloud/repos/stable/ubuntu
+_devbox_monitoring_suite: "{{ ansible_facts.distribution_release }}"
+
+# Which addresses each access path is allowed to produce. The listener assertion compares
+# what netdata actually bound against this set, so a config that silently falls back to
+# every interface fails the apply instead of quietly exposing the box.
+_devbox_monitoring_binds: >-
+  {{ (['127.0.0.1:' ~ _devbox_monitoring.port] if 'tunnel' in _devbox_monitoring.access else [])
+     + ([ansible_facts.tailscale0.ipv4.address ~ ':' ~ _devbox_monitoring.port]
+        if 'tailnet' in _devbox_monitoring.access and ansible_facts.tailscale0 is defined else [])
+     + (['0.0.0.0:' ~ _devbox_monitoring.port, '*:' ~ _devbox_monitoring.port]
+        if 'unsafe-public' in _devbox_monitoring.access else []) }}

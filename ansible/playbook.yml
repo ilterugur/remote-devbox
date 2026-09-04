@@ -58,6 +58,10 @@
     - { role: resource_limits, tags: [developers, resources] }
     - { role: oomd, tags: [developers, resources, oomd] }
 
+    # Host metrics. After the resource roles so the ceilings and pressure policy it charts
+    # are already the ones in force, and so its own unit limit is applied consistently.
+    - { role: monitoring, tags: [resources, monitoring] }
+
     # Git identities, agent logins and working copies. Independent of each other by
     # design: a project picks an identity AND an agent, and neither implies the other.
     - { role: git_identities, tags: [developers, git] }

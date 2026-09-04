@@ -127,6 +127,11 @@ not gain root or accept raw systemd unit names.
   your phone, no inbound ports.
 - Your portable Claude config (skills, subagents, commands, `CLAUDE.md`, MCP defs)
   synced into **every profile**, identity kept separate.
+- **Host metrics that answer "why is it slow"** — per-process memory over time, per-cgroup
+  limit counters and PSI, with alarms for the stalls this box has actually had. Loopback
+  only; the client publishes an SSH forward, so it needs no Tailscale and is exposed
+  nowhere. `host.monitoring.enabled: true`, then `http://localhost:19999`. See
+  [docs/monitoring.md](docs/monitoring.md).
 
 `developers[].resources.memory_high` sets systemd `MemoryHigh`, a soft-backpressure
 threshold that makes a developer's workloads reclaim memory before the host is exhausted.
@@ -307,6 +312,7 @@ docs/
 - [Real-time sync & preview on your client](docs/realtime-sync.md)
 - [Moving a session client → box (`devbox push`)](docs/session-handoff.md)
 - [Long-term memory (Hindsight)](docs/memory.md)
+- [Monitoring: why the box is slow (PSI, cgroup limits, per-process)](docs/monitoring.md)
 
 ## Security notes
 

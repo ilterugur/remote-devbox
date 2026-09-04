@@ -246,19 +246,36 @@ if (
         "autoBind": failover.get("autobind") is True,
     }
 
-json.dump(
-    {
-        "prefix": box["prefix"],
-        # Reference only: the CLI dials the ssh alias, so the alias decides the path.
-        "host": box["tailnet_host"] or box["public_host"],
-        "default": user,
-        "locale": box["locale"],
-        "launch": "",
-        "profiles": [profile],
-    },
-    sys.stdout,
-    indent=2,
-)
+# The dashboard is box-level, so it is emitted once rather than per profile. Carried only
+# when the box actually runs it: an entry here is what makes `devbox agent up` publish the
+# forward, and a forward to a monitor that was never installed is a permanently failing
+# launchd agent.
+monitoring = box.get("monitoring") or {}
+monitoring_port = monitoring.get("port")
+monitoring_entry = None
+if (
+    monitoring.get("enabled") is True
+    and isinstance(monitoring_port, int)
+    and not isinstance(monitoring_port, bool)
+    and 1 <= monitoring_port <= 65535
+):
+    monitoring_entry = {"port": monitoring_port}
+    if monitoring.get("access"):
+        monitoring_entry["access"] = list(monitoring["access"])
+
+config = {
+    "prefix": box["prefix"],
+    # Reference only: the CLI dials the ssh alias, so the alias decides the path.
+    "host": box["tailnet_host"] or box["public_host"],
+    "default": user,
+    "locale": box["locale"],
+    "launch": "",
+    "profiles": [profile],
+}
+if monitoring_entry:
+    config["monitoring"] = monitoring_entry
+
+json.dump(config, sys.stdout, indent=2)
 print()
 PY
 }

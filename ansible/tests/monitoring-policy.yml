@@ -1,0 +1,137 @@
+---
+# The monitor's whole security argument is that `tunnel` leaves nothing on the network to
+# reach, and its whole diagnostic argument is that it collects the three signals a summary
+# dashboard does not. Both are properties of one rendered config, so both are checked here
+# rather than discovered on a box.
+- name: Verify the metrics agent configuration policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Render and verify the agent configuration in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-monitoring-policy-
+          register: render_dir
+
+        - name: Render the loopback-only configuration
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/monitoring/templates/netdata.conf.j2"
+            dest: "{{ render_dir.path }}/tunnel.conf"
+            mode: "0600"
+          vars:
+            _devbox_monitoring:
+              enabled: true
+              port: 19999
+              access: [tunnel]
+              retention_days: 14
+              memory_max: 768M
+
+        - name: Read the loopback-only configuration
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/tunnel.conf"
+          register: tunnel_conf
+
+        - name: Require a loopback-only listener and no external registration
+          ansible.builtin.assert:
+            that:
+              # The one line that decides whether this box grew a network service.
+              - "'bind to = 127.0.0.1:19999' in conf"
+              - "'0.0.0.0' not in conf"
+              # A dashboard reachable only over the client's SSH forward must not also be
+              # readable by anything else that reaches the socket.
+              - "'allow dashboard from = localhost' in conf"
+              # This box holds customer repositories and credentials.
+              - "'[cloud]' in conf"
+              - "'enabled = no' in conf"
+            fail_msg: "rendered agent config does not bind loopback only: {{ conf }}"
+          vars:
+            conf: "{{ tunnel_conf.content | b64decode }}"
+
+        - name: Require the collectors that carry this box's failure modes
+          ansible.builtin.assert:
+            that:
+              # Per-process memory over time — the ballooning renderer (2026-09-04).
+              - "'apps = yes' in conf"
+              # Per-cgroup memory, swap and throttling counters — the swap ceiling that
+              # refused 103.7M offloads the same day.
+              - "'cgroups = yes' in conf"
+              - "'enable systemd services = yes' in conf"
+              # Per-second collection: the renderer grew over minutes, which a 60s average
+              # flattens away.
+              - "'update every = 1' in conf"
+            fail_msg: "rendered agent config would not have caught this box's stalls: {{ conf }}"
+          vars:
+            conf: "{{ tunnel_conf.content | b64decode }}"
+
+        - name: Render the tailnet-and-tunnel configuration
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/monitoring/templates/netdata.conf.j2"
+            dest: "{{ render_dir.path }}/tailnet.conf"
+            mode: "0600"
+          vars:
+            _devbox_monitoring:
+              enabled: true
+              port: 20100
+              access: [tunnel, tailnet]
+              retention_days: 30
+              memory_max: 512M
+            ansible_facts:
+              tailscale0:
+                ipv4:
+                  address: 100.64.0.7
+
+        - name: Read the tailnet-and-tunnel configuration
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/tailnet.conf"
+          register: tailnet_conf
+
+        - name: Require each declared access path to produce its own bind, and no other
+          ansible.builtin.assert:
+            that:
+              - "'bind to = 127.0.0.1:20100 100.64.0.7:20100' in conf"
+              - "'0.0.0.0' not in conf"
+            fail_msg: "declared access paths did not map to exactly their own binds: {{ conf }}"
+          vars:
+            conf: "{{ tailnet_conf.content | b64decode }}"
+
+        - name: Render the alarms
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/monitoring/templates/health-devbox.conf.j2"
+            dest: "{{ render_dir.path }}/devbox.conf"
+            mode: "0600"
+
+        - name: Read the alarms
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/devbox.conf"
+          register: alarms
+
+        - name: Require an alarm for every measured failure mode
+          ansible.builtin.assert:
+            that:
+              # Memory stall: the signal that read 98% for hours while nobody knew.
+              - "'system.memory_some_pressure' in alarm_conf"
+              # A cgroup refused swap by its own MemorySwapMax — the counter that named
+              # the 2026-09-04 stall, and one netdata v2 does not carry on its own.
+              - "'devbox.cgroup_swap_refusals' in alarm_conf"
+              - "'devbox.cgroup_swap_utilization' in alarm_conf"
+              # A cgroup parked above MemoryHigh, throttling forever without ever OOMing.
+              - "'devbox.cgroup_limit_events' in alarm_conf"
+              # One process group holding an unusual share of RAM. v2 context, not v1's
+              # `apps.mem_usage`, which loads nothing at all.
+              - "'app.mem_usage' in alarm_conf"
+              # Disk fill, warned well before the stock 90%.
+              - "'disk.space' in alarm_conf"
+            fail_msg: "the alarm set does not cover this box's measured stalls"
+          vars:
+            alarm_conf: "{{ alarms.content | b64decode }}"
+
+      always:
+        - name: Remove the render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

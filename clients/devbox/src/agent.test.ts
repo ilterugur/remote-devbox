@@ -320,6 +320,36 @@ describe("agentsFor", () => {
     expect(agentsFor(cfg({}), "ilterugur")).toEqual([]);
   });
 
+  test("a box that runs the monitor gets exactly one dashboard forward, on the default profile", () => {
+    const base = cfg({});
+    const withMonitor: Config = {
+      ...base,
+      monitoring: { port: 19999, access: ["tunnel"] },
+      profiles: [...base.profiles, { user: "other", projects: [] }],
+    };
+    const [a, ...rest] = agentsFor(withMonitor, "ilterugur");
+    expect(rest).toEqual([]);
+    expect(a!.label).toBe("com.devbox.ilterugur.monitoring");
+    expect(a!.mode).toBe("daemon");
+    expect(a!.forwardPort).toBe(19999);
+    expect(a!.description).toContain("http://localhost:19999");
+    expect(a!.warning).toBeUndefined();
+    // One agent for the whole box: a second profile binding the same local port would
+    // leave a launchd agent failing forever.
+    expect(agentsFor(withMonitor, "other")).toEqual([]);
+  });
+
+  test("monitoring access without 'tunnel' is named as a warning, not left to connect time", () => {
+    const base = cfg({});
+    const [a] = agentsFor({ ...base, monitoring: { port: 19999, access: ["tailnet"] } }, "ilterugur");
+    expect(a!.warning).toContain("tunnel");
+    expect(a!.warning).toContain("19999");
+  });
+
+  test("a box without the monitor publishes no forward for it", () => {
+    expect(agentsFor(cfg({}), "ilterugur")).toEqual([]);
+  });
+
   test("a browser-failover profile gets one ownership-coupled Chrome supervisor", () => {
     const agents = agentsFor(
       cfg({ browserFailover: { cdpPort: 9222, clientTunnelPort: 9322 } }),

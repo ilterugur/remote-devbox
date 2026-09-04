@@ -1,0 +1,119 @@
+{#
+  Managed by Ansible (remote-devbox).
+
+  Alarms for the failure modes this box has actually had, at thresholds taken from those
+  measurements. The stock set watches totals — RAM used, disk full, load — and every
+  incident here was visible in totals only long after it stopped being diagnosable.
+
+  `on:` names a netdata v2 CONTEXT, so one template covers every instance of it: every
+  process group, every cgroup. The context names were read off this box's own
+  /api/v1/contexts rather than assumed — v1 names like `apps.mem_usage` and
+  `cgroup.mem_failcnt` do not exist in v2 and silently load nothing.
+#}
+
+# 2026-09-04: the agent fleet's slice was refused 103.7 million swap offloads because its
+# MemorySwapMax was 4G. With nowhere to put cold anonymous pages the kernel reclaimed the
+# slice's page cache down to 45 MiB and the host spent 97% of its CPU in direct reclaim.
+# Host memory PSI is what named it, and it read 98% for hours before anyone said "the box
+# feels slow". `some` rather than `full`: once every task in the group is stalled the box
+# is already unusable.
+template: devbox_memory_pressure
+      on: system.memory_some_pressure
+   class: Utilization
+    type: System
+component: Memory
+    calc: $avg10
+   units: %
+   every: 10s
+    warn: $this > 20
+    crit: $this > 50
+   delay: down 5m multiplier 1.5 max 1h
+    info: memory stall (PSI some avg10) — processes are waiting on allocations
+      to: sysadmin
+
+# The same incident from the side that says WHOSE fault it is. A cgroup refused by its own
+# MemorySwapMax cannot shed cold pages at all, so it holds its whole working set resident
+# and starves its own page cache. Any sustained rate here is a ceiling that is wrong, not a
+# workload that is heavy — which is the distinction the hour of hunting was spent on.
+template: devbox_cgroup_swap_refused
+      on: devbox.cgroup_swap_refusals
+   class: Errors
+    type: Cgroups
+component: Memory
+  lookup: sum -1m unaligned of refused_by_limit
+   units: refusals
+   every: 10s
+    warn: $this > 0
+   delay: down 15m multiplier 1.5 max 1h
+    info: this cgroup's own MemorySwapMax is refusing swap-outs — raise the ceiling
+      or reduce what lives in the cgroup; it cannot shed cold pages in this state
+      to: sysadmin
+
+# The leading indicator for the alarm above: a cgroup approaching its swap ceiling still
+# works, and is minutes away from not working. Measured here at 69% while healthy.
+template: devbox_cgroup_swap_exhausted
+      on: devbox.cgroup_swap_utilization
+   class: Utilization
+    type: Cgroups
+component: Memory
+    calc: $percentage_of_ceiling
+   units: %
+   every: 30s
+    warn: $this > 85
+    crit: $this > 97
+   delay: down 15m multiplier 1.5 max 1h
+    info: this cgroup is close to its own swap ceiling
+      to: sysadmin
+
+# MemoryHigh throttles rather than kills, so a cgroup parked above it stalls indefinitely
+# and never resolves. Measured on this box at 122 million throttle events with the wall
+# never once reached — the state the devbox.yml comments call a stall trap.
+template: devbox_cgroup_throttled
+      on: devbox.cgroup_limit_events
+   class: Utilization
+    type: Cgroups
+component: Memory
+  lookup: sum -1m unaligned of throttled
+   units: events
+   every: 30s
+    warn: $this > 100000
+   delay: down 15m multiplier 1.5 max 2h
+    info: this cgroup is being throttled at its MemoryHigh — reclaim is running
+      continuously inside it and the hard wall is never reached
+      to: sysadmin
+
+# 2026-09-04, earlier the same day: one headless Chrome renderer grew from 300 MB to 9 GB
+# in about thirty minutes because a Puppeteer driver reloaded the same page in place and
+# Chrome kept every prior copy in its back/forward cache. Nothing reported it; the box just
+# became slow. The largest legitimate consumer measured here is a typecheck at ~14 GB, and
+# that runs inside the heavy-job gate's own scope rather than as a bare process group.
+template: devbox_process_group_memory
+      on: app.mem_usage
+   class: Utilization
+    type: System
+component: Memory
+    calc: $mem
+   units: MiB
+   every: 30s
+    warn: $this > 8192
+    crit: $this > 16384
+   delay: down 10m multiplier 1.5 max 2h
+    info: one process group holds an unusual share of RAM
+      to: sysadmin
+
+# 2026-09-04, third incident: the root filesystem reached 90% because a PostgreSQL cluster
+# could not archive WAL and kept 325 GB of it. Fills here are slow and silent, and the stock
+# alarm fires at 90% — too late to act calmly on a 2 TB volume.
+template: devbox_disk_fill
+      on: disk.space
+   class: Utilization
+    type: System
+component: Disk
+    calc: $used * 100 / ($avail + $used)
+   units: %
+   every: 1m
+    warn: $this > 75
+    crit: $this > 88
+   delay: down 15m multiplier 1.5 max 1h
+    info: filesystem usage
+      to: sysadmin

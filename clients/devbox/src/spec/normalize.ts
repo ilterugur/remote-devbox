@@ -120,6 +120,15 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       umask: resolved.host?.umask ?? "077",
       swappiness: resolved.host?.swappiness ?? null,
       heavy_job_gate: hostHeavyJobGate,
+      monitoring: {
+        enabled: resolved.host?.monitoring?.enabled ?? false,
+        port: resolved.host?.monitoring?.port ?? 19999,
+        // Loopback only. Reaching the dashboard is the client's SSH forward, so the
+        // default exposes the box to nothing at all.
+        access: [...(resolved.host?.monitoring?.access ?? ["tunnel"])],
+        retention_days: resolved.host?.monitoring?.retention_days ?? 14,
+        memory_max: canonicalMemorySize(resolved.host?.monitoring?.memory_max ?? "768M")!,
+      },
       oomd: {
         enabled: resolved.host?.oomd?.enabled ?? true,
         memory_pressure_limit: resolved.host?.oomd?.memory_pressure_limit ?? "60%",

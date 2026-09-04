@@ -629,6 +629,31 @@ export function agentsFor(cfg: Config, profile: string): AgentSpec[] {
     });
   }
 
+  // The dashboard is one agent for the whole box, so exactly one forward may exist: N
+  // profiles each binding the same local port would leave N-1 launchd agents failing
+  // forever. It rides the default profile, whose ssh alias is the one always configured.
+  if (cfg.monitoring && profile === cfg.default) {
+    const port = cfg.monitoring.port;
+    const access = cfg.monitoring.access;
+    const warning =
+      access && access.length && !access.includes("tunnel")
+        ? `host.monitoring.access is [${access.join(", ")}] — with no "tunnel" the box has no ` +
+          `127.0.0.1:${port} listener, so this forward binds locally and then refuses at the far ` +
+          `end. Add "tunnel" to host.monitoring.access in devbox.yml and re-apply.`
+        : undefined;
+    const label = `com.devbox.${profile}.monitoring`;
+    const readyFile = join(logDirFor(), `${label}.ready`);
+    out.push({
+      label,
+      mode: "daemon",
+      description: `metrics dashboard: http://localhost:${port} -> ${host}:127.0.0.1:${port}`,
+      warning,
+      readyFile,
+      forwardPort: port,
+      argv: ["sh", "-c", renderPortForwardSupervisor({ readyFile, port, host })],
+    });
+  }
+
   // Only a profile that declares lazy mounts gets the reconciler — there is otherwise
   // nothing to reconcile. `devbox mount up` is idempotent (it skips labels already live),
   // which is what makes re-running it every minute the whole recovery story for a mount

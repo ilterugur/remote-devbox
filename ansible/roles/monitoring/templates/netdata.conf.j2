@@ -1,0 +1,78 @@
+{#
+  Managed by Ansible (remote-devbox). Replaces the vendor config wholesale.
+
+  Two vendor defaults are deliberately overridden rather than left alone:
+  the dashboard binds every interface, and the agent registers with Netdata Cloud. This is
+  a development box holding customer repositories and credentials, so it binds only what
+  host.monitoring.access declares and speaks to nothing outside.
+#}
+[global]
+    run as user = netdata
+    # Per-second collection is the point of the tool here: the renderer that took this box
+    # down grew across a few minutes, and a 10s or 60s average is where that disappears.
+    update every = 1
+    memory mode = dbengine
+    # The agent's own footprint is the thing most likely to make it unwelcome. Tiered
+    # retention keeps a fortnight of history for a fraction of full-resolution cost.
+    page cache size = 32
+    dbengine multihost disk space = {{ (_devbox_monitoring.retention_days | int) * 200 }}
+
+[db]
+    # tier 0 is per-second and short; tier 1 (per-minute) and tier 2 (per-hour) carry the
+    # window that lets a stall be compared against the same hour a week earlier.
+    dbengine tier 0 retention days = 2
+    dbengine tier 1 retention days = {{ _devbox_monitoring.retention_days }}
+    dbengine tier 2 retention days = {{ (_devbox_monitoring.retention_days | int) * 6 }}
+
+[web]
+{% set _binds = [] %}
+{% if 'tunnel' in _devbox_monitoring.access %}{{ _binds.append('127.0.0.1:' ~ _devbox_monitoring.port) or '' }}{% endif %}
+{% if 'tailnet' in _devbox_monitoring.access and ansible_facts.tailscale0 is defined %}{{ _binds.append(ansible_facts.tailscale0.ipv4.address ~ ':' ~ _devbox_monitoring.port) or '' }}{% endif %}
+{% if 'unsafe-public' in _devbox_monitoring.access %}{{ _binds.append('0.0.0.0:' ~ _devbox_monitoring.port) or '' }}{% endif %}
+    bind to = {{ _binds | join(' ') }}
+    # No reverse proxy sits in front of this, so nothing may be trusted to rewrite it.
+    allow connections from = localhost {{ '*' if 'unsafe-public' in _devbox_monitoring.access or 'tailnet' in _devbox_monitoring.access else '' }}
+    allow dashboard from = localhost {{ '*' if 'unsafe-public' in _devbox_monitoring.access or 'tailnet' in _devbox_monitoring.access else '' }}
+
+[cloud]
+    # This box is not registered with any external service.
+    enabled = no
+
+[ml]
+    # Anomaly detection trains per-metric models and is the most expensive thing the agent
+    # does. The failure modes here are read off explicit counters, not inferred, so the
+    # cost buys nothing.
+    enabled = no
+
+[plugins]
+    # apps.plugin is what attributes memory to a process group over time — the signal that
+    # would have named the ballooning renderer instead of leaving it to be hunted by hand.
+    apps = yes
+    # cgroups is what exposes per-unit memory, swap and throttling counters, including the
+    # memory.swap.events failures that were the actual cause of the 2026-09-04 stall.
+    cgroups = yes
+    proc = yes
+    diskspace = yes
+    # eBPF and the go.d application collectors are off: nothing here needs syscall-level
+    # tracing, and the databases on this box are development instances.
+    ebpf = no
+    # Adds the per-cgroup limit counters netdata v2 does not carry: memory.events,
+    # memory.swap.events and per-cgroup PSI. See files/devbox-cgroup-limits.plugin.
+    devbox-cgroup-limits = yes
+    slabinfo = no
+    perf = no
+
+[plugin:cgroups]
+    # systemd services are the unit of failure on this box: the agent fleet, the Codex
+    # host, and every Remote Control session live in one. Podman/Docker containers are
+    # already covered by the default matchers.
+    enable systemd services = yes
+    update every = 1
+
+[plugin:apps]
+    update every = 1
+
+[plugin:devbox-cgroup-limits]
+    # These are counters and a rolling average, not a fast-moving gauge; 5s keeps the
+    # cardinality of ~70 charts cheap while still catching a stall as it builds.
+    update every = 5
