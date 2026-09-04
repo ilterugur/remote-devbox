@@ -71,6 +71,27 @@
   when: _devbox_monitoring.enabled
   notify: Restart netdata
 
+# Cloud registration. Measured on this box: neither this file nor `[cloud] enabled = no`
+# in netdata.conf clears the API's `cloud-enabled` field — that reports the capability the
+# binary was built with, not a decision. What decides it is the claim, and both switches
+# keep the agent unclaimed: `/api/v1/aclk` reads `agent-claimed: false, claimed-id: null,
+# online: false`, cloud.d holds no key material, every established socket is loopback, and
+# the journal logs nothing about ACLK. Written anyway so the refusal is explicit and
+# survives a package upgrade that might ship a different default.
+- name: Refuse cloud registration explicitly
+  ansible.builtin.copy:
+    dest: /var/lib/netdata/cloud.d/cloud.conf
+    owner: netdata
+    group: netdata
+    mode: "0640"
+    content: |
+      # Managed by Ansible (remote-devbox). This box holds customer repositories and
+      # credentials; it registers with nothing.
+      [global]
+          enabled = no
+  when: _devbox_monitoring.enabled
+  notify: Restart netdata
+
 # The vendor package ships a config that binds every interface and phones home. Both are
 # replaced wholesale rather than patched: a partial override leaves the default listener in
 # place, which is the one thing this must not do.

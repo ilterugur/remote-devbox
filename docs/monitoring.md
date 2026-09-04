@@ -98,9 +98,13 @@ ssh -N -L 19999:127.0.0.1:19999 <operator>@<box>
 Measured on this box: **165 MiB RSS**, ~1% of one core, with `MemoryMax=768M`,
 `Nice=10`, `CPUWeight=20` and `OOMPolicy=continue` on its unit — a monitor that can
 exhaust the host it watches is worse than no monitor. Machine learning and eBPF collectors
-are off (the failure modes here are read off explicit counters, not inferred), as is
-Netdata Cloud: this box holds customer repositories and credentials, and registers with
-nothing.
+are off (the failure modes here are read off explicit counters, not inferred).
+
+Cloud registration is refused: the agent is unclaimed (`/api/v1/aclk` reads
+`agent-claimed: false`, `claimed-id: null`, `online: false`), `cloud.d` holds no key
+material, and every established socket on the box is loopback. Note that the API's
+`cloud-enabled` field stays `true` regardless — it reports what the binary was built with,
+not a decision, which is why the refusal is asserted against the claim state instead.
 
 Retention is tiered: 2 days per-second, `retention_days` per-minute, six times that
 per-hour — enough to compare a stall against the same hour a week earlier.
