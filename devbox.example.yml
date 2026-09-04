@@ -128,6 +128,16 @@ shared_services:
 # local temporary file, inspect it, and run it to refresh both the binary and client
 # config. Only then run `devbox agent up -p <chrome_user>` to start the ownership-coupled
 # browser supervisor.
+#
+# reap: agents drive Chrome through the MCP servers, and a session that dies mid-run
+# leaves its browser behind — reparented to systemd --user, still holding a browser's
+# worth of RAM, with nobody left to close it. A handful of those is enough to push a
+# shared box into swap. The sweep kills only what is unambiguously stranded: a Chrome
+# running a throwaway automation profile, whose spawning session is gone, with no CDP
+# client attached, still seen that way after every pass across grace_sec. The managed
+# fallback Chrome and the per-developer playwright MCP servers are never candidates.
+# On by default; interval_sec is how often it sweeps, grace_sec how long a browser must
+# stay orphaned first (it must be >= interval_sec, or the first sighting kills on sight).
 # browser:
 #   enabled: true
 #   # Base of the MCP port range: one server per developer that opted in, from here
@@ -143,6 +153,10 @@ shared_services:
 #     cdp_port: 9222
 #     fallback_chrome_port: 9422
 #     client_tunnel_port: 9322
+#   reap:
+#     enabled: true
+#     interval_sec: 300
+#     grace_sec: 900
 
 # ── Always-on Remote Control servers ──────────────────────────────────────────
 # One per project: a tmux-hosted agent session your phone attaches to. Every project

@@ -1199,6 +1199,24 @@ function validateBrowser(raw: Record<string, unknown>, issues: Issue[]): void {
   if (b.mcp_port !== undefined && !isPort(b.mcp_port)) {
     issues.push(err("browser.mcp_port", "must be an integer in 1..65535"));
   }
+  const rp = b.reap;
+  if (rp !== undefined) {
+    if (!isRecord(rp)) {
+      issues.push(err("browser.reap", "must be a mapping"));
+    } else {
+      if (rp.enabled !== undefined && typeof rp.enabled !== "boolean") {
+        issues.push(err("browser.reap.enabled", "must be true or false"));
+      }
+      validatePositiveInts(rp, "browser.reap", ["interval_sec", "grace_sec"], issues);
+      // A grace below the sweep interval is kill-on-sight: a Chrome's very first sighting
+      // is already past grace, so the second pass that spares a browser idling between
+      // two client connections never happens.
+      const { interval_sec: interval, grace_sec: grace } = rp;
+      if (typeof interval === "number" && typeof grace === "number" && grace < interval) {
+        issues.push(err("browser.reap.grace_sec", "must be greater than or equal to browser.reap.interval_sec"));
+      }
+    }
+  }
   const f = b.failover;
   if (f === undefined) return;
   if (!isRecord(f)) {

@@ -1,0 +1,111 @@
+---
+# The reaper's containment lives in two places: the script decides WHAT to kill
+# (covered by scripts/test_orphan_browser_reap.py), and these units decide whether
+# it can run at all. The assertions below pin the settings whose absence would make
+# the timer look healthy while doing nothing, or let it reach past its job.
+- name: Verify orphan-browser reaper unit rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    devbox_browser:
+      reap: { enabled: true, interval_sec: 300, grace_sec: 900 }
+
+  tasks:
+    - name: Render and verify the reaper unit and timer in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-browser-reap-policy-
+          register: render_dir
+
+        - name: Render the reaper unit and timer
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/browser/templates/orphan-browser-reap.{{ item }}.j2"
+            dest: "{{ render_dir.path }}/orphan-browser-reap.{{ item }}"
+            mode: "0600"
+          loop: [service, timer]
+
+        - name: Read the reaper unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/orphan-browser-reap.service"
+          register: reap_unit
+
+        - name: Read the reaper timer
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/orphan-browser-reap.timer"
+          register: reap_timer
+
+        # The reaper only kills what it saw orphaned on an EARLIER pass, so the
+        # sighting record has to survive between firings. Without Preserve=yes
+        # systemd deletes the runtime directory when the oneshot exits, every pass
+        # starts empty, nothing ever ages into its grace, and the timer becomes a
+        # silent no-op. This is the single assertion most worth having.
+        - name: Assert the sighting state survives between sweeps
+          ansible.builtin.assert:
+            that:
+              - "'RuntimeDirectory=orphan-browser-reap' in reap_unit.content | b64decode"
+              - "'RuntimeDirectoryPreserve=yes' in reap_unit.content | b64decode"
+              - "'ReadWritePaths=/run/orphan-browser-reap' in reap_unit.content | b64decode"
+              - "'--state /run/orphan-browser-reap/seen.json' in reap_unit.content | b64decode"
+
+        - name: Assert the configured grace reaches the command line
+          ansible.builtin.assert:
+            that:
+              - "'--grace-sec 900' in reap_unit.content | b64decode"
+
+        # The profile purge is a delete, so its two halves have to stay together:
+        # the flag that scopes it and the bind that makes the scratch root the real
+        # one. PrivateTmp also privatises /var/tmp, so without the bind every
+        # removal would land in a throwaway namespace and free nothing while the
+        # log still said "removed".
+        - name: Assert the profile purge is scoped to the real scratch root
+          ansible.builtin.assert:
+            that:
+              - "'--purge-profiles-under /var/tmp/devbox-scratch' in reap_unit.content | b64decode"
+              - "'BindPaths=/var/tmp/devbox-scratch' in reap_unit.content | b64decode"
+              - "'ReadWritePaths=/var/tmp/devbox-scratch' in reap_unit.content | b64decode"
+              - "'ProtectHome=yes' in reap_unit.content | b64decode"
+
+        # Four capabilities, and the two surprising ones are both load-bearing:
+        # /proc/<pid>/fd of another uid is ptrace-mode gated (drop CAP_SYS_PTRACE and
+        # every browser reads as socket-less, which the script refuses to act on, so
+        # real leaks are silently spared), and a developer's scratch directory is 0700
+        # (drop CAP_DAC_OVERRIDE and the dead profile cannot be unlinked). Both are
+        # bounded by the sandbox: the scratch root is the only writable path.
+        - name: Assert the reaper keeps exactly the capabilities it needs
+          ansible.builtin.assert:
+            that:
+              - "'CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_DAC_OVERRIDE' in reap_unit.content | b64decode"
+              - "'CAP_SYS_ADMIN' not in reap_unit.content | b64decode"
+              - "'ProtectSystem=strict' in reap_unit.content | b64decode"
+              - "'NoNewPrivileges=yes' in reap_unit.content | b64decode"
+
+        # hide_pids mounts /proc with hidepid; a hardened ProtectProc on top would
+        # hide the very processes the sweep exists to find.
+        - name: Assert the reaper can still see every process
+          ansible.builtin.assert:
+            that:
+              - "'ProtectProc=default' in reap_unit.content | b64decode"
+
+        - name: Assert the timer waits out boot and then runs at the configured interval
+          ansible.builtin.assert:
+            that:
+              - "'OnUnitActiveSec=300s' in reap_timer.content | b64decode"
+              - "'OnBootSec=10min' in reap_timer.content | b64decode"
+              - "'Unit=orphan-browser-reap.service' in reap_timer.content | b64decode"
+
+        # A catch-up firing would only re-record sightings the state file lost with
+        # the reboot, so Persistent= must stay off rather than drift in later.
+        - name: Assert the timer does not try to catch up on missed sweeps
+          ansible.builtin.assert:
+            that:
+              - "'Persistent=' not in reap_timer.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

@@ -741,6 +741,16 @@ test("browser defaults are concrete, and failover is off until asked for", () =>
     client_tunnel_port: 9322,
     autobind: false,
   });
+  expect(b.reap).toEqual({ enabled: true, interval_sec: 300, grace_sec: 900 });
+});
+
+test("browser reap settings are taken verbatim when declared", () => {
+  const spec: ResolvedSpec = {
+    ...resolved,
+    browser: { reap: { enabled: false, interval_sec: 600, grace_sec: 1800 } },
+  };
+  const b = normalize(spec).devbox_browser as Record<string, unknown>;
+  expect(b.reap).toEqual({ enabled: false, interval_sec: 600, grace_sec: 1800 });
 });
 
 test("browser.mcp_port is always emitted, defaulted to 9522", () => {

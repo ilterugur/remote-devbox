@@ -226,6 +226,46 @@ binds at `127.0.0.1` on both the client and box; it is not a LAN or public brows
 endpoint. The CLI exposes this lifecycle only to the configured owner, not every local
 profile.
 
+### Orphaned browser reaping
+
+Agents drive Chrome through the browser MCP servers, and a session that dies mid-run
+leaves its browser behind: reparented to `systemd --user`, holding a browser's worth of
+RAM, with nobody left to close it. On a shared box a handful of those is the difference
+between a working machine and one that is swapping. `orphan-browser-reap.timer` sweeps
+for them, and it is on by default.
+
+Only unambiguously stranded browsers are killed — a Chrome on a throwaway automation
+profile, whose spawning session is gone, whose own file descriptors show a debugging
+port with no client on it, still seen that way on every pass across the grace window.
+The fallback Chrome above and the per-developer playwright MCP servers are never
+candidates. Neither is a browser whose descriptors could not be read at all: without
+that evidence the sweep cannot tell abandoned from busy, so it spares it and says so.
+
+Once a browser is gone its profile directory goes too, but only inside
+`/var/tmp/devbox-scratch` — the harness's own profiles under `$HOME` are left alone,
+and the unit's `ProtectHome=yes` enforces that rather than trusting the rule. The
+`tmpfiles` policy already ages that scratch root out, but it measures days: one
+incident's dead profiles were 3.8 GB sitting on a disk that was already 92% full.
+Pass `--keep-profiles` to a hand-run sweep to leave them in place.
+
+```bash
+systemctl status orphan-browser-reap.timer
+journalctl -u orphan-browser-reap.service -n 50
+sudo orphan-browser-reap --dry-run   # what a sweep would take, taking nothing
+```
+
+Both knobs are optional; `grace_sec` must be at least `interval_sec`, because a grace
+shorter than the sweep means the first sighting is already past it and a browser idling
+between two client connections gets killed on sight.
+
+```yaml
+browser:
+  reap:
+    enabled: true
+    interval_sec: 300   # how often it sweeps
+    grace_sec: 900      # how long a Chrome must stay orphaned first
+```
+
 ## What runs on your own machine
 
 Client-side services are launchd agents written by

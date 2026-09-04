@@ -1,0 +1,21 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set R = devbox_browser.reap %}
+[Unit]
+Description=Periodic sweep for browser instances stranded by dead agent sessions
+
+[Timer]
+{# Nothing is orphaned at boot — no agent session has spawned a browser yet — so the
+   first sweep is delayed instead of firing into an empty box while it is still
+   bringing every developer's units up. #}
+OnBootSec=10min
+OnUnitActiveSec={{ R.interval_sec }}s
+{# The sweep is a leak check, not a deadline. Loose accuracy lets systemd batch it
+   with other timers instead of waking the box on its own. #}
+AccuracySec=1min
+RandomizedDelaySec=60s
+{# Deliberately not Persistent=: a missed sweep has nothing to catch up on, and
+   firing at boot would only re-record sightings the state file already lost. #}
+Unit=orphan-browser-reap.service
+
+[Install]
+WantedBy=timers.target

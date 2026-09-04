@@ -1055,6 +1055,29 @@ test("browser autobind must be a boolean", () => {
   expect(paths(spec)).toContain("error:browser.failover.autobind");
 });
 
+test("browser.reap rejects a non-mapping and bad knobs", () => {
+  expect(paths({ ...minimal(), browser: { reap: true } })).toContain("error:browser.reap");
+  const bad = { ...minimal(), browser: { reap: { enabled: "yes", interval_sec: 0 } } };
+  expect(paths(bad)).toContain("error:browser.reap.enabled");
+  expect(paths(bad)).toContain("error:browser.reap.interval_sec");
+  expect(paths({ ...minimal(), browser: { reap: { interval_sec: -60 } } })).toContain(
+    "error:browser.reap.interval_sec",
+  );
+  expect(paths({ ...minimal(), browser: { reap: { interval_sec: 2.5 } } })).toContain(
+    "error:browser.reap.interval_sec",
+  );
+});
+
+/** A grace below the interval makes the first sighting already past grace: kill-on-sight. */
+test("browser.reap.grace_sec may not be shorter than the sweep interval", () => {
+  const tooShort = { ...minimal(), browser: { reap: { interval_sec: 600, grace_sec: 300 } } };
+  expect(paths(tooShort)).toContain("error:browser.reap.grace_sec");
+  const ok = { ...minimal(), browser: { reap: { enabled: true, interval_sec: 300, grace_sec: 900 } } };
+  expect(paths(ok)).toEqual([]);
+  const equal = { ...minimal(), browser: { reap: { interval_sec: 300, grace_sec: 300 } } };
+  expect(paths(equal)).toEqual([]);
+});
+
 test("a developer's browser opt-in is a boolean", () => {
   expect(paths({ ...minimal(), developers: [{ user: "dev-a", login_ssh_keys: [KEY], browser: true }] })).toEqual([]);
   expect(

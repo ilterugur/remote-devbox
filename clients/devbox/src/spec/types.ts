@@ -387,6 +387,7 @@ export interface BrowserSpec {
    *  developer runs; the alternative is one spawned process per session. */
   mcp_port?: number;
   failover?: BrowserFailoverSpec;
+  reap?: BrowserReapSpec;
 }
 
 /**
@@ -406,6 +407,18 @@ export interface BrowserFailoverSpec {
   client_tunnel_port?: number;
   /** When client mode is selected, bind every configured project port on the client. */
   autobind?: boolean;
+}
+
+/**
+ * Reaping of Chrome instances stranded when the agent session that launched them dies.
+ * They are reparented to `systemd --user`, keep their throwaway automation profile, and
+ * hold on to a browser's worth of RSS each until the box is swapping.
+ */
+export interface BrowserReapSpec {
+  enabled?: boolean;
+  interval_sec?: number;
+  /** How long a Chrome must be observed orphaned, across sweeps, before it is killed. */
+  grace_sec?: number;
 }
 
 /** A curated config tree on the client, copied into this developer's agent config. */

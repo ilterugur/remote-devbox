@@ -172,6 +172,16 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
         client_tunnel_port: resolved.browser?.failover?.client_tunnel_port ?? DEFAULT_CLIENT_TUNNEL_PORT,
         autobind: resolved.browser?.failover?.autobind ?? false,
       },
+      // On by default: a Chrome whose spawner died and that no CDP client is attached to
+      // is pure dead weight, and one leaked instance costs more RAM than a whole session.
+      // The grace is long because a browser sitting between two client connections looks
+      // exactly like a leak — nothing is killed until it has been seen orphaned across
+      // every sweep spanning the grace, which one reconnect is enough to reset.
+      reap: {
+        enabled: resolved.browser?.reap?.enabled ?? true,
+        interval_sec: resolved.browser?.reap?.interval_sec ?? 300,
+        grace_sec: resolved.browser?.reap?.grace_sec ?? 900,
+      },
     },
     devbox_remote_control: normalizeRemoteControl(resolved),
     devbox_rc_units: normalizeRcUnits(resolved),

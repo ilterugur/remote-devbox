@@ -131,3 +131,58 @@
     loop_var: server
     label: "{{ server.user }}"
   changed_when: false
+
+# ── Orphan-browser reaper ─────────────────────────────────────────────────────
+# Chrome outlives the agent session that spawned it: when an omp/codex session dies,
+# its automation browser is reparented to `systemd --user` and keeps its full heap.
+# Fifteen of those cost this box 20.5 GB and pushed it into swap. One box-wide timer
+# sweeps them all, because a single pass over /proc already sees every developer's.
+- name: Deploy the orphan-browser reaper (python, driven by its own timer)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/orphan-browser-reap.py"
+    dest: /usr/local/bin/orphan-browser-reap
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the orphan-browser reaper unit and timer
+  ansible.builtin.template:
+    src: "orphan-browser-reap.{{ item }}.j2"
+    dest: "/etc/systemd/system/orphan-browser-reap.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  when: devbox_browser.reap.enabled
+  notify: Reload systemd
+
+# In check mode the unit files above were never written, so systemd cannot be asked
+# to enable a timer it has no file for — the guard keeps `apply --check` a report
+# rather than a failure. Same convention as the box_cli and desktop roles.
+- name: Enable the orphan-browser reaper timer
+  ansible.builtin.systemd_service:
+    name: orphan-browser-reap.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when:
+    - devbox_browser.reap.enabled
+    - not ansible_check_mode
+
+# Stop before removing: a timer whose unit files vanish underneath it stays loaded
+# and armed in the running manager until something reloads it.
+- name: Stop the orphan-browser reaper timer when reaping is disabled
+  ansible.builtin.systemd_service:
+    name: orphan-browser-reap.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not devbox_browser.reap.enabled
+
+- name: Remove the orphan-browser reaper unit and timer when reaping is disabled
+  ansible.builtin.file:
+    path: "/etc/systemd/system/orphan-browser-reap.{{ item }}"
+    state: absent
+  loop: [service, timer]
+  when: not devbox_browser.reap.enabled
+  notify: Reload systemd
