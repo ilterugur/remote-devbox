@@ -103,6 +103,19 @@
             src: "{{ playbook_dir }}/../roles/monitoring/templates/health-devbox.conf.j2"
             dest: "{{ render_dir.path }}/devbox.conf"
             mode: "0600"
+          vars:
+            devbox_paseo_units:
+              - user: dev-a
+                max_sessions: 14
+                resources: { memory_max: 36G }
+              # No measured count: the fleet is charted, but nothing alarms on a threshold
+              # nobody chose.
+              - user: dev-b
+                resources: { memory_max: 8G }
+            ansible_facts:
+              getent_passwd:
+                dev-a: ["x", "1004"]
+                dev-b: ["x", "1005"]
 
         - name: Read the alarms
           ansible.builtin.slurp:
@@ -125,6 +138,14 @@
               - "'app.mem_usage' in alarm_conf"
               # Disk fill, warned well before the stock 90%.
               - "'disk.space' in alarm_conf"
+              # The fleet cap is rendered from devbox.yml, bound to the uid-derived chart
+              # of that developer's own fleet cgroup — so the ceiling and the session count
+              # it was sized against cannot drift apart unnoticed.
+              - "'devbox_fleet_over_capacity_dev-a' in alarm_conf"
+              - "'user-1004-slice_user@1004-service_app-slice_paseo-daemon-service_sessions' in alarm_conf"
+              - "'$this > 14' in alarm_conf"
+              # A developer without a measured count gets no threshold invented for them.
+              - "'devbox_fleet_over_capacity_dev-b' not in alarm_conf"
             fail_msg: "the alarm set does not cover this box's measured stalls"
           vars:
             alarm_conf: "{{ alarms.content | b64decode }}"

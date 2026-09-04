@@ -395,6 +395,10 @@ function normalizePaseoUnits(
       heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
       heavy_job_gate_memory_max: heavyJobGate.memory_max,
       resources: normalizeDirectMemoryResources({ ...(dev.paseo_resources ?? {}) }, true),
+      // Carried beside the ceiling it describes, so the monitor's alarm and the cgroup
+      // limit are rendered from one declaration. Null means "no number was measured":
+      // the role then charts the count without alarming on a threshold nobody chose.
+      max_sessions: dev.agent_fleet?.max_sessions ?? null,
     }];
   });
 }

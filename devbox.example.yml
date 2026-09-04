@@ -286,6 +286,13 @@ developers:
     # orphan. Neither `resources` above nor the heavy-job gate reaches it there.
     paseo_daemon: true
 
+    # The session count the ceiling below was measured against. Nothing refuses session
+    # N+1 — Paseo has no concurrency knob — so this is the number the monitor alarms on,
+    # kept beside the ceiling so the two cannot drift apart unnoticed. Omit it and the
+    # fleet is charted without a threshold nobody measured. Needs host.monitoring.
+    agent_fleet:
+      max_sessions: 14
+
     # Required whenever paseo_daemon is set, and deliberately not inherited from
     # `remote_control.resources`: this one unit aggregates EVERY agent session the
     # developer runs, so the 12G default that suits a single project's session would

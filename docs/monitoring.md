@@ -58,6 +58,43 @@ above rather than from a template:
 | `devbox_process_group_memory` | one process group over 8 GiB (crit 16 GiB) |
 | `devbox_disk_fill` | filesystem over 75% (crit 88%), well before the stock 90% |
 
+## The fleet cap
+
+`paseo_resources` is sized against a measured session count — this repo's own history says
+"27.9 GB across 14 sessions" — but nothing on the box refuses session 15, and Paseo has no
+concurrency knob to add one. On 2026-09-04 the fleet had grown to 20 sessions holding
+33.9 GB of anonymous heap under a 34G `MemoryHigh`, so it sat permanently in reclaim and
+stalled every session at once.
+
+```yaml
+developers:
+  - user: dev-a
+    agent_fleet:
+      max_sessions: 18      # the count the ceiling below was measured against
+    paseo_resources:
+      memory_high: 34G
+      memory_max: 36G
+```
+
+The declared count is rendered into an alarm bound to that developer's own fleet cgroup, so
+the ceiling and the number it was derived from live in one place and cannot drift apart
+unnoticed. Omit `agent_fleet` and the fleet is still charted — nothing invents a threshold
+nobody measured. `devbox.cgroup_sessions` also carries a `processes` dimension: a fleet
+grows in both at once, while a jump in processes alone is one session spawning helpers.
+
+This warns rather than refuses. A reaper that parks idle sessions is the other half and is
+not built: doing it behind Paseo's back would leave its state inconsistent, so it needs
+either Paseo's API or an explicit decision about which sessions are disposable.
+
+### Reading a developer's own fleet cgroup
+
+systemd delegates `user@<uid>.service` to that developer and gives its `app.slice` mode
+0750, so the cgroup holding the fleet — its ceilings and its limit counters — is unreadable
+outside the developer's group. netdata's own systemd-unit collector cannot see it either.
+The role joins the `netdata` service account to the group of each developer that runs a
+fleet. Blast radius is exactly "files that developer made group-readable": homes here are
+0700, so nothing inside one is exposed, and no other developer gains anything.
+
 ## Reaching it
 
 `access` uses the same vocabulary as `desktop.access`, and works the same way: the agent

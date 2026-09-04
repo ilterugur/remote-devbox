@@ -32,6 +32,14 @@ INTERVAL = max(1, int(sys.argv[1]) if len(sys.argv) > 1 else 5)
 # cardinality and hides the handful that matter. The fleet, the Codex host and the DB
 # containers are all orders of magnitude above it.
 MIN_BYTES = 256 * 1024 * 1024
+# What an agent session looks like from the outside. Paseo launches each one as its own
+# process inside the developer's fleet cgroup; these are the launcher flags that identify
+# one, as opposed to the dozens of helpers a session then spawns (bundlers, browsers,
+# language servers). Verified on this box: 17 sessions among 157 processes in one cgroup.
+SESSION_MARKERS = ("--mode rpc-ui", "--mode acp", "codex remote-control", "claude --resume")
+# Reading 150+ cmdlines is cheap but not free, and a session count does not move between
+# seconds. Counted every Nth cycle and held in between.
+SESSION_EVERY = 6
 # A ceiling this large is systemd's "infinity" in practice; a cgroup without a real limit
 # cannot be refused by one, so it has nothing to report here.
 UNLIMITED = "max"
@@ -95,14 +103,35 @@ def chart_id(relative: str) -> str:
     return cleaned or "root"
 
 
+def count_sessions(procs_file: Path) -> tuple[int, int]:
+    """(sessions, processes) for one cgroup, by reading each member's command line."""
+    raw = read_text(procs_file)
+    if raw is None:
+        return (0, 0)
+    pids = raw.split()
+    sessions = 0
+    for pid in pids:
+        # A pid can exit between reading the list and reading its cmdline; that is normal
+        # and must not cost the whole sample.
+        cmdline = read_text(Path("/proc") / pid / "cmdline")
+        if cmdline is None:
+            continue
+        text = cmdline.replace("\0", " ")
+        if any(marker in text for marker in SESSION_MARKERS):
+            sessions += 1
+    return (sessions, len(pids))
+
+
 class Cgroup:
-    __slots__ = ("path", "name", "cid", "declared")
+    __slots__ = ("path", "name", "cid", "declared", "sessions", "processes")
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.name = str(path.relative_to(CGROUP_ROOT))
         self.cid = chart_id(self.name)
         self.declared = False
+        self.sessions = 0
+        self.processes = 0
 
     def declare(self) -> None:
         # One family per cgroup keeps the dashboard grouped the way the box is organised,
@@ -144,14 +173,29 @@ class Cgroup:
             f"devbox-cgroup-limits '{self.name}'"
         )
         print("DIMENSION some stalled absolute 1 100")
+
+        print(
+            f"CHART devbox_cgroup_limits.{self.cid}_sessions '' "
+            f"'Agent sessions in {self.name}' sessions '{family}' "
+            f"devbox.cgroup_sessions line {PRIORITY + 4} {INTERVAL} '' "
+            f"devbox-cgroup-limits '{self.name}'"
+        )
+        # The ceilings above are sized against a session count, and nothing on this box
+        # refuses session N+1 — so the count belongs on the same screen as the ceiling it
+        # was derived from. `processes` is context: a fleet grows in both at once, and a
+        # jump in processes alone is a session spawning helpers rather than a new session.
+        print("DIMENSION sessions sessions absolute 1 1")
+        print("DIMENSION processes processes absolute 1 1")
         self.declared = True
 
-    def emit(self) -> None:
+    def emit(self, count_sessions_now: bool) -> None:
         events = read_keyed(self.path / "memory.events")
         swap_events = read_keyed(self.path / "memory.swap.events")
         swap_current = read_int(self.path / "memory.swap.current")
         swap_max = read_int(self.path / "memory.swap.max")
         pressure = read_pressure_some_avg10(self.path / "memory.pressure")
+        if count_sessions_now:
+            self.sessions, self.processes = count_sessions(self.path / "cgroup.procs")
 
         if events:
             print(f"BEGIN devbox_cgroup_limits.{self.cid}_throttle")
@@ -178,6 +222,11 @@ class Cgroup:
             print(f"BEGIN devbox_cgroup_limits.{self.cid}_pressure")
             print(f"SET some = {int(pressure * 100)}")
             print("END")
+
+        print(f"BEGIN devbox_cgroup_limits.{self.cid}_sessions")
+        print(f"SET sessions = {self.sessions}")
+        print(f"SET processes = {self.processes}")
+        print("END")
 
 
 def discover() -> list[Cgroup]:
@@ -217,10 +266,11 @@ def main() -> int:
             # A unit that has gone away stops producing values; netdata retires the chart
             # on its own once it goes stale, so nothing is removed here.
             known = {name: cgroup for name, cgroup in known.items() if cgroup.path.exists()}
+        count_sessions_now = tick % SESSION_EVERY == 0
         for cgroup in known.values():
             if not cgroup.declared:
                 cgroup.declare()
-            cgroup.emit()
+            cgroup.emit(count_sessions_now)
         sys.stdout.flush()
         tick += 1
         try:

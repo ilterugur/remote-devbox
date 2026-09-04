@@ -459,6 +459,18 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   if (d.paseo_daemon === true && !(isRecord(d.paseo_resources) && d.paseo_resources.memory_max !== undefined)) {
     issues.push(err(`${base}.paseo_resources.memory_max`, "required when paseo_daemon is true"));
   }
+  const fleet = d.agent_fleet;
+  if (fleet !== undefined) {
+    if (!isRecord(fleet)) {
+      issues.push(err(`${base}.agent_fleet`, "must be a mapping"));
+    } else if (
+      !(typeof fleet.max_sessions === "number" &&
+        Number.isInteger(fleet.max_sessions) &&
+        fleet.max_sessions > 0)
+    ) {
+      issues.push(err(`${base}.agent_fleet.max_sessions`, "must be a positive integer"));
+    }
+  }
   validateAgentConfig(d.agent_config, `${base}.agent_config`, issues);
   validateGitIdentities(d, base, issues);
   validateAgentVersions(d, base, issues);

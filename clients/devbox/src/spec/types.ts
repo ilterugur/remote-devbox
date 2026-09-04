@@ -84,6 +84,21 @@ export interface HostSpec {
 }
 
 /**
+ * The session count a developer's fleet ceiling was sized against.
+ *
+ * `paseo_resources` is derived from a measured fleet — "27.9 GB across 14 sessions" in
+ * this repo's own history — but nothing on the box refuses session 15. Measured
+ * 2026-09-04: the fleet had grown to 20 sessions and 33.9 GB of anonymous heap against a
+ * 34G MemoryHigh, so it sat permanently in reclaim and stalled every session at once.
+ * Paseo has no concurrency knob to enforce this, so what this declares is the number the
+ * monitor alarms on — the ceiling and the count it was derived from stay in one place and
+ * cannot drift apart silently.
+ */
+export interface AgentFleetSpec {
+  max_sessions: number;
+}
+
+/**
  * Who may reach the metrics dashboard. Same vocabulary as `desktop.access`, and for the
  * same reason: the service binds only the addresses named here, so a path left out has no
  * listener at all rather than a listener behind a firewall rule.
@@ -513,6 +528,9 @@ export interface DeveloperSpec {
    * on this box is 28 GB across 14 sessions, and starting under a 12G wall would kill
    * the fleet on the first apply. State the ceiling from measurement instead. */
   paseo_resources?: RcResourceSpec;
+  /** The session count `paseo_resources` was sized against. Alarmed on, not enforced —
+   * see AgentFleetSpec. */
+  agent_fleet?: AgentFleetSpec;
   /** Overrides host.heavy_job_gate for this Linux developer. */
   heavy_job_gate?: HeavyJobGateSpec;
   container_engine?: EngineId;

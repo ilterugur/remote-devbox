@@ -117,3 +117,30 @@ component: Disk
    delay: down 15m multiplier 1.5 max 1h
     info: filesystem usage
       to: sysadmin
+
+{# `default(none)` rather than a bare attribute: the generated vars always carry the key
+   (null when unmeasured), but a hand-written or older vars file may omit it entirely, and
+   a template that throws there fails the whole apply over an optional threshold. #}
+{% for unit in devbox_paseo_units | default([]) if unit.max_sessions | default(none) %}
+{% set _uid = ansible_facts.getent_passwd[unit.user][1] %}
+# The fleet ceiling for {{ unit.user }} ({{ unit.resources.memory_max | default('unset') }}) was sized
+# against {{ unit.max_sessions }} sessions, and nothing refuses session {{ unit.max_sessions + 1 }} — Paseo has no
+# concurrency knob. Measured 2026-09-04: a fleet sized for 14 had grown to 20, held 33.9 GB
+# of anonymous heap under a 34G MemoryHigh, and stalled every session at once for hours.
+# This is the warning that arrives before that state, not after it.
+alarm: devbox_fleet_over_capacity_{{ unit.user }}
+   on: devbox_cgroup_limits.user-slice_user-{{ _uid }}-slice_user@{{ _uid }}-service_app-slice_paseo-daemon-service_sessions
+class: Utilization
+ type: Cgroups
+component: Memory
+ calc: $sessions
+units: sessions
+every: 1m
+ warn: $this > {{ unit.max_sessions }}
+ crit: $this > {{ (unit.max_sessions * 1.4) | round(0, 'ceil') | int }}
+delay: down 30m multiplier 1 max 1h
+ info: {{ unit.user }}'s agent fleet is larger than the {{ unit.max_sessions }} sessions its
+   memory ceiling was sized for — park or stop sessions, or re-measure and raise the ceiling
+   to: sysadmin
+
+{% endfor %}
