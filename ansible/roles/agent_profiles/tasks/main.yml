@@ -119,8 +119,32 @@
 # runs every command as `bash -lc`, and mise's activation snippet prepends its
 # installs/*/bin ahead of everything the daemon unit passed down — so bun, node and npm
 # resolved to the real toolchain and no build a Codex session ran was ever gated. This
-# sorts after mise.sh in /etc/profile.d and puts the gate back in front. It only
-# reorders: a developer with the gate off never has the directory on PATH to reorder.
+# sorts after mise.sh in /etc/profile.d and puts the gate back in front. Measured again
+# 2026-09-05: reordering alone was not enough, because a login shell can inherit a PATH
+# with no gate directory on it at all, and an ungated release build then took the box out
+# for hours. So the snippet also prepends — but only for a developer named in the roster.
+# The snippet below can only hand the gate to a developer it knows is entitled to it, and
+# the gate directory is box-wide while enablement is per developer. This is that roster:
+# rewritten on every run, so flipping heavy_job_gate_enabled off removes the developer
+# from it and their next login shell stops receiving the gate.
+- name: Declare which developers may receive the heavy-command gate on PATH
+  ansible.builtin.file:
+    path: /etc/agent-devbox
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [heavy_gate]
+
+- name: Render the heavy-command gate roster
+  ansible.builtin.template:
+    src: heavy-gate-users.j2
+    dest: /etc/agent-devbox/heavy-gate-users
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [heavy_gate]
+
 - name: Keep the heavy-command gate ahead of mise in login shells
   ansible.builtin.template:
     src: heavy-gate-path.sh.j2

@@ -147,6 +147,52 @@ test("heavy_job_gate accepts bounded categories and wait controls", () => {
   );
 });
 
+test("runaway_guard accepts bounded thresholds", () => {
+  expect(
+    paths({
+      ...minimal(),
+      host: {
+        runaway_guard: {
+          enabled: true,
+          interval_sec: 30,
+          grace_sec: 120,
+          rss_floor_mb: 6144,
+          high_ratio: 0.98,
+          pressure_full_min: 25,
+        },
+      },
+    }),
+  ).toEqual([]);
+  expect(paths({ ...minimal(), host: { runaway_guard: true } })).toContain("error:host.runaway_guard");
+  expect(paths({ ...minimal(), host: { runaway_guard: { enabled: "no" } } })).toContain(
+    "error:host.runaway_guard.enabled",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { interval_sec: 0 } } })).toContain(
+    "error:host.runaway_guard.interval_sec",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { rss_floor_mb: 1.5 } } })).toContain(
+    "error:host.runaway_guard.rss_floor_mb",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { high_ratio: 2 } } })).toContain(
+    "error:host.runaway_guard.high_ratio",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { pressure_full_min: 0 } } })).toContain(
+    "error:host.runaway_guard.pressure_full_min",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { pressure_ful_min: 25 } } })).toContain(
+    "error:host.runaway_guard.pressure_ful_min",
+  );
+});
+
+// A grace below the sweep interval means the first sighting is already past grace, so
+// the guard would kill on sight — the one thing its two-pass design exists to prevent.
+test("runaway_guard grace may not be shorter than the sweep interval", () => {
+  expect(paths({ ...minimal(), host: { runaway_guard: { interval_sec: 30, grace_sec: 20 } } })).toContain(
+    "error:host.runaway_guard.grace_sec",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { interval_sec: 30, grace_sec: 30 } } })).toEqual([]);
+});
+
 test("default_engine must be installed", () => {
   expect(
     paths({ ...minimal(), container: { default_engine: "docker-rootless", install_engines: ["podman-rootless"] } }),

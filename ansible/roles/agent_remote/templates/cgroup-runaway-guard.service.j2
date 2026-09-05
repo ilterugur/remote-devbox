@@ -1,0 +1,59 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set G = devbox_host.runaway_guard %}
+[Unit]
+Description=Kill the runaway pinning an agent cgroup at MemoryHigh
+Documentation=man:cgroup-runaway-guard(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cgroup-runaway-guard --grace-sec {{ G.grace_sec }} --rss-floor-mb {{ G.rss_floor_mb }} --high-ratio {{ G.high_ratio }} --pressure-full-min {{ G.pressure_full_min }} --state /run/cgroup-runaway-guard/seen.json
+{# The guard only kills a process it has ALREADY seen as the runaway on an earlier pass,
+   so the sighting record has to outlive the oneshot. Without Preserve=yes systemd
+   removes RuntimeDirectory= the moment the unit exits, every pass starts from an empty
+   state, nothing ever reaches its grace, and the timer becomes a no-op that still looks
+   healthy. #}
+RuntimeDirectory=cgroup-runaway-guard
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+{# Runs as root: the cgroups it reads belong to developers, and the runaway it signals
+   does too. Everything below narrows that to reading /proc and /sys/fs/cgroup and
+   writing its own state file. #}
+ProtectSystem=strict
+ReadWritePaths=/run/cgroup-runaway-guard
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+{# Two capabilities, and deliberately NOT a third. CAP_KILL signals another developer's
+   runaway; CAP_DAC_READ_SEARCH reads their cgroup files, which are not world-readable
+   (verified: an unprivileged read of paseo-daemon.service/memory.current is denied).
+   CAP_SYS_PTRACE is absent because this guard reads only comm, statm and stat — all
+   kernel-resident. The browser reaper needs ptrace because it readlinks /proc/<pid>/fd;
+   this one must never touch cmdline or fd, since faulting a swapped-out target's pages
+   back in is what hangs for minutes under the very stall it responds to. #}
+CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH
+{# hide_pids mounts /proc with hidepid; a hardened ProtectProc on top would hide the
+   members of the cgroups this exists to inspect. #}
+ProtectProc=default
+UMask=0077
+{# A pass reads a handful of files and may sleep 5s between SIGTERM and SIGKILL. Anything
+   beyond a minute means it is itself stuck, and dying is better than holding the slot. #}
+TimeoutStartSec=60s
+{# The janitor has to outlive the condition it fixes. Measured 2026-09-05: with the
+   fleet's cgroup pinned at MemoryHigh the host reached `full avg10=92%`, `ps` took over
+   three minutes and sshd could not complete a login for fifteen. A guard scheduled and
+   reclaimed like everything else would be starved exactly when it is needed, so it gets
+   CPU priority, reclaim protection for its own small footprint, and an OOM score that
+   keeps the kernel from choosing it as the victim of the stall. #}
+Nice=-10
+OOMScoreAdjust=-900
+MemoryMin=64M
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0

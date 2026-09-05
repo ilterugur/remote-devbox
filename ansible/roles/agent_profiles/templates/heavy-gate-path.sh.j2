@@ -14,9 +14,33 @@
 # shell. That does not affect the failure this closes: each agent command is a fresh
 # non-interactive `bash -lc`, where activation runs once and this runs after it.
 #
-# It only ever REORDERS. A developer who has the gate turned off never has the
-# directory on PATH in the first place, and this must not quietly hand it back.
+# It only ever hands the gate to a developer the roster names. A developer whose gate is
+# off is absent from that file and their PATH is left byte-identical.
+#
+# Two branches, because there are two ways to lose the gate. The first is ORDER: the
+# directory is on PATH but behind mise's activation, measured 2026-08-20 above. The
+# second is ABSENCE, measured 2026-09-05 and the more expensive of the two: in a login
+# shell whose inherited PATH never had the directory at all — `sudo -u <dev> bash -lc`,
+# cron, a release wrapper started from a stripped environment — the reorder branch had
+# nothing to reorder, so `command -v bun` still resolved to
+# ~/.local/share/mise/installs/bun/1.4.0/bin/bun and the build it launched ran ungated.
+# That one grew to 13.8 GB inside the session fleet's cgroup and stalled every session on
+# the box for hours.
 __devbox_gate_dir=${DEVBOX_HEAVY_GATE_DIR:-/usr/local/lib/agent-devbox/heavy-command-gate}
+__devbox_gate_roster=${DEVBOX_HEAVY_GATE_ROSTER:-/etc/agent-devbox/heavy-gate-users}
+
+# One `read` loop over a small file, no subshell and no external command: this runs on
+# every `bash -lc`, so its cost is paid by every command an agent issues. A missing
+# roster leaves PATH untouched rather than failing the shell.
+__devbox_gate_listed=
+if [ -r "$__devbox_gate_roster" ]; then
+  while IFS= read -r __devbox_roster_user || [ -n "$__devbox_roster_user" ]; do
+    if [ "$__devbox_roster_user" = "${USER:-$(id -un)}" ]; then
+      __devbox_gate_listed=yes
+      break
+    fi
+  done < "$__devbox_gate_roster"
+fi
 
 case ":${PATH}:" in
   *":${__devbox_gate_dir}:"*)
@@ -35,5 +59,14 @@ case ":${PATH}:" in
     export PATH
     unset __devbox_new_path __devbox_entry
     ;;
+  *)
+    # Absent entirely: only a rostered developer gets it, and only when the shims are
+    # actually installed — handing out a directory that does not exist would put a dead
+    # entry at the front of PATH for every command on the box.
+    if [ -n "$__devbox_gate_listed" ] && [ -d "$__devbox_gate_dir" ]; then
+      PATH="${__devbox_gate_dir}:${PATH}"
+      export PATH
+    fi
+    ;;
 esac
-unset __devbox_gate_dir
+unset __devbox_gate_dir __devbox_gate_roster __devbox_gate_listed __devbox_roster_user

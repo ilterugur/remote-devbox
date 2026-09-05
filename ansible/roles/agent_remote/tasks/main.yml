@@ -467,6 +467,61 @@
   when: not devbox_remote_control.reap.enabled
   notify: Reload systemd
 
+# ── Cgroup runaway guard ──────────────────────────────────────────────────────
+# The reaper above answers "this process was stranded"; this answers "this cgroup is
+# stalled and one member is why". Measured 2026-09-04/05 on paseo-daemon.service:
+# `memory.events` read `high 100090357` throttle events against `oom_kill 3`, because
+# MemoryHigh throttles a runaway hard enough that MemoryMax is rarely reached — so the
+# cgroup parks at its watermark for hours and every session in it stalls. Both incidents
+# were ended by hand; this is that hand on a timer. Box-wide, like the reaper: one pass
+# assesses every agent cgroup it can find.
+- name: Deploy the cgroup runaway guard (python, driven by its own timer)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/cgroup-runaway-guard.py"
+    dest: /usr/local/bin/cgroup-runaway-guard
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the cgroup runaway guard unit and timer
+  ansible.builtin.template:
+    src: "cgroup-runaway-guard.{{ item }}.j2"
+    dest: "/etc/systemd/system/cgroup-runaway-guard.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  when: devbox_host.runaway_guard.enabled
+  notify: Reload systemd
+
+- name: Enable the cgroup runaway guard timer
+  ansible.builtin.systemd_service:
+    name: cgroup-runaway-guard.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when:
+    - devbox_host.runaway_guard.enabled
+    - not ansible_check_mode
+
+# Stop before removing: a timer whose unit files vanish underneath it stays loaded
+# and armed in the running manager until something reloads it.
+- name: Stop the cgroup runaway guard timer when the guard is disabled
+  ansible.builtin.systemd_service:
+    name: cgroup-runaway-guard.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not devbox_host.runaway_guard.enabled
+
+- name: Remove the cgroup runaway guard unit and timer when the guard is disabled
+  ansible.builtin.file:
+    path: "/etc/systemd/system/cgroup-runaway-guard.{{ item }}"
+    state: absent
+  loop: [service, timer]
+  when: not devbox_host.runaway_guard.enabled
+  notify: Reload systemd
+
 # ── Legacy migration: retire the old single-agent claude-rc-* units/scripts/dir.
 #    MUST run before "Enable and start" so the old RC session is gone before the new
 #    agent-rc unit brings one up — two RC sessions must not fight over one login.

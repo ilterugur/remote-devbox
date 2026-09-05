@@ -1,0 +1,21 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set G = devbox_host.runaway_guard %}
+[Unit]
+Description=Periodic check for an agent cgroup pinned at MemoryHigh
+
+[Timer]
+{# Nothing is pinned at boot — the fleet has only just started — so the first check is
+   delayed rather than racing the daemon's own startup. #}
+OnBootSec=2min
+OnUnitActiveSec={{ G.interval_sec }}s
+{# Tight on purpose, unlike the leak sweeps in this repo. A stall is not a leak: measured
+   2026-09-04, a cgroup went from healthy to a box nobody could log into in under ten
+   minutes. Letting systemd batch this check by a minute would spend most of the window
+   the guard exists to act inside. #}
+AccuracySec=1s
+{# Deliberately not Persistent=: a missed check has nothing to catch up on, and the
+   sighting state it would fire against is gone with the reboot anyway. #}
+Unit=cgroup-runaway-guard.service
+
+[Install]
+WantedBy=timers.target

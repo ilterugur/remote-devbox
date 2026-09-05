@@ -54,6 +54,36 @@ export interface HeavyJobGateSpec {
   memory_max?: string;
 }
 
+/**
+ * The janitor for a stall MemoryHigh cannot end on its own.
+ *
+ * MemoryHigh throttles rather than kills, which is right for a fleet of sessions until
+ * one member grows without a ceiling of its own. Measured 2026-09-04/05 on
+ * `paseo-daemon.service` (MemoryHigh=34G, MemoryMax=36G): `memory.events` read
+ * `high 100090357` and `sock_throttled 781157` against `oom_kill 3` — throttling slowed
+ * the runaway enough that the 2G band to MemoryMax was almost never crossed, so the
+ * cgroup parked at its watermark for hours and every session in it stalled. Ending it
+ * by hand took seconds, twice. This is that hand on a timer.
+ */
+export interface RunawayGuardSpec {
+  enabled?: boolean;
+  /** How often the check runs. Tight by design: a pinned cgroup became a box nobody
+   *  could log into in under ten minutes. */
+  interval_sec?: number;
+  /** How long one process must be the largest runaway before it is killed. Must be at
+   *  least `interval_sec`, or the first sighting is already past grace. */
+  grace_sec?: number;
+  /** Floor for being a candidate at all. A session is a few hundred MB, so this sits
+   *  far above one: only a genuine runaway is ever eligible. */
+  rss_floor_mb?: number;
+  /** Fraction of MemoryHigh that counts as "at the wall". The kernel holds usage just
+   *  under high while reclaiming, so equality never lands on a sample boundary. */
+  high_ratio?: number;
+  /** Minimum `memory.pressure` full avg10 for the cgroup, in percent. At the wall with
+   *  nobody stalling is a healthy steady state, not a fault. */
+  pressure_full_min?: number;
+}
+
 export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";
 
 /** Host tuning that is not part of the developer model. */
@@ -79,6 +109,8 @@ export interface HostSpec {
   swappiness?: number;
   /** Serialize memory-heavy agent commands per Linux developer. Defaults on. */
   heavy_job_gate?: HeavyJobGateSpec;
+  /** Kill the runaway that has parked an agent cgroup at its MemoryHigh. Defaults on. */
+  runaway_guard?: RunawayGuardSpec;
   /** Host metrics dashboard and alarms. Off unless declared. */
   monitoring?: MonitoringSpec;
 }

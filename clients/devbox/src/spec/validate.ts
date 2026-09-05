@@ -197,6 +197,7 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
     issues.push(err("host.locales", "must be a list of locale names"));
   }
   validateHeavyJobGate(h.heavy_job_gate, "host.heavy_job_gate", issues);
+  validateRunawayGuard(h.runaway_guard, "host.runaway_guard", issues);
   const mon = h.monitoring;
   if (mon !== undefined) {
     if (!isRecord(mon)) {
@@ -527,6 +528,47 @@ function validateAgentVersions(d: Record<string, unknown>, base: string, issues:
         `must be exactly ${OMP_MODEL_PRESETS_OMP_VERSION} when omp_model_presets is configured`,
       ),
     );
+  }
+}
+
+function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push(err(path, "must be a mapping"));
+    return;
+  }
+  const allowedFields = new Set([
+    "enabled", "interval_sec", "grace_sec", "rss_floor_mb", "high_ratio", "pressure_full_min",
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowedFields.has(key)) issues.push(err(`${path}.${key}`, "unknown runaway-guard field"));
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    issues.push(err(`${path}.enabled`, "must be true or false"));
+  }
+  for (const key of ["interval_sec", "grace_sec", "rss_floor_mb"] as const) {
+    const setting = value[key];
+    if (setting !== undefined && !(typeof setting === "number" && Number.isInteger(setting) && setting > 0)) {
+      issues.push(err(`${path}.${key}`, "must be a positive integer"));
+    }
+  }
+  const ratio = value.high_ratio;
+  if (ratio !== undefined && !(typeof ratio === "number" && ratio >= 0.5 && ratio <= 1)) {
+    issues.push(err(`${path}.high_ratio`, "must be a number in 0.5..1.0"));
+  }
+  const pressure = value.pressure_full_min;
+  if (
+    pressure !== undefined &&
+    !(typeof pressure === "number" && Number.isInteger(pressure) && pressure >= 1 && pressure <= 100)
+  ) {
+    issues.push(err(`${path}.pressure_full_min`, "must be an integer in 1..100"));
+  }
+  // A grace shorter than the sweep interval means the very first sighting is already
+  // past grace, which collapses the two-pass safety into kill-on-sight.
+  const interval = value.interval_sec;
+  const grace = value.grace_sec;
+  if (typeof interval === "number" && typeof grace === "number" && grace < interval) {
+    issues.push(err(`${path}.grace_sec`, "must be greater than or equal to interval_sec"));
   }
 }
 

@@ -18,6 +18,13 @@
       heavy_job_gate_categories: [build, typecheck, generate]
       heavy_job_gate_wait_timeout_sec: 1800
       heavy_job_gate_warn_after_sec: 5
+    devbox_developers:
+      - user: dev-a
+        heavy_job_gate: { enabled: true }
+      - user: dev-b
+        heavy_job_gate: { enabled: false }
+      - user: dev-c
+        heavy_job_gate: { enabled: true }
     devbox_agent_adapters:
       codex:
         config_env: CODEX_HOME
@@ -141,6 +148,39 @@
             that:
               - "'when: item.heavy_job_gate_enabled | default(true)' in agent_profiles_tasks.content | b64decode"
               - "'when: not (item.heavy_job_gate_enabled | default(true))' in agent_profiles_tasks.content | b64decode"
+
+        # The roster is the only thing standing between "reorder what is already there"
+        # and "hand the gate to anyone with a login shell". Measured 2026-09-05: a login
+        # shell whose PATH never had the gate directory ran an ungated 13.8 GB build that
+        # stalled the whole box, so the snippet now prepends too — and it must prepend
+        # for exactly the developers whose gate is enabled, nobody else.
+        - name: Render the heavy-command gate roster
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_profiles/templates/heavy-gate-users.j2"
+            dest: "{{ render_dir.path }}/heavy-gate-users"
+            mode: "0600"
+
+        - name: Read the roster and the profile.d snippet
+          ansible.builtin.slurp:
+            src: "{{ item_path }}"
+          register: gate_path_files
+          loop:
+            - "{{ render_dir.path }}/heavy-gate-users"
+            - "{{ playbook_dir }}/../roles/agent_profiles/templates/heavy-gate-path.sh.j2"
+          loop_control:
+            loop_var: item_path
+
+        - name: Assert the roster names exactly the gate-enabled developers
+          ansible.builtin.assert:
+            that:
+              - (gate_path_files.results[0].content | b64decode).split() == ['dev-a', 'dev-c']
+
+        - name: Assert the snippet consults the roster and still reorders an existing entry
+          ansible.builtin.assert:
+            that:
+              - "'/etc/agent-devbox/heavy-gate-users' in gate_path_files.results[1].content | b64decode"
+              - "'__devbox_gate_listed' in gate_path_files.results[1].content | b64decode"
+              - "'PATH=\"${__devbox_gate_dir}:${__devbox_new_path}\"' in gate_path_files.results[1].content | b64decode"
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

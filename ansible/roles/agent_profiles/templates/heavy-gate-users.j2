@@ -1,0 +1,13 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{# Who may have the heavy-command gate put on their PATH.
+   The gate directory is box-wide but enablement is per developer, so the profile.d
+   snippet needs a source of truth it can consult without spawning anything: it runs on
+   every `bash -lc`, and a subshell there is a cost every agent command pays. A roster
+   file is one `read` loop. Enabled developers only — a developer whose gate is off must
+   never have the directory handed to them, which is why absence from this file is the
+   only signal the snippet trusts. #}
+{% for dev in devbox_developers | sort(attribute='user') %}
+{% if dev.heavy_job_gate.enabled %}
+{{ dev.user }}
+{% endif %}
+{% endfor %}

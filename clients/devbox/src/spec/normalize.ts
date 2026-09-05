@@ -120,6 +120,18 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
       umask: resolved.host?.umask ?? "077",
       swappiness: resolved.host?.swappiness ?? null,
       heavy_job_gate: hostHeavyJobGate,
+      // On by default: both incidents it exists for were resolved by a human running
+      // exactly this, and neither cgroup healed on its own. The grace is four sweeps
+      // wide so a build that spikes and finishes is never a victim, and the floor is an
+      // order of magnitude above a session so only a runaway is ever eligible.
+      runaway_guard: {
+        enabled: resolved.host?.runaway_guard?.enabled ?? true,
+        interval_sec: resolved.host?.runaway_guard?.interval_sec ?? 30,
+        grace_sec: resolved.host?.runaway_guard?.grace_sec ?? 120,
+        rss_floor_mb: resolved.host?.runaway_guard?.rss_floor_mb ?? 6144,
+        high_ratio: resolved.host?.runaway_guard?.high_ratio ?? 0.98,
+        pressure_full_min: resolved.host?.runaway_guard?.pressure_full_min ?? 25,
+      },
       monitoring: {
         enabled: resolved.host?.monitoring?.enabled ?? false,
         port: resolved.host?.monitoring?.port ?? 19999,

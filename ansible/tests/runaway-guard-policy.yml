@@ -1,0 +1,103 @@
+---
+# The guard's containment lives in two places: the script decides WHO to kill (covered by
+# scripts/test_cgroup_runaway_guard.py), and these units decide whether it can run at all
+# — and, unusually for a janitor, whether it can run *while the box is stalling*. The
+# assertions below pin the settings whose absence would make the timer look healthy while
+# doing nothing, or leave the guard starved by the condition it exists to end.
+- name: Verify cgroup runaway guard unit rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    devbox_host:
+      runaway_guard:
+        enabled: true
+        interval_sec: 30
+        grace_sec: 120
+        rss_floor_mb: 6144
+        high_ratio: 0.98
+        pressure_full_min: 25
+
+  tasks:
+    - name: Render and verify the guard unit and timer in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-runaway-guard-policy-
+          register: render_dir
+
+        - name: Render the guard unit and timer
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/cgroup-runaway-guard.{{ item }}.j2"
+            dest: "{{ render_dir.path }}/cgroup-runaway-guard.{{ item }}"
+            mode: "0600"
+          loop: [service, timer]
+
+        - name: Read the guard unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/cgroup-runaway-guard.service"
+          register: guard_unit
+
+        - name: Read the guard timer
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/cgroup-runaway-guard.timer"
+          register: guard_timer
+
+        # The guard only kills what it saw as the runaway on an EARLIER pass, so the
+        # sighting record has to survive between firings. Without Preserve=yes systemd
+        # deletes the runtime directory when the oneshot exits, every pass starts empty,
+        # nothing ever ages into its grace, and the timer becomes a silent no-op.
+        - name: Assert the sighting state survives between passes
+          ansible.builtin.assert:
+            that:
+              - "'RuntimeDirectory=cgroup-runaway-guard' in guard_unit.content | b64decode"
+              - "'RuntimeDirectoryPreserve=yes' in guard_unit.content | b64decode"
+              - "'ReadWritePaths=/run/cgroup-runaway-guard' in guard_unit.content | b64decode"
+              - "'--state /run/cgroup-runaway-guard/seen.json' in guard_unit.content | b64decode"
+
+        - name: Assert every configured threshold reaches the command line
+          ansible.builtin.assert:
+            that:
+              - "'--grace-sec 120' in guard_unit.content | b64decode"
+              - "'--rss-floor-mb 6144' in guard_unit.content | b64decode"
+              - "'--high-ratio 0.98' in guard_unit.content | b64decode"
+              - "'--pressure-full-min 25' in guard_unit.content | b64decode"
+
+        # The one property that separates this unit from every other janitor here. With
+        # the fleet's cgroup pinned the host hit `full avg10=92%`, `ps` took over three
+        # minutes and sshd could not complete a login for fifteen. A guard reclaimed and
+        # scheduled like everything else is starved exactly when it must act, and an
+        # ordinary OOM score makes it a candidate for the kill it is supposed to deliver.
+        - name: Assert the guard can outlive the stall it responds to
+          ansible.builtin.assert:
+            that:
+              - "'Nice=-10' in guard_unit.content | b64decode"
+              - "'OOMScoreAdjust=-900' in guard_unit.content | b64decode"
+              - "'MemoryMin=64M' in guard_unit.content | b64decode"
+
+        # CAP_SYS_PTRACE is absent on purpose: it would only be needed to read cmdline or
+        # fd, and faulting a swapped-out runaway's pages back in is what hangs for minutes
+        # under this exact stall. The guard reads comm/statm/stat only.
+        - name: Assert the guard keeps exactly the capabilities it needs
+          ansible.builtin.assert:
+            that:
+              - "'CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH' in guard_unit.content | b64decode"
+              - "'CAP_SYS_PTRACE' not in guard_unit.content | b64decode"
+              - "'ProtectSystem=strict' in guard_unit.content | b64decode"
+              - "'ProtectProc=default' in guard_unit.content | b64decode"
+
+        # A stall becomes an unusable box in minutes, so this cadence must not be batched
+        # away by systemd's timer coalescing the way the leak sweeps in this repo are.
+        - name: Assert the check runs on a tight cadence and does not catch up
+          ansible.builtin.assert:
+            that:
+              - "'OnUnitActiveSec=30s' in guard_timer.content | b64decode"
+              - "'AccuracySec=1s' in guard_timer.content | b64decode"
+              - "'Unit=cgroup-runaway-guard.service' in guard_timer.content | b64decode"
+              - "'Persistent=' not in guard_timer.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent

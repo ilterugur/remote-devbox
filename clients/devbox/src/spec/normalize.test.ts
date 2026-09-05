@@ -440,6 +440,46 @@ test("host memory reserve is emitted in canonical systemd form", () => {
   expect(out.devbox_host).toMatchObject({ memory_reserve: "4G" });
 });
 
+// Reading a generated mapping without asserting a shape onto it: the point of the test
+// is what the generator emitted, so the lookup must not fabricate the type it checks.
+const emitted = (value: unknown, key: string): unknown =>
+  value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+
+test("the runaway guard defaults on with a grace four sweeps wide", () => {
+  expect(emitted(normalize(resolved).devbox_host, "runaway_guard")).toEqual({
+    enabled: true,
+    interval_sec: 30,
+    grace_sec: 120,
+    rss_floor_mb: 6144,
+    high_ratio: 0.98,
+    pressure_full_min: 25,
+  });
+});
+
+test("runaway guard settings are taken verbatim when declared", () => {
+  const declared = normalize({
+    ...resolved,
+    host: {
+      runaway_guard: {
+        enabled: false,
+        interval_sec: 60,
+        grace_sec: 600,
+        rss_floor_mb: 8192,
+        high_ratio: 0.95,
+        pressure_full_min: 40,
+      },
+    },
+  } as ResolvedSpec);
+  expect(emitted(declared.devbox_host, "runaway_guard")).toEqual({
+    enabled: false,
+    interval_sec: 60,
+    grace_sec: 600,
+    rss_floor_mb: 8192,
+    high_ratio: 0.95,
+    pressure_full_min: 40,
+  });
+});
+
 test("heavy job gate defaults on and supports global and developer overrides", () => {
   const defaulted = normalize(resolved);
   expect((defaulted.devbox_host as any).heavy_job_gate).toEqual({

@@ -42,6 +42,22 @@ host:
     # and every session sharing that cgroup drops. Each gated job runs in a scope of
     # its own, so a runaway is the only casualty. '' disables the scope.
     memory_max: 8G
+  # The gate above bounds jobs it recognises; this bounds what it misses. MemoryHigh
+  # throttles rather than kills, so one member growing without a ceiling parks its whole
+  # cgroup at the watermark and every session in it stalls — measured 100M throttle
+  # events against 3 OOM kills, hours at a time, once behind an ungated 13.8G build and
+  # once behind a 24.4G dev server (a long-running process the gate's categories do not
+  # cover at all). The guard kills the largest member of a cgroup that has been observed
+  # pinned AND stalling across the grace window; agent sessions, supervisors and anything
+  # under the RSS floor are never candidates, and a stall with no single offender is
+  # reported rather than acted on.
+  runaway_guard:
+    enabled: true
+    interval_sec: 30        # tight: a pinned cgroup became an unusable box in <10 minutes.
+    grace_sec: 120          # must be >= interval_sec, or the first sighting is already due.
+    rss_floor_mb: 6144      # a session is a few hundred MB; only a runaway clears this.
+    high_ratio: 0.98        # "at the wall": usage hovers just under high while reclaiming.
+    pressure_full_min: 25   # at the wall without stalling is a healthy steady state.
   # Sizing note for a box running an agent fleet rather than one build at a time: a fleet
   # of mostly-idle sessions holds tens of GB of cold anonymous heap, and swap is where that
   # belongs. Undersized swap does not merely limit paging — it pins the working set

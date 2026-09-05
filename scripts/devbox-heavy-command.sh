@@ -346,7 +346,15 @@ fi
 scope_available() {
   [[ -n "$memory_max" ]] || return 1
   command -v systemd-run >/dev/null 2>&1 || return 1
-  [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private" ]]
+  # The runtime directory must be KNOWN, not guessed. Defaulting it to /run/user/$(id -u)
+  # inverted this function: measured 2026-09-05, with XDG_RUNTIME_DIR unset and the
+  # logged-in user's /run/user/1004/systemd/private present, the check passed and
+  # systemd-run then aborted with "$DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not
+  # defined" — so a build launched from a stripped environment (a task runner that
+  # filters env, cron, `sudo` without the variable) did not run unscoped, it did not run
+  # at all. systemd-run --user reaches the manager over that socket AND needs the
+  # variable to find it, so the only safe test is that both are actually there.
+  [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/systemd/private" ]]
 }
 
 if scope_available; then

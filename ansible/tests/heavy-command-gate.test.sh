@@ -284,6 +284,33 @@ scope_out=$(
 [[ "$(printf '%s\n' "$scope_out" | head -1)" == "$ambient_cgroup" ]] \
   || fail "expected an unscoped run without a user manager, got $scope_out"
 
+# The same failure with the variable ABSENT rather than pointing somewhere empty. This
+# is the shape that bit us: measured 2026-09-05, the gate guessed /run/user/$(id -u),
+# found the logged-in user's real manager socket there, attempted a scope, and
+# systemd-run aborted with "$XDG_RUNTIME_DIR not defined" — so a build started from a
+# stripped environment ran nowhere at all. A guess about the runtime dir must never
+# become a scope attempt.
+if [[ -w "/run/user/$(id -u)" ]]; then
+  scope_out=$(
+    env -u XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS= \
+      DEVBOX_HEAVY_JOB_MEMORY_MAX=1G next build 2>/dev/null
+  ) || fail "gate did not fail open with XDG_RUNTIME_DIR unset"
+  [[ "$(printf '%s\n' "$scope_out" | head -1)" == "$ambient_cgroup" ]] \
+    || fail "expected an unscoped run with XDG_RUNTIME_DIR unset, got $scope_out"
+
+  # And the caller's status still has to survive: an agent reads a build's exit code to
+  # decide what to do next, so the gate may never substitute its own. Here `build` is
+  # what makes the command heavy and `probe:fail` is what makes the fake tool exit 42.
+  set +e
+  env -u XDG_RUNTIME_DIR DEVBOX_HEAVY_JOB_MEMORY_MAX=1G next build probe:fail >/dev/null 2>&1
+  unset_status=$?
+  set -e
+  [[ "$unset_status" == 42 ]] \
+    || fail "child exit status was rewritten with XDG_RUNTIME_DIR unset: $unset_status"
+else
+  echo "heavy command gate: SKIP unset-runtime-dir case (no writable /run/user/$(id -u))"
+fi
+
 # `infinity` is the explicit opt-out: the caller asked for no ceiling, so no scope and
 # no GOMEMLIMIT invented either.
 scope_out=$(DEVBOX_HEAVY_JOB_MEMORY_MAX=infinity next build 2>/dev/null) \
