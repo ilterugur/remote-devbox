@@ -56,21 +56,37 @@ import signal
 import sys
 import time
 
-# The agent cgroups worth watching: the Paseo daemon holds the session fleet, and each
-# Remote Control unit holds one always-on session. Both are places a runaway lands when
-# it escapes the heavy-job gate, because it inherits the cgroup of whatever spawned it.
+# Where a runaway parks a wall. The Paseo daemon holds the session fleet and each Remote
+# Control unit holds one always-on session — a runaway that escaped the heavy-job gate
+# inherits the cgroup of whatever spawned it and lands in one of those. The per-developer
+# slice is watched too, and it is the one measured 2026-09-05: a GATED build gets a scope
+# of its own (`run-*.scope`, MemoryMax 18G) so it never pins the daemon's cgroup, but that
+# scope is a sibling inside the developer's slice — and there it landed beside a 13.9 GB
+# valkey and a ~20 GB session fleet, taking user-1004.slice to 48.6G of its 49G
+# MemoryHigh three times in one afternoon. Nothing below the slice was pinned, so the
+# guard saw nothing while every session stalled.
 DEFAULT_CGROUP_GLOBS = (
     "/sys/fs/cgroup/**/paseo-daemon.service",
     "/sys/fs/cgroup/**/agent-rc-*.service",
+    "/sys/fs/cgroup/user.slice/user-*.slice",
 )
 
 # Matched against `comm`, which is all this guard is allowed to read (see the module
 # docstring). `comm` is 15 bytes and set by the process itself, so these are prefixes:
 # the Paseo daemon reports "Paseo Daemon"/"Paseo Superviso", a bun-hosted omp session
 # reports "omp".
+#
+# The data stores are here for a reason that only appears at slice level: inside
+# user-1004.slice the largest member is valkey at 13.9 GB, ahead of the 12.8 GB build that
+# is actually the transient one. Picking "largest" without this list would answer a stall
+# by killing the datastore — writes lost, and the stall back within the hour when the next
+# build starts. A store that is big every day is capacity, not a runaway.
 PROTECTED_COMM_PREFIXES = (
     "Paseo Daemon", "Paseo Superviso", "systemd", "omp", "codex", "claude", "tmux",
     "sshd", "dbus", "cgroup-runaway", "agent-rc-", "mosh", "et", "hermes",
+    "valkey-server", "redis-server", "postgres", "nats-server", "clickhouse",
+    "victoria", "openconnector-r", "dockerd", "containerd", "docker-proxy",
+    "rootlesskit", "slirp4netns", "mutagen", "syncthing", "tailscaled",
 )
 
 CLK_TCK = os.sysconf("SC_CLK_TCK")

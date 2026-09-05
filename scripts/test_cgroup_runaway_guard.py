@@ -39,6 +39,11 @@ def member(pid=3267599, comm="bun", rss_mb=24363, start_ticks=5000, cgroup="/cg/
     return guard.Member(pid=pid, comm=comm, rss_kb=rss_mb * 1024, start_ticks=start_ticks, cgroup=cgroup)
 
 
+def slice_member(pid, comm, rss_mb):
+    """A member of the per-developer slice, where the datastores live beside the builds."""
+    return member(pid=pid, comm=comm, rss_mb=rss_mb, cgroup="/cg/user-1004.slice")
+
+
 class Protected(unittest.TestCase):
     """Processes the guard must never kill, however large they get."""
 
@@ -58,6 +63,18 @@ class Protected(unittest.TestCase):
 
     def test_connectivity_and_session_plumbing_is_protected(self):
         for comm in ("sshd", "sshd-session", "dbus-daemon", "mosh-server", "hermes"):
+            self.assertTrue(guard.is_protected(comm), comm)
+
+    def test_the_data_stores_are_protected(self):
+        # Only matters at slice level, and it is the difference between ending a stall
+        # and losing data: inside user-1004.slice valkey (13.9 GB) outweighed the 12.8 GB
+        # build that was the actual transient.
+        for comm in ("valkey-server", "redis-server", "postgres", "nats-server",
+                     "clickhouse-serv", "openconnector-r"):
+            self.assertTrue(guard.is_protected(comm), comm)
+
+    def test_the_container_and_network_plumbing_is_protected(self):
+        for comm in ("dockerd", "containerd", "docker-proxy", "rootlesskit", "tailscaled"):
             self.assertTrue(guard.is_protected(comm), comm)
 
     def test_the_runaways_from_the_incidents_are_not_protected(self):
@@ -134,6 +151,28 @@ class Candidate(unittest.TestCase):
     def test_a_member_below_the_floor_is_never_chosen(self):
         self.assertIsNone(guard.select_candidate([member(comm="node", rss_mb=6143)], self.floor))
         self.assertIsNotNone(guard.select_candidate([member(comm="node", rss_mb=6144)], self.floor))
+
+    def test_at_slice_level_the_build_is_chosen_over_the_bigger_datastore(self):
+        # The exact 2026-09-05 line-up inside user-1004.slice. valkey is the largest
+        # member and the wrong answer: it is 13.9 GB every day, while the build is the
+        # thing that arrived ten minutes ago and took the slice to its wall.
+        members = [
+            slice_member(1072690, "valkey-server", 13908),
+            slice_member(2768353, "node", 12403),
+            slice_member(881250, "Paseo Daemon", 1267),
+            slice_member(1196863, "openconnector-r", 1235),
+        ]
+        chosen = guard.select_candidate(members, self.floor)
+        self.assertEqual((chosen.pid, chosen.comm), (2768353, "node"))
+
+    def test_a_slice_holding_only_datastores_yields_no_candidate(self):
+        # Then the slice is simply sized wrong for what runs in it, and saying so is the
+        # only honest output.
+        members = [
+            slice_member(1072690, "valkey-server", 13908),
+            slice_member(1196863, "postgres", 8000),
+        ]
+        self.assertIsNone(guard.select_candidate(members, self.floor))
 
 
 class GracePeriod(unittest.TestCase):
@@ -275,6 +314,20 @@ class Discovery(unittest.TestCase):
             (str(self.root) + "/**/paseo-daemon.service", str(self.root) + "/**/agent-rc-*.service"))]
         self.assertEqual(sorted(found),
                          ["agent-rc-claude-ilterugur-verti-monorepo.service", "paseo-daemon.service"])
+
+    def test_the_default_globs_reach_the_developer_slice(self):
+        # The level the 2026-09-05 stall lived at. Every default pattern is exercised
+        # against a faithful tree so a typo in one cannot hide behind another matching.
+        base = self.root / "user.slice" / "user-1004.slice"
+        (base / "user@1004.service" / "app.slice" / "paseo-daemon.service").mkdir(parents=True)
+        (self.root / "system.slice" / "docker.service").mkdir(parents=True)
+        patterns = tuple(
+            g.replace("/sys/fs/cgroup", str(self.root)) for g in guard.DEFAULT_CGROUP_GLOBS
+        )
+        found = [os.path.basename(p) for p in guard.find_cgroups(patterns)]
+        self.assertIn("user-1004.slice", found)
+        self.assertIn("paseo-daemon.service", found)
+        self.assertNotIn("docker.service", found)
 
 
 class Reaping(unittest.TestCase):
