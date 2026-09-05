@@ -169,19 +169,35 @@ def is_pinned(current, high, ratio):
     return current >= high * ratio
 
 
-def read_members(cgroup, procfs="/proc"):
-    """Every process the cgroup lists, with only its comm, RSS and start time.
+def member_pids(cgroup):
+    """Every pid accounted to this cgroup, including its descendants.
 
-    Reads the cgroup's own `cgroup.procs` (one file) instead of walking /proc: under the
-    stall this guard responds to, the walk itself is what hangs.
+    Reading only the cgroup's own `cgroup.procs` was wrong the moment slices came into
+    scope, and wrong invisibly: in cgroup v2 an inner node holds no processes, so a slice
+    reads EMPTY while every process it accounts for sits in a leaf below it. Measured
+    2026-09-05, the guard reported `user-1004.slice: stalled-no-candidate` on a slice
+    pinned at 49G with a 9.5 GB build inside it — the diagnosis was right and the
+    membership was blank, so it stood there naming the problem it could have ended.
+
+    Still no /proc walk: this reads one file per cgroup in a subtree of tens, not one per
+    process out of six thousand, and it never touches a process's own memory.
     """
+    pids = []
+    for dirpath, _dirnames, filenames in os.walk(cgroup):
+        if "cgroup.procs" not in filenames:
+            continue
+        try:
+            with open(os.path.join(dirpath, "cgroup.procs")) as fh:
+                pids.extend(int(line) for line in fh if line.strip())
+        except (FileNotFoundError, PermissionError, ValueError, OSError):
+            continue
+    return pids
+
+
+def read_members(cgroup, procfs="/proc"):
+    """Every process the cgroup accounts for, with only its comm, RSS and start time."""
     members = []
-    try:
-        with open(os.path.join(cgroup, "cgroup.procs")) as fh:
-            pids = [int(line) for line in fh if line.strip()]
-    except (FileNotFoundError, PermissionError, ValueError, OSError):
-        return members
-    for pid in pids:
+    for pid in member_pids(cgroup):
         base = os.path.join(procfs, str(pid))
         try:
             with open(os.path.join(base, "comm")) as fh:

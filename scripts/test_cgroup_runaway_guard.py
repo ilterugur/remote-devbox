@@ -235,6 +235,13 @@ class Assess(unittest.TestCase):
         (self.cg / "memory.pressure").write_text(pressure)
         (self.cg / "cgroup.procs").write_text("".join("%d\n" % p for p in pids))
 
+    def write_nested(self, name, pids):
+        """A leaf cgroup below the watched one — where cgroup v2 actually keeps processes."""
+        leaf = self.cg / name
+        leaf.mkdir(parents=True, exist_ok=True)
+        (leaf / "cgroup.procs").write_text("".join("%d\n" % p for p in pids))
+        return leaf
+
     def write_proc(self, pid, comm, rss_mb, start_ticks=5000):
         d = self.procfs / str(pid)
         d.mkdir(parents=True)
@@ -298,6 +305,28 @@ class Assess(unittest.TestCase):
         verdict, candidate = self.assess()
         self.assertEqual(verdict, "stalled")
         self.assertEqual(candidate.pid, 3267599)
+
+    def test_a_slice_finds_the_runaway_in_its_descendant_cgroups(self):
+        # The 2026-09-05 regression, exactly: in cgroup v2 an inner node holds no
+        # processes, so a slice's own cgroup.procs is EMPTY while everything it accounts
+        # for sits in leaves below it. Reading only the top file made the guard report
+        # `stalled-no-candidate` on a slice pinned at its wall with a 9.5 GB build inside.
+        self.write_cgroup(current=34 * GB, pids=[])
+        self.write_nested("user@1004.service/app.slice/run-p2927782.scope", [2929198])
+        self.write_nested("user@1004.service/app.slice/paseo-daemon.service", [881250])
+        self.write_nested("session-1.scope", [1072690])
+        self.write_proc(2929198, "node", 9533)
+        self.write_proc(881250, "Paseo Daemon", 1308)
+        self.write_proc(1072690, "valkey-server", 13969)
+        verdict, candidate = self.assess()
+        self.assertEqual(verdict, "stalled")
+        # The build, not the bigger datastore and not the supervisor.
+        self.assertEqual((candidate.pid, candidate.comm), (2929198, "node"))
+
+    def test_membership_is_collected_without_walking_proc(self):
+        self.write_cgroup(current=34 * GB, pids=[1])
+        self.write_nested("child/grandchild", [2, 3])
+        self.assertEqual(sorted(guard.member_pids(str(self.cg))), [1, 2, 3])
 
 
 class Discovery(unittest.TestCase):
