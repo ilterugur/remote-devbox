@@ -17,6 +17,7 @@
         rss_floor_mb: 6144
         high_ratio: 0.98
         pressure_full_min: 25
+        scan_deadline_sec: 20
 
   tasks:
     - name: Render and verify the guard unit and timer in an isolated directory
@@ -63,12 +64,23 @@
               - "'--rss-floor-mb 6144' in guard_unit.content | b64decode"
               - "'--high-ratio 0.98' in guard_unit.content | b64decode"
               - "'--pressure-full-min 25' in guard_unit.content | b64decode"
+              - "'--scan-deadline-sec 20' in guard_unit.content | b64decode"
 
         # The one property that separates this unit from every other janitor here. With
         # the fleet's cgroup pinned the host hit `full avg10=92%`, `ps` took over three
         # minutes and sshd could not complete a login for fifteen. A guard reclaimed and
         # scheduled like everything else is starved exactly when it must act, and an
         # ordinary OOM score makes it a candidate for the kill it is supposed to deliver.
+        # The ordering that the 2026-09-07 stall turned into a lesson: TimeoutStartSec=60s
+        # terminated the pass mid-scan on four consecutive firings while the slice sat at
+        # its watermark. The unit timeout must stay well ABOVE the guard's own scan budget,
+        # so what bounds a pass is the budget (which decides on what it read) and not
+        # systemd's SIGTERM (which decides nothing).
+        - name: Assert the unit timeout sits above the scan budget
+          ansible.builtin.assert:
+            that:
+              - "'TimeoutStartSec=80s' in guard_unit.content | b64decode"
+
         - name: Assert the guard can outlive the stall it responds to
           ansible.builtin.assert:
             that:

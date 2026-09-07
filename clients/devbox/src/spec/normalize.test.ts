@@ -453,6 +453,7 @@ test("the runaway guard defaults on with a grace four sweeps wide", () => {
     rss_floor_mb: 6144,
     high_ratio: 0.98,
     pressure_full_min: 25,
+    scan_deadline_sec: 20,
   });
 });
 
@@ -467,6 +468,7 @@ test("runaway guard settings are taken verbatim when declared", () => {
         rss_floor_mb: 8192,
         high_ratio: 0.95,
         pressure_full_min: 40,
+        scan_deadline_sec: 20,
       },
     },
   } as ResolvedSpec);
@@ -477,6 +479,7 @@ test("runaway guard settings are taken verbatim when declared", () => {
     rss_floor_mb: 8192,
     high_ratio: 0.95,
     pressure_full_min: 40,
+    scan_deadline_sec: 20,
   });
 });
 

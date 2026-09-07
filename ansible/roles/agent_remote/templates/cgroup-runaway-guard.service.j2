@@ -6,7 +6,7 @@ Documentation=man:cgroup-runaway-guard(8)
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/cgroup-runaway-guard --grace-sec {{ G.grace_sec }} --rss-floor-mb {{ G.rss_floor_mb }} --high-ratio {{ G.high_ratio }} --pressure-full-min {{ G.pressure_full_min }} --state /run/cgroup-runaway-guard/seen.json
+ExecStart=/usr/local/bin/cgroup-runaway-guard --grace-sec {{ G.grace_sec }} --rss-floor-mb {{ G.rss_floor_mb }} --high-ratio {{ G.high_ratio }} --pressure-full-min {{ G.pressure_full_min }} --scan-deadline-sec {{ G.scan_deadline_sec }} --state /run/cgroup-runaway-guard/seen.json
 {# The guard only kills a process it has ALREADY seen as the runaway on an earlier pass,
    so the sighting record has to outlive the oneshot. Without Preserve=yes systemd
    removes RuntimeDirectory= the moment the unit exits, every pass starts from an empty
@@ -43,9 +43,14 @@ CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH
    members of the cgroups this exists to inspect. #}
 ProtectProc=default
 UMask=0077
-{# A pass reads a handful of files and may sleep 5s between SIGTERM and SIGKILL. Anything
-   beyond a minute means it is itself stuck, and dying is better than holding the slot. #}
-TimeoutStartSec=60s
+{# The timeout has to sit ABOVE the guard's own scan budget, and that ordering is the
+   whole point: measured 2026-09-07, TimeoutStartSec=60s terminated the pass mid-scan on
+   four consecutive firings — `Failed with result 'timeout'`, SIGTERM — while the slice
+   it was watching sat at 49.1G of its 49G watermark and nothing was ever killed. The
+   guard's own deadline (--scan-deadline-sec) is what bounds a pass now; it stops
+   collecting and decides on what it read. This is the outer backstop for a pass that is
+   wedged rather than slow, so it is deliberately several times the budget. #}
+TimeoutStartSec={{ (G.scan_deadline_sec | int * 4) }}s
 {# The janitor has to outlive the condition it fixes. Measured 2026-09-05: with the
    fleet's cgroup pinned at MemoryHigh the host reached `full avg10=92%`, `ps` took over
    three minutes and sshd could not complete a login for fifteen. A guard scheduled and

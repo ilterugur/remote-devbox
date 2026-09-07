@@ -82,6 +82,12 @@ export interface RunawayGuardSpec {
   /** Minimum `memory.pressure` full avg10 for the cgroup, in percent. At the wall with
    *  nobody stalling is a healthy steady state, not a fault. */
   pressure_full_min?: number;
+  /** Budget for one pass's member scan. Measured 2026-09-07: a pass reading every one of
+   *  475 slice members outran the unit's own TimeoutStartSec and systemd SIGTERMed it on
+   *  four consecutive firings, so the guard decided nothing while the slice sat pinned.
+   *  The pass now stops collecting at this point and acts on what it read; the unit
+   *  timeout is derived from it. */
+  scan_deadline_sec?: number;
 }
 
 export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";

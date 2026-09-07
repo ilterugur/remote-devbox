@@ -194,16 +194,44 @@ def member_pids(cgroup):
     return pids
 
 
-def read_members(cgroup, procfs="/proc"):
-    """Every process the cgroup accounts for, with only its comm, RSS and start time."""
+def read_members(cgroup, procfs="/proc", rss_floor_kb=0, deadline=None, clock=time.monotonic):
+    """The cgroup's members that are large enough to matter, with the facts to judge them.
+
+    Two things here are the difference between a guard that works under a stall and one
+    that is killed by it. Measured 2026-09-07: with 475 processes in the slice, a pass
+    that read comm+statm+stat for every one of them ran past the unit's own
+    TimeoutStartSec and systemd SIGTERMed it on every firing — four times in a row, while
+    the slice sat at 49.1G of its 49G watermark and nothing was ever acted on.
+
+      * `statm` is read FIRST and alone. It is one small read, and it answers the only
+        question that matters for most members: are they anywhere near the floor. A
+        session at 400 MB is dismissed for the price of one read instead of three.
+      * The scan carries a deadline. Under reclaim even a /proc read can block, so the
+        pass stops collecting rather than being terminated mid-decision; the caller is
+        told it was truncated so it can say so instead of pretending it saw everything.
+
+    Returns (members, truncated).
+    """
     members = []
     for pid in member_pids(cgroup):
+        if deadline is not None and clock() >= deadline:
+            return members, True
         base = os.path.join(procfs, str(pid))
+        try:
+            with open(os.path.join(base, "statm")) as fh:
+                rss_pages = int(fh.read().split()[1])
+        except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
+            continue
+        except OSError as exc:
+            if exc.errno in (errno.ESRCH, errno.EACCES, errno.EINVAL):
+                continue
+            raise
+        rss_kb = rss_pages * PAGE_KB
+        if rss_kb < rss_floor_kb:
+            continue
         try:
             with open(os.path.join(base, "comm")) as fh:
                 comm = fh.read().strip()
-            with open(os.path.join(base, "statm")) as fh:
-                rss_pages = int(fh.read().split()[1])
             with open(os.path.join(base, "stat")) as fh:
                 stat = fh.read()
         except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
@@ -219,8 +247,8 @@ def read_members(cgroup, procfs="/proc"):
             start_ticks = int(fields[19])
         except (IndexError, ValueError):
             continue
-        members.append(Member(pid, comm, rss_pages * PAGE_KB, start_ticks, cgroup))
-    return members
+        members.append(Member(pid, comm, rss_kb, start_ticks, cgroup))
+    return members, False
 
 
 def select_candidate(members, rss_floor_kb):
@@ -240,7 +268,8 @@ def find_cgroups(globs=DEFAULT_CGROUP_GLOBS):
     return sorted(set(found))
 
 
-def assess(cgroup, ratio, pressure_min, rss_floor_kb, procfs="/proc"):
+def assess(cgroup, ratio, pressure_min, rss_floor_kb, procfs="/proc", deadline=None,
+           clock=time.monotonic):
     """Decide whether this cgroup is stalled, and on whom. Returns (verdict, candidate).
 
     The verdict is returned rather than logged here so the caller can report a cgroup it
@@ -257,12 +286,18 @@ def assess(cgroup, ratio, pressure_min, rss_floor_kb, procfs="/proc"):
         # At the wall but nobody is waiting on memory: the kernel is keeping up, and a
         # cgroup that lives at its watermark is not by itself a fault.
         return "pinned-no-stall", None
-    candidate = select_candidate(read_members(cgroup, procfs), rss_floor_kb)
+    members, truncated = read_members(cgroup, procfs, rss_floor_kb, deadline, clock)
+    candidate = select_candidate(members, rss_floor_kb)
     if candidate is None:
-        # Stalling, but the weight is spread across sessions rather than concentrated in
-        # one runaway. Killing the largest session would cost work and fix nothing; this
-        # is a capacity problem for a human to see.
-        return "stalled-no-candidate", None
+        # Two different answers that must not be conflated. Truncated means the guard ran
+        # out of its scan budget before it had seen everything, so "no runaway" is not a
+        # finding — saying otherwise is how a broken pass looks healthy. Otherwise the
+        # weight really is spread across sessions, and killing the largest of those would
+        # cost work and fix nothing: that is capacity, for a human to see.
+        return ("scan-truncated" if truncated else "stalled-no-candidate"), None
+    # A truncated scan that DID find a candidate above the floor is still actionable: the
+    # process it found is over the line and unprotected whether or not a larger one was
+    # missed, and waiting for a complete scan is how the last stall went unanswered.
     return "stalled", candidate
 
 
@@ -344,18 +379,26 @@ def main(argv=None):
                     help="cgroup pattern to watch; repeatable, replaces the built-in set")
     ap.add_argument("--state", default=os.environ.get("RUNAWAY_GUARD_STATE",
                                                       "/run/cgroup-runaway-guard/seen.json"))
+    ap.add_argument("--scan-deadline-sec", type=float,
+                    default=float(os.environ.get("RUNAWAY_GUARD_SCAN_DEADLINE_SEC", 20)),
+                    help="stop collecting members after this long and decide on what was read")
     ap.add_argument("--procfs", default="/proc")
     args = ap.parse_args(argv)
 
     globs = tuple(args.cgroup_glob) if args.cgroup_glob else DEFAULT_CGROUP_GLOBS
     rss_floor_kb = args.rss_floor_mb * 1024
     now = time.time()
+    # One budget for the whole pass, not per cgroup: what systemd terminates is the pass.
+    # It has to stay comfortably under the unit's TimeoutStartSec, because a guard killed
+    # by its own timeout decides nothing at all — measured 2026-09-07, four consecutive
+    # firings SIGTERMed mid-scan while the slice sat pinned at its watermark.
+    deadline = time.monotonic() + args.scan_deadline_sec if args.scan_deadline_sec > 0 else None
     state = load_state(args.state)
 
     candidates = []
     for cgroup in find_cgroups(globs):
         verdict, candidate = assess(cgroup, args.high_ratio, args.pressure_full_min,
-                                    rss_floor_kb, args.procfs)
+                                    rss_floor_kb, args.procfs, deadline)
         name = os.path.basename(cgroup)
         if verdict in ("unbounded", "below-wall"):
             continue

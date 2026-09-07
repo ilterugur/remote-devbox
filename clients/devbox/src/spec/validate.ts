@@ -539,6 +539,7 @@ function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): vo
   }
   const allowedFields = new Set([
     "enabled", "interval_sec", "grace_sec", "rss_floor_mb", "high_ratio", "pressure_full_min",
+    "scan_deadline_sec",
   ]);
   for (const key of Object.keys(value)) {
     if (!allowedFields.has(key)) issues.push(err(`${path}.${key}`, "unknown runaway-guard field"));
@@ -546,7 +547,7 @@ function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): vo
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
     issues.push(err(`${path}.enabled`, "must be true or false"));
   }
-  for (const key of ["interval_sec", "grace_sec", "rss_floor_mb"] as const) {
+  for (const key of ["interval_sec", "grace_sec", "rss_floor_mb", "scan_deadline_sec"] as const) {
     const setting = value[key];
     if (setting !== undefined && !(typeof setting === "number" && Number.isInteger(setting) && setting > 0)) {
       issues.push(err(`${path}.${key}`, "must be a positive integer"));
@@ -569,6 +570,12 @@ function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): vo
   const grace = value.grace_sec;
   if (typeof interval === "number" && typeof grace === "number" && grace < interval) {
     issues.push(err(`${path}.grace_sec`, "must be greater than or equal to interval_sec"));
+  }
+  // The unit's TimeoutStartSec is derived from this budget, so a deadline at or above the
+  // sweep interval queues passes on top of each other instead of bounding one.
+  const deadline = value.scan_deadline_sec;
+  if (typeof interval === "number" && typeof deadline === "number" && deadline >= interval) {
+    issues.push(err(`${path}.scan_deadline_sec`, "must be less than interval_sec"));
   }
 }
 

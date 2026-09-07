@@ -131,6 +131,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
         rss_floor_mb: resolved.host?.runaway_guard?.rss_floor_mb ?? 6144,
         high_ratio: resolved.host?.runaway_guard?.high_ratio ?? 0.98,
         pressure_full_min: resolved.host?.runaway_guard?.pressure_full_min ?? 25,
+        scan_deadline_sec: resolved.host?.runaway_guard?.scan_deadline_sec ?? 20,
       },
       monitoring: {
         enabled: resolved.host?.monitoring?.enabled ?? false,

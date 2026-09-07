@@ -58,6 +58,12 @@ host:
     rss_floor_mb: 6144      # a session is a few hundred MB; only a runaway clears this.
     high_ratio: 0.98        # "at the wall": usage hovers just under high while reclaiming.
     pressure_full_min: 25   # at the wall without stalling is a healthy steady state.
+    # Budget for one pass's member scan. Measured 2026-09-07: reading every one of the
+    # slice's 475 members outran the unit's own TimeoutStartSec, so systemd SIGTERMed the
+    # pass on four consecutive firings and nothing was killed while the slice sat pinned.
+    # A pass now stops collecting here and acts on what it read; the unit timeout is
+    # derived from this, and it has to stay under interval_sec.
+    scan_deadline_sec: 20
   # Sizing note for a box running an agent fleet rather than one build at a time: a fleet
   # of mostly-idle sessions holds tens of GB of cold anonymous heap, and swap is where that
   # belongs. Undersized swap does not merely limit paging — it pins the working set
@@ -149,8 +155,9 @@ shared_services:
 #
 # failover: instead of each MCP launching its own headless Chrome, they attach to one
 # CDP endpoint — the client's real browser through a reverse tunnel while it is
-# online, and a box-local Chrome when it is not. chrome_user names the account that
-# box-local Chrome runs as; it is required, because "whichever developer came first"
+# online, and a box-local Chrome when it is not. omp profiles get the same endpoint as
+# `browser.cdpUrl`, so omp's own browser tool lands there as well. chrome_user names the
+# account that box-local Chrome runs as; it is required, because "whichever developer came first"
 # is not something anyone should have to read the generated config to discover.
 # It also selects the only client profile allowed to start the local Chrome and reverse
 # tunnel. Use a dedicated, low-risk account: CDP can control that browser profile.

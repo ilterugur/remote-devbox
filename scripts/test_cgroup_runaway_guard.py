@@ -328,6 +328,47 @@ class Assess(unittest.TestCase):
         self.write_nested("child/grandchild", [2, 3])
         self.assertEqual(sorted(guard.member_pids(str(self.cg))), [1, 2, 3])
 
+    def test_a_member_below_the_floor_costs_one_read(self):
+        # The scan that got the guard killed read comm+statm+stat for all 475 members of
+        # the slice. statm answers "anywhere near the floor" on its own, so a session is
+        # dismissed for one read — proven here by making the other two unreadable for a
+        # small member and still getting a clean pass.
+        self.write_cgroup(current=34 * GB, pids=[4242, 3267599])
+        self.write_proc(4242, "omp", 520)
+        for name in ("comm", "stat"):
+            (self.procfs / "4242" / name).unlink()
+        self.write_proc(3267599, "bun", 24363)
+        verdict, candidate = self.assess()
+        self.assertEqual(verdict, "stalled")
+        self.assertEqual(candidate.pid, 3267599)
+
+    def test_a_scan_that_runs_out_of_budget_says_so_instead_of_no_runaway(self):
+        # "No candidate" and "I did not finish looking" are different answers, and
+        # conflating them is how the 2026-09-07 stall looked healthy: the pass was
+        # SIGTERMed mid-scan every 30s while the slice sat at its watermark.
+        self.write_cgroup(current=34 * GB, pids=[3267599])
+        self.write_proc(3267599, "bun", 24363)
+        verdict, candidate = guard.assess(
+            str(self.cg), 0.98, 25, 6144 * 1024, procfs=str(self.procfs),
+            deadline=100.0, clock=lambda: 100.0,
+        )
+        self.assertEqual((verdict, candidate), ("scan-truncated", None))
+
+    def test_a_truncated_scan_still_acts_on_a_runaway_it_did_find(self):
+        # Waiting for a complete scan is how the last stall went unanswered: a process
+        # over the floor and unprotected is actionable whether or not a larger one was
+        # missed. The clock advances past the deadline only after the first member.
+        self.write_cgroup(current=34 * GB, pids=[3267599, 4242])
+        self.write_proc(3267599, "bun", 24363)
+        self.write_proc(4242, "node", 9000)
+        ticks = iter([0.0, 0.0, 100.0, 100.0, 100.0])
+        verdict, candidate = guard.assess(
+            str(self.cg), 0.98, 25, 6144 * 1024, procfs=str(self.procfs),
+            deadline=50.0, clock=lambda: next(ticks),
+        )
+        self.assertEqual(verdict, "stalled")
+        self.assertIsNotNone(candidate)
+
 
 class Discovery(unittest.TestCase):
     def setUp(self):
