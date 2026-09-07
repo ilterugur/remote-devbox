@@ -55,7 +55,15 @@ host:
     enabled: true
     interval_sec: 30        # tight: a pinned cgroup became an unusable box in <10 minutes.
     grace_sec: 120          # must be >= interval_sec, or the first sighting is already due.
-    rss_floor_mb: 6144      # a session is a few hundred MB; only a runaway clears this.
+    # Two bars, never either. Measured 2026-09-07: a flat 6144 MB floor let an ungated
+    # `generate-declarations` step at 5889 MB read as "spread across sessions" for half an
+    # hour while paseo-daemon.service sat pinned at 34.0G of 34G and every session stalled.
+    # That process was 17% of the cgroup and eight times a typical session, so size alone
+    # was the wrong question; the share of the stall it accounts for is the right one. The
+    # absolute floor stays as the lower bound, because a share alone would make a 600 MB
+    # member a target inside a 6G unit.
+    rss_floor_mb: 2048
+    dominance_percent: 10      # a session is a few hundred MB; only a runaway clears this.
     high_ratio: 0.98        # "at the wall": usage hovers just under high while reclaiming.
     pressure_full_min: 25   # at the wall without stalling is a healthy steady state.
     # Budget for one pass's member scan. Measured 2026-09-07: reading every one of the
@@ -352,7 +360,7 @@ developers:
     # Provider binaries shared by several profiles are pinned once per developer.
     # OMP rejects floating tags/ranges so a later `devbox apply` is a controlled upgrade.
     agent_versions:
-      omp: "18.1.2"
+      omp: "18.1.13"
 
     # Independent of git identity: one human can drive several agent logins.
     agent_profiles:

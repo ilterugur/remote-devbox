@@ -149,8 +149,8 @@ class Candidate(unittest.TestCase):
         self.assertIsNone(guard.select_candidate(members, self.floor))
 
     def test_a_member_below_the_floor_is_never_chosen(self):
-        self.assertIsNone(guard.select_candidate([member(comm="node", rss_mb=6143)], self.floor))
-        self.assertIsNotNone(guard.select_candidate([member(comm="node", rss_mb=6144)], self.floor))
+        self.assertIsNone(guard.select_candidate([member(comm="node", rss_mb=2047)], 2048 * 1024))
+        self.assertIsNotNone(guard.select_candidate([member(comm="node", rss_mb=2048)], 2048 * 1024))
 
     def test_at_slice_level_the_build_is_chosen_over_the_bigger_datastore(self):
         # The exact 2026-09-05 line-up inside user-1004.slice. valkey is the largest
@@ -173,6 +173,44 @@ class Candidate(unittest.TestCase):
             slice_member(1196863, "postgres", 8000),
         ]
         self.assertIsNone(guard.select_candidate(members, self.floor))
+
+
+    def test_the_generate_step_that_slipped_under_a_flat_floor_is_caught(self):
+        # 2026-09-07, paseo-daemon.service pinned at 34.0G of 34G with full avg10=72%:
+        # `bun ./scripts/generate-declarations.ts` at 5889 MB missed the old 6144 MB floor
+        # by 4% and the guard reported "spread across sessions" for half an hour. It was
+        # 17% of the cgroup and eight times a typical session.
+        members = [
+            member(pid=1129779, comm="bun", rss_mb=5889),
+            member(pid=1345620, comm="bun", rss_mb=2191),
+            member(pid=881250, comm="Paseo Daemon", rss_mb=1704),
+            member(pid=3892884, comm="omp", rss_mb=1494),
+        ]
+        floor = 2048 * 1024
+        dominance = int(34 * GB / 1024 * 10 / 100)  # 10% of a 34G cgroup
+        chosen = guard.select_candidate(members, floor, dominance)
+        self.assertEqual((chosen.pid, chosen.rss_kb // 1024), (1129779, 5889))
+
+    def test_a_fleet_of_ordinary_sessions_still_yields_nothing(self):
+        # The same 34G cgroup, but the weight genuinely spread: 700 MB each is 2% of the
+        # stall, so no single kill would end it and none of them is a runaway.
+        members = [member(pid=1000 + i, comm="omp", rss_mb=700) for i in range(20)]
+        dominance = int(34 * GB / 1024 * 10 / 100)
+        self.assertIsNone(guard.select_candidate(members, 2048 * 1024, dominance))
+
+    def test_the_absolute_floor_still_guards_a_small_cgroup(self):
+        # 10% of a 6G unit is 600 MB. Without the floor as a lower bound, an ordinary
+        # member of a small cgroup would become a target.
+        members = [member(pid=42, comm="node", rss_mb=700)]
+        dominance = int(6 * GB / 1024 * 10 / 100)
+        self.assertIsNone(guard.select_candidate(members, 2048 * 1024, dominance))
+
+    def test_the_earlier_incidents_still_qualify(self):
+        # 24.4 GB dev server in a 34G cgroup (72%) and a 12.7 GB build in a 49G slice (26%).
+        self.assertIsNotNone(guard.select_candidate(
+            [member(comm="bun", rss_mb=24363)], 2048 * 1024, int(34 * GB / 1024 * 10 / 100)))
+        self.assertIsNotNone(guard.select_candidate(
+            [member(comm="node", rss_mb=12701)], 2048 * 1024, int(49 * GB / 1024 * 10 / 100)))
 
 
 class GracePeriod(unittest.TestCase):

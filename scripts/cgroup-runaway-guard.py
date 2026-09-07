@@ -251,9 +251,24 @@ def read_members(cgroup, procfs="/proc", rss_floor_kb=0, deadline=None, clock=ti
     return members, False
 
 
-def select_candidate(members, rss_floor_kb):
-    """The one process worth killing: biggest, unprotected, above the floor."""
-    eligible = [m for m in members if m.rss_kb >= rss_floor_kb and not is_protected(m.comm)]
+def select_candidate(members, rss_floor_kb, dominance_kb=0):
+    """The one process worth killing: biggest, unprotected, past BOTH bars.
+
+    A flat floor alone is the wrong shape, measured 2026-09-07: paseo-daemon.service sat
+    pinned at 34.0G of its 34G watermark with `full avg10=72%` and the guard reported
+    `stalled-no-candidate` for half an hour, because its largest member — an ungated
+    `bun ./scripts/generate-declarations.ts` at 5889 MB — missed the 6144 MB floor by 4%.
+    That process was 17% of the whole cgroup and eight times a typical session (~700 MB
+    across 270 members); calling it "spread across sessions" was simply wrong.
+
+    So a member qualifies by DOMINANCE as well as by size: it must clear a small absolute
+    minimum (a floor low enough to be crossed, high enough that no session reaches it) and
+    hold a share of the stalled cgroup large enough that killing it actually ends the
+    stall. Both bars, never either: the share alone would make a 600 MB member a target in
+    a 6 GB cgroup, and the floor alone is what just failed.
+    """
+    bar = max(rss_floor_kb, dominance_kb)
+    eligible = [m for m in members if m.rss_kb >= bar and not is_protected(m.comm)]
     if not eligible:
         return None
     return max(eligible, key=lambda m: m.rss_kb)
@@ -269,7 +284,7 @@ def find_cgroups(globs=DEFAULT_CGROUP_GLOBS):
 
 
 def assess(cgroup, ratio, pressure_min, rss_floor_kb, procfs="/proc", deadline=None,
-           clock=time.monotonic):
+           clock=time.monotonic, dominance_percent=0.0):
     """Decide whether this cgroup is stalled, and on whom. Returns (verdict, candidate).
 
     The verdict is returned rather than logged here so the caller can report a cgroup it
@@ -287,7 +302,11 @@ def assess(cgroup, ratio, pressure_min, rss_floor_kb, procfs="/proc", deadline=N
         # cgroup that lives at its watermark is not by itself a fault.
         return "pinned-no-stall", None
     members, truncated = read_members(cgroup, procfs, rss_floor_kb, deadline, clock)
-    candidate = select_candidate(members, rss_floor_kb)
+    # The share is taken against what the cgroup actually holds, so the same setting means
+    # the same thing in a 34G fleet cgroup and in a 6G unit: "big enough that killing it
+    # ends the stall", not a fixed number that ages badly as ceilings move.
+    dominance_kb = int(current / 1024 * dominance_percent / 100) if current else 0
+    candidate = select_candidate(members, rss_floor_kb, dominance_kb)
     if candidate is None:
         # Two different answers that must not be conflated. Truncated means the guard ran
         # out of its scan budget before it had seen everything, so "no runaway" is not a
@@ -371,7 +390,10 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report the verdict and exit")
     ap.add_argument("--grace-sec", type=int, default=int(os.environ.get("RUNAWAY_GUARD_GRACE_SEC", 120)),
                     help="how long one process must be the runaway before it is killed")
-    ap.add_argument("--rss-floor-mb", type=int, default=int(os.environ.get("RUNAWAY_GUARD_RSS_FLOOR_MB", 6144)))
+    ap.add_argument("--rss-floor-mb", type=int, default=int(os.environ.get("RUNAWAY_GUARD_RSS_FLOOR_MB", 2048)))
+    ap.add_argument("--dominance-percent", type=float,
+                    default=float(os.environ.get("RUNAWAY_GUARD_DOMINANCE_PERCENT", 10)),
+                    help="share of the stalled cgroup a member must hold to count as the runaway")
     ap.add_argument("--high-ratio", type=float, default=float(os.environ.get("RUNAWAY_GUARD_HIGH_RATIO", 0.98)))
     ap.add_argument("--pressure-full-min", type=float,
                     default=float(os.environ.get("RUNAWAY_GUARD_PRESSURE_FULL_MIN", 25)))
@@ -398,7 +420,8 @@ def main(argv=None):
     candidates = []
     for cgroup in find_cgroups(globs):
         verdict, candidate = assess(cgroup, args.high_ratio, args.pressure_full_min,
-                                    rss_floor_kb, args.procfs, deadline)
+                                    rss_floor_kb, args.procfs, deadline,
+                                    dominance_percent=args.dominance_percent)
         name = os.path.basename(cgroup)
         if verdict in ("unbounded", "below-wall"):
             continue

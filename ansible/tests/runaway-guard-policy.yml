@@ -14,7 +14,8 @@
         enabled: true
         interval_sec: 30
         grace_sec: 120
-        rss_floor_mb: 6144
+        rss_floor_mb: 2048
+        dominance_percent: 10
         high_ratio: 0.98
         pressure_full_min: 25
         scan_deadline_sec: 20
@@ -61,7 +62,8 @@
           ansible.builtin.assert:
             that:
               - "'--grace-sec 120' in guard_unit.content | b64decode"
-              - "'--rss-floor-mb 6144' in guard_unit.content | b64decode"
+              - "'--rss-floor-mb 2048' in guard_unit.content | b64decode"
+              - "'--dominance-percent 10' in guard_unit.content | b64decode"
               - "'--high-ratio 0.98' in guard_unit.content | b64decode"
               - "'--pressure-full-min 25' in guard_unit.content | b64decode"
               - "'--scan-deadline-sec 20' in guard_unit.content | b64decode"

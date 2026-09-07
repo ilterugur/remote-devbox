@@ -73,9 +73,14 @@ export interface RunawayGuardSpec {
   /** How long one process must be the largest runaway before it is killed. Must be at
    *  least `interval_sec`, or the first sighting is already past grace. */
   grace_sec?: number;
-  /** Floor for being a candidate at all. A session is a few hundred MB, so this sits
-   *  far above one: only a genuine runaway is ever eligible. */
+  /** Absolute minimum for being a candidate at all. A session is a few hundred MB, so
+   *  this sits well above one while staying low enough to be crossed. */
   rss_floor_mb?: number;
+  /** Share of the stalled cgroup a member must also hold, in percent. Measured
+   *  2026-09-07: a flat 6144 MB floor let an ungated generate step at 5889 MB — 17% of a
+   *  34G cgroup and eight times a typical session — read as "spread across sessions" for
+   *  half an hour while every session stalled. Both bars apply, never either. */
+  dominance_percent?: number;
   /** Fraction of MemoryHigh that counts as "at the wall". The kernel holds usage just
    *  under high while reclaiming, so equality never lands on a sample boundary. */
   high_ratio?: number;

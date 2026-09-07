@@ -539,7 +539,7 @@ function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): vo
   }
   const allowedFields = new Set([
     "enabled", "interval_sec", "grace_sec", "rss_floor_mb", "high_ratio", "pressure_full_min",
-    "scan_deadline_sec",
+    "scan_deadline_sec", "dominance_percent",
   ]);
   for (const key of Object.keys(value)) {
     if (!allowedFields.has(key)) issues.push(err(`${path}.${key}`, "unknown runaway-guard field"));
@@ -556,6 +556,13 @@ function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): vo
   const ratio = value.high_ratio;
   if (ratio !== undefined && !(typeof ratio === "number" && ratio >= 0.5 && ratio <= 1)) {
     issues.push(err(`${path}.high_ratio`, "must be a number in 0.5..1.0"));
+  }
+  const dominance = value.dominance_percent;
+  if (
+    dominance !== undefined &&
+    !(typeof dominance === "number" && dominance > 0 && dominance <= 100)
+  ) {
+    issues.push(err(`${path}.dominance_percent`, "must be a number in 0..100"));
   }
   const pressure = value.pressure_full_min;
   if (

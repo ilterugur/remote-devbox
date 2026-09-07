@@ -156,7 +156,8 @@ test("runaway_guard accepts bounded thresholds", () => {
           enabled: true,
           interval_sec: 30,
           grace_sec: 120,
-          rss_floor_mb: 6144,
+          rss_floor_mb: 2048,
+          dominance_percent: 10,
           high_ratio: 0.98,
           pressure_full_min: 25,
           scan_deadline_sec: 20,
@@ -189,6 +190,16 @@ test("runaway_guard accepts bounded thresholds", () => {
 // the guard would kill on sight — the one thing its two-pass design exists to prevent.
 // A scan budget at or above the sweep interval queues passes on top of each other, and
 // the unit timeout derived from it stops bounding a single pass.
+test("runaway_guard dominance share is a percentage", () => {
+  expect(paths({ ...minimal(), host: { runaway_guard: { dominance_percent: 0 } } })).toContain(
+    "error:host.runaway_guard.dominance_percent",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { dominance_percent: 101 } } })).toContain(
+    "error:host.runaway_guard.dominance_percent",
+  );
+  expect(paths({ ...minimal(), host: { runaway_guard: { dominance_percent: 17.5 } } })).toEqual([]);
+});
+
 test("runaway_guard scan budget must fit inside the sweep interval", () => {
   expect(paths({ ...minimal(), host: { runaway_guard: { interval_sec: 30, scan_deadline_sec: 30 } } })).toContain(
     "error:host.runaway_guard.scan_deadline_sec",

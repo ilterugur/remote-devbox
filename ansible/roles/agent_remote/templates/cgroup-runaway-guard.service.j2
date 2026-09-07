@@ -6,7 +6,7 @@ Documentation=man:cgroup-runaway-guard(8)
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/cgroup-runaway-guard --grace-sec {{ G.grace_sec }} --rss-floor-mb {{ G.rss_floor_mb }} --high-ratio {{ G.high_ratio }} --pressure-full-min {{ G.pressure_full_min }} --scan-deadline-sec {{ G.scan_deadline_sec }} --state /run/cgroup-runaway-guard/seen.json
+ExecStart=/usr/local/bin/cgroup-runaway-guard --grace-sec {{ G.grace_sec }} --rss-floor-mb {{ G.rss_floor_mb }} --dominance-percent {{ G.dominance_percent }} --high-ratio {{ G.high_ratio }} --pressure-full-min {{ G.pressure_full_min }} --scan-deadline-sec {{ G.scan_deadline_sec }} --state /run/cgroup-runaway-guard/seen.json
 {# The guard only kills a process it has ALREADY seen as the runaway on an earlier pass,
    so the sighting record has to outlive the oneshot. Without Preserve=yes systemd
    removes RuntimeDirectory= the moment the unit exits, every pass starts from an empty
