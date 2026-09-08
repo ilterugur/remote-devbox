@@ -2,7 +2,16 @@
 # 10-day retention can exhaust the tmpfs inode budget under agent build workloads.
 # tmpfiles only removes entries whose access, modification and change timestamps
 # are all older than this age, so active work remains protected.
-q /tmp 1777 root root 3d
+#
+# 12h, not the 3d this started at. Measured 2026-09-08: one developer held 3.19 GB across
+# 94,001 items in a 4 GB /tmp — leftover chrome profiles (483 MB + 363 MB), build and test
+# scratch (t9-acc 577 MB, mastracheck, core-*, bun-compile-test) and a few hundred stray
+# scripts, none of it older than three days, so nothing aged out. It surfaced as
+# `printf: i/o error: Disk quota exceeded` on a box with 993 GB free, because systemd
+# mounts /tmp with usrquota and one user's share of a 4 GB tmpfs runs out at ~3.2 GB.
+# Agent scratch has an hours-long useful life, not a days-long one, and every byte of it
+# is RAM: 3.19 GB parked in /tmp is 3.19 GB the fleet cannot use.
+q /tmp 1777 root root 12h
 
 # /tmp is a tmpfs sized at half of RAM, so everything written there is resident memory
 # that cannot be reclaimed — only swapped. That is fine for locks and sockets, and ruinous

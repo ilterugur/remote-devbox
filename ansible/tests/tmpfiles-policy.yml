@@ -32,7 +32,7 @@
         - name: Assert stale entries are cleaned without changing tmp permissions
           ansible.builtin.assert:
             that:
-              - "'q /tmp 1777 root root 3d' in tmpfiles_policy.content | b64decode"
+              - "'q /tmp 1777 root root 12h' in tmpfiles_policy.content | b64decode"
               - "'10d' not in tmpfiles_policy.content | b64decode"
 
         # Every developer needs a scratch directory of their own, private, and aged out
@@ -44,6 +44,26 @@
               - "'d /var/tmp/devbox-scratch 0755 root root -' in tmpfiles_policy.content | b64decode"
               - "'q /var/tmp/devbox-scratch/dev-a 0700 dev-a dev-a 3d' in tmpfiles_policy.content | b64decode"
               - "'q /var/tmp/devbox-scratch/dev-b 0700 dev-b dev-b 3d' in tmpfiles_policy.content | b64decode"
+        # An age only bites when something sweeps, and the vendor cleaner runs daily: at
+        # 3d/1d nothing collected 3.19 GB across 94k items before the per-user tmpfs quota
+        # refused writes on 2026-09-08. The pair has to stay a pair.
+        - name: Render the cleaner cadence override
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/oomd/templates/tmpfiles-clean-cadence.conf.j2"
+            dest: "{{ render_dir.path }}/10-devbox-cadence.conf"
+            mode: "0600"
+
+        - name: Read the cadence override
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/10-devbox-cadence.conf"
+          register: cadence_policy
+
+        - name: Assert the sweep runs often enough for the retention age to matter
+          ansible.builtin.assert:
+            that:
+              - "'OnUnitActiveSec=2h' in cadence_policy.content | b64decode"
+              - "'OnBootSec' not in cadence_policy.content | b64decode"
+
       always:
         - name: Remove the isolated render directory
           ansible.builtin.file:

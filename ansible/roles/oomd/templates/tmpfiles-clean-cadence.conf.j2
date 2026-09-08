@@ -1,0 +1,15 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{# The vendor timer sweeps once a day, which is the wrong cadence for a 4 GB tmpfs that
+   agent scratch fills in hours. Measured 2026-09-08: 3.19 GB across 94,001 items — dead
+   chrome profiles, build and test trees — accumulated well inside a single sweep window
+   and hit the per-user tmpfs quota, so writes failed with `Disk quota exceeded` while the
+   box had 993 GB of disk free. Paired with the 12h age in tmp.conf, two hours keeps the
+   worst case near the age rather than a day and a half past it.
+
+   OnBootSec is left where the vendor put it: nothing is stale 15 minutes after boot, and
+   racing the boot sequence to delete files is how a sweep becomes an outage. #}
+[Timer]
+OnUnitActiveSec=2h
+{# The sweep is housekeeping, not a deadline; loose accuracy lets systemd batch it with
+   other timers instead of waking the box on its own. #}
+AccuracySec=5min

@@ -34,6 +34,37 @@
   when: tmpfiles_policy.changed
   changed_when: true
 
+# A retention age only bites when something sweeps. The vendor cleaner runs once a day,
+# so a 12h age still lets residue live ~36h — and measured 2026-09-08 that was enough for
+# one developer to reach the per-user tmpfs quota (3.19 GB of 4 GB, 94k items) and start
+# getting `Disk quota exceeded` on a box with 993 GB of disk free. Two hours costs a
+# directory walk of a 4 GB tmpfs and keeps the age meaningful.
+- name: Create the tmpfiles cleaner override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/systemd-tmpfiles-clean.timer.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Sweep temporary files often enough for the retention age to matter
+  ansible.builtin.template:
+    src: tmpfiles-clean-cadence.conf.j2
+    dest: /etc/systemd/system/systemd-tmpfiles-clean.timer.d/10-devbox-cadence.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: tmpfiles_cadence
+
+- name: Restart the cleaner timer so the new cadence is armed now
+  ansible.builtin.systemd_service:
+    name: systemd-tmpfiles-clean.timer
+    state: restarted
+    daemon_reload: true
+  when:
+    - tmpfiles_cadence.changed
+    - not ansible_check_mode
+
 # The retention policy above cannot help with this: it measures days, while a runaway
 # fills the tmpfs in minutes. What bounds the damage is the filesystem size itself.
 - name: Create the /tmp mount override directory
