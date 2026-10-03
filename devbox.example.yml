@@ -382,6 +382,14 @@ developers:
         # the whole built-in role map atomically inside the current OMP session;
         # `/preset reset` returns to OMP's normal settings. A resumed session restores
         # its own last choice, so one Paseo OMP provider can host all five strategies.
+        # `/preset codex` aliases `openai`: every role uses the openai-codex provider,
+        # including smol/commit/tiny. Mixed-provider roles stay in the other presets;
+        # the shared retry policy below controls quota/error fallbacks independently.
+        # Upgrade within each role's family: Sol 6.1, Luna 6, Terra 5.6;
+        # Opus 5.5, Fable 5.1, Sonnet 5.5, Haiku 4.5.
+        # Balanced uses OpenCode Go Luna 6 for tiny (low effort) and
+        # DeepSeek V4.1 Flash for task (auto thinking), not MiMo roles.
+        # Neither `codex` nor `balanced` substitutes Astra for these families.
         omp_model_presets:
           default_preset: balanced
           aliases:
@@ -389,39 +397,39 @@ developers:
             claude: anthropic
           presets:
             balanced:
-              default: openai-codex/gpt-5.6-sol:medium
-              smol: opencode-go/gpt-5.6-luna:medium
-              slow: anthropic/claude-fable-5:xhigh
-              vision: anthropic/claude-sonnet-5:high
-              plan: anthropic/claude-opus-5:high
-              designer: anthropic/claude-sonnet-5:high
-              commit: opencode-go/gpt-5.6-luna:medium
-              tiny: opencode-go/mimo-v2.5:low
+              default: openai-codex/gpt-6.1-sol:medium
+              smol: opencode-go/gpt-6-luna:medium
+              slow: anthropic/claude-fable-5-1:xhigh
+              vision: anthropic/claude-sonnet-5-5:high
+              plan: anthropic/claude-opus-5-5:high
+              designer: anthropic/claude-sonnet-5-5:high
+              commit: opencode-go/gpt-6-luna:medium
+              tiny: opencode-go/gpt-6-luna:low
               # No explicit effort: keep OMP's bundled task agent on auto thinking.
-              task: openai-codex/gpt-5.6-terra
-              advisor: anthropic/claude-opus-5:high
+              task: opencode-go/deepseek-v4.1-flash
+              advisor: anthropic/claude-opus-5-5:high
             openai:
-              default: openai-codex/gpt-5.6-sol:medium
-              smol: opencode-go/gpt-5.6-luna:medium
-              slow: openai-codex/gpt-5.6-sol:xhigh
+              default: openai-codex/gpt-6.1-sol:medium
+              smol: openai-codex/gpt-6-luna:medium
+              slow: openai-codex/gpt-6.1-sol:xhigh
               vision: openai-codex/gpt-5.6-terra:high
-              plan: openai-codex/gpt-5.6-sol:high
+              plan: openai-codex/gpt-6.1-sol:high
               designer: openai-codex/gpt-5.6-terra:high
-              commit: opencode-go/gpt-5.6-luna:medium
-              tiny: opencode-go/gpt-5.6-luna:low
+              commit: openai-codex/gpt-6-luna:medium
+              tiny: openai-codex/gpt-6-luna:low
               task: openai-codex/gpt-5.6-terra
-              advisor: openai-codex/gpt-5.6-sol:high
+              advisor: openai-codex/gpt-6.1-sol:high
             anthropic:
-              default: anthropic/claude-opus-5:high
+              default: anthropic/claude-opus-5-5:high
               smol: anthropic/claude-haiku-4-5:medium
-              slow: anthropic/claude-fable-5:xhigh
-              vision: anthropic/claude-sonnet-5:high
-              plan: anthropic/claude-opus-5:high
-              designer: anthropic/claude-sonnet-5:high
+              slow: anthropic/claude-fable-5-1:xhigh
+              vision: anthropic/claude-sonnet-5-5:high
+              plan: anthropic/claude-opus-5-5:high
+              designer: anthropic/claude-sonnet-5-5:high
               commit: anthropic/claude-haiku-4-5:medium
               tiny: anthropic/claude-haiku-4-5:low
-              task: anthropic/claude-sonnet-5
-              advisor: anthropic/claude-opus-5:high
+              task: anthropic/claude-sonnet-5-5
+              advisor: anthropic/claude-opus-5-5:high
             opencode:
               default: opencode-go/deepseek-v4-pro:max
               smol: opencode-go/gpt-5.6-luna:medium
@@ -453,89 +461,97 @@ developers:
             usage_reserve_policy: auto
             fallback_revert_policy: cooldown-expiry
             fallback_chains:
-              openai-codex/gpt-5.6-sol:
-                - anthropic/claude-opus-5:xhigh
-                - opencode-zen/mimo-v2.5-free
-              anthropic/claude-opus-5:
-                - openai-codex/gpt-5.6-sol:high
-                - opencode-zen/mimo-v2.5-free
-              anthropic/claude-fable-5:
-                - anthropic/claude-opus-5:xhigh
-                - openai-codex/gpt-5.6-sol:xhigh
-                - opencode-zen/mimo-v2.5-free
+              openai-codex/gpt-6.1-sol:
+                - anthropic/claude-opus-5-5:xhigh
+                - opencode-zen/mimo-v2.6-flash-free
+              anthropic/claude-opus-5-5:
+                - openai-codex/gpt-6.1-sol:high
+                - opencode-zen/mimo-v2.6-flash-free
+              anthropic/claude-fable-5-1:
+                - anthropic/claude-opus-5-5:xhigh
+                - openai-codex/gpt-6.1-sol:xhigh
+                - opencode-zen/mimo-v2.6-flash-free
               openai-codex/gpt-5.6-terra:
-                - anthropic/claude-sonnet-5
-                - opencode-zen/mimo-v2.5-free
-              anthropic/claude-sonnet-5:
+                - anthropic/claude-sonnet-5-5
+                - opencode-zen/mimo-v2.6-flash-free
+              anthropic/claude-sonnet-5-5:
                 - openai-codex/gpt-5.6-terra
-                - opencode-zen/mimo-v2.5-free
-              openai-codex/gpt-5.6-luna:
+                - opencode-zen/mimo-v2.6-flash-free
+              openai-codex/gpt-6-luna:
                 - anthropic/claude-haiku-4-5:medium
-                - opencode-zen/mimo-v2.5-free
+                - opencode-zen/mimo-v2.6-flash-free
               anthropic/claude-haiku-4-5:
-                - openai-codex/gpt-5.6-luna:medium
-                - opencode-zen/mimo-v2.5-free
+                - openai-codex/gpt-6-luna:medium
+                - opencode-zen/mimo-v2.6-flash-free
               opencode-go/deepseek-v4-pro:
-                - openai-codex/gpt-5.6-sol:high
-                - anthropic/claude-opus-5:high
-                - opencode-zen/mimo-v2.5-free
+                - openai-codex/gpt-6.1-sol:high
+                - anthropic/claude-opus-5-5:high
+                - opencode-zen/mimo-v2.6-flash-free
               opencode-go/kimi-k3:
-                - anthropic/claude-opus-5:xhigh
-                - openai-codex/gpt-5.6-sol:xhigh
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-opus-5-5:xhigh
+                - openai-codex/gpt-6.1-sol:xhigh
+                - opencode-zen/mimo-v2.6-flash-free
               opencode-go/deepseek-v4-flash:
                 - openai-codex/gpt-5.6-terra
-                - anthropic/claude-sonnet-5
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-sonnet-5-5
+                - opencode-zen/mimo-v2.6-flash-free
+              opencode-go/deepseek-v4.1-flash:
+                - openai-codex/gpt-5.6-terra
+                - anthropic/claude-sonnet-5-5
+                - opencode-zen/mimo-v2.6-flash-free
               opencode-go/deepseek-v4-flash-vision-exp:
                 - openai-codex/gpt-5.6-terra:high
-                - anthropic/claude-sonnet-5:high
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-sonnet-5-5:high
+                - opencode-zen/mimo-v2.6-flash-free
               opencode-go/gpt-5.6-luna:
-                - openai-codex/gpt-5.6-luna:medium
+                - openai-codex/gpt-6-luna:medium
                 - anthropic/claude-haiku-4-5:medium
-                - opencode-zen/mimo-v2.5-free
+                - opencode-zen/mimo-v2.6-flash-free
+              opencode-go/gpt-6-luna:
+                - openai-codex/gpt-6-luna:medium
+                - anthropic/claude-haiku-4-5:medium
+                - opencode-zen/mimo-v2.6-flash-free
               opencode-go/mimo-v2.5:
-                - openai-codex/gpt-5.6-luna:low
-                - opencode-zen/mimo-v2.5-free
+                - openai-codex/gpt-6-luna:low
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/composer-2.5:
                 - cursor/grok-4.6
                 - cursor/claude-opus-5-high
-                - openai-codex/gpt-5.6-sol:medium
-                - opencode-zen/mimo-v2.5-free
+                - openai-codex/gpt-6.1-sol:medium
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/grok-4.6:
                 - cursor/composer-2.5
                 - cursor/gpt-5.6-terra
-                - opencode-zen/mimo-v2.5-free
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/claude-opus-5-thinking-xhigh:
                 - cursor/claude-opus-5-high
                 - cursor/grok-4.6
-                - anthropic/claude-opus-5:xhigh
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-opus-5-5:xhigh
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/claude-opus-5-high:
                 - cursor/grok-4.6
                 - cursor/claude-sonnet-5-high
-                - anthropic/claude-opus-5:high
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-opus-5-5:high
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/claude-sonnet-5-high:
                 - cursor/gpt-5.6-terra
                 - cursor/grok-4.6
-                - anthropic/claude-sonnet-5:high
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-sonnet-5-5:high
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/gemini-3.1-pro:
                 - cursor/claude-sonnet-5-high
                 - cursor/grok-4.6
-                - anthropic/claude-sonnet-5:high
-                - opencode-zen/mimo-v2.5-free
+                - anthropic/claude-sonnet-5-5:high
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/gpt-5.6-terra:
                 - cursor/claude-sonnet-5-high
                 - cursor/grok-4.6
                 - openai-codex/gpt-5.6-terra
-                - opencode-zen/mimo-v2.5-free
+                - opencode-zen/mimo-v2.6-flash-free
               cursor/gpt-5.4-nano:
                 - cursor/grok-4.6
                 - cursor/composer-2.5
-                - opencode-zen/mimo-v2.5-free
+                - opencode-zen/mimo-v2.6-flash-free
     default_agent_profile: claude-work
 
     memory:
