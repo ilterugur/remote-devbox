@@ -1,0 +1,8 @@
+# Managed by Ansible (remote-devbox Orca).
+# Exact argument matching: developers can refresh only their own managed firewall.
+{% for unit in devbox_orca_units %}
+{{ unit.user }} ALL=(root) NOPASSWD: /usr/local/sbin/devbox-orca-firewall {{ unit.user }}
+{% if unit.relay | default(false) %}
+{{ unit.user }} ALL=(root) NOPASSWD: /usr/local/sbin/devbox-orca-keyring {{ unit.user }}
+{% endif %}
+{% endfor %}

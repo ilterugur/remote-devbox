@@ -1,0 +1,106 @@
+#!/usr/bin/python3
+# Managed by Ansible (remote-devbox Orca).
+"""Check only this invocation; never print the credential-bearing pairing payload."""
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from urllib.parse import urlsplit
+
+def desktop_ready(port, invocation, timeout):
+    # status performs an authenticated live RPC; metadata alone cannot prove readiness.
+    env = os.environ.copy()
+    env.pop("ORCA_PAIRING_CODE", None)
+    env.pop("ORCA_ENVIRONMENT", None)
+    metadata_dir = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "orca"
+    env["ORCA_USER_DATA_PATH"] = str(metadata_dir)
+    try:
+        result = subprocess.run(
+            ["/usr/local/bin/orca-ide", "status", "--json"],
+            capture_output=True, text=True, timeout=timeout, check=False, env=env,
+        )
+        response = json.loads(result.stdout)
+        if result.returncode != 0 or not isinstance(response, dict) or response.get("ok") is not True:
+            return False
+        status = response.get("result")
+        if not isinstance(status, dict) or status.get("target") != {"kind": "local"}:
+            return False
+        app, runtime, graph = (status.get(key) for key in ("app", "runtime", "graph"))
+        if not all(isinstance(value, dict) for value in (app, runtime, graph)):
+            return False
+        pid = app.get("pid")
+        runtime_id = runtime.get("runtimeId")
+        if (app.get("running") is not True or app.get("desktopWindowStatus") != "available"
+                or type(pid) is not int or pid <= 0
+                or runtime.get("state") != "ready" or runtime.get("reachable") is not True
+                or graph.get("state") != "ready" or not isinstance(runtime_id, str) or not runtime_id):
+            return False
+        metadata = json.loads((metadata_dir / "orca-runtime.json").read_text())
+        if (not isinstance(metadata, dict) or metadata.get("pid") != pid
+                or metadata.get("runtimeId") != runtime_id):
+            return False
+        transports = metadata.get("transports")
+        if not isinstance(transports, list) or not any(
+            isinstance(transport, dict) and transport.get("kind") == "websocket"
+            and isinstance(transport.get("endpoint"), str)
+            and urlsplit(transport["endpoint"]).port == port for transport in transports
+        ):
+            return False
+        # Reject an unrelated desktop or stale bootstrap, even if its RPC is healthy.
+        proc = Path("/proc") / str(pid)
+        if proc.stat().st_uid != os.getuid():
+            return False
+        own_group = next(line.split(":", 2)[2] for line in
+                         Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::"))
+        app_group = next(line.split(":", 2)[2] for line in
+                         proc.joinpath("cgroup").read_text().splitlines() if line.startswith("0::"))
+        boundary = f"/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/orca.slice"
+        if own_group != f"{boundary}/orca-serve.service":
+            return False
+        # Chromium uses a transient app scope for XDG portal identity. Its managed
+        # drop-in keeps it under this same resource/firewall slice and ties its
+        # lifetime to orca-serve.service.
+        return app_group in (own_group, f"{boundary}/app-orca-{pid}.scope")
+    except (OSError, ValueError, StopIteration, subprocess.TimeoutExpired):
+        return False
+
+
+port = int(sys.argv[1])
+mode = sys.argv[2] if len(sys.argv) > 2 else "serve"
+if mode not in ("serve", "desktop"):
+    sys.exit("Unknown Orca readiness mode.")
+invocation = os.environ["INVOCATION_ID"]
+deadline = time.monotonic() + 120
+while time.monotonic() < deadline:
+    if mode == "desktop":
+        if desktop_ready(port, invocation, min(5, deadline - time.monotonic())):
+            print(f"Orca desktop ready on requested port {port}; runtime belongs to this invocation.")
+            sys.exit(0)
+        time.sleep(1)
+        continue
+    result = subprocess.run(
+        ["/usr/bin/journalctl", "--user", "--no-pager", "-o", "cat", "-n", "200",
+         f"_SYSTEMD_INVOCATION_ID={invocation}"],
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    for line in result.stdout.splitlines():
+        try:
+            ready = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ready, dict) or ready.get("type") != "orca_server_ready" or ready.get("schemaVersion") != 1:
+            continue
+        endpoint = ready.get("boundEndpoint")
+        pairing = ready.get("pairing")
+        try:
+            bound_port = urlsplit(endpoint).port if isinstance(endpoint, str) else None
+        except ValueError:
+            bound_port = None
+        if bound_port != port or not isinstance(pairing, dict) or pairing.get("available") is not True:
+            sys.exit("Orca is not ready on its requested port with pairing available; inspect the private journal.")
+        print(f"Orca ready on requested port {port}; pairing details remain in the private journal.")
+        sys.exit(0)
+    time.sleep(1)
+sys.exit(f"Orca {mode} produced no valid readiness record within 120 seconds; inspect the private journal.")

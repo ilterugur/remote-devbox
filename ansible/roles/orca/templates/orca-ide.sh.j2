@@ -1,0 +1,4 @@
+#!/bin/sh
+# Managed by Ansible (remote-devbox Orca).
+# Preserve the caller's own HOME and credentials; the screen reader's orca is untouched.
+exec /opt/orca/{{ orca_version }}/squashfs-root/resources/bin/orca-ide "$@"

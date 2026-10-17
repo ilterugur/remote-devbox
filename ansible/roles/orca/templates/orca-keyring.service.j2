@@ -1,0 +1,28 @@
+# Managed by Ansible (remote-devbox Orca encrypted keyring).
+[Unit]
+Description=Isolated Orca SecretService ({{ row.user }})
+Requires=dbus.socket
+After=dbus.socket
+Before=orca-serve.service
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.secrets
+Environment=HOME={{ orca_home }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ orca_uid }}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ orca_uid }}/bus
+Environment=XDG_DATA_HOME={{ orca_home }}/.local/share/orca-keyring
+UnsetEnvironment=GNOME_KEYRING_CONTROL GNOME_KEYRING_TEST_PATH
+RuntimeDirectory=orca-keyring
+RuntimeDirectoryMode=0700
+UMask=0077
+ExecStartPre=/usr/bin/python3 -I /usr/local/lib/agent-devbox/orca-keyring-client absent
+ExecStart=/usr/bin/sudo -n /usr/local/sbin/devbox-orca-keyring {{ row.user }}
+TimeoutStartSec=30
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+LimitCORE=0
+
+[Install]
+WantedBy=default.target

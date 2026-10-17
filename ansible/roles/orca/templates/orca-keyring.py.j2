@@ -1,0 +1,70 @@
+#!/usr/bin/python3 -I
+"""Managed root entry point: exactly one normalized developer, no caller paths."""
+import os
+import pwd
+import resource
+import stat
+import subprocess
+import sys
+
+USERS = {
+{% for unit in devbox_orca_units if unit.relay | default(false) %}
+    {{ unit.user | to_json }}: ({{ ansible_facts.getent_passwd[unit.user][1] }}, {{ ansible_facts.getent_passwd[unit.user][4] | to_json }}),
+{% endfor %}
+}
+
+
+def main():
+    if os.geteuid() != 0 or len(sys.argv) != 2 or sys.argv[1] not in USERS:
+        raise RuntimeError("expected exactly one configured relay username, as root")
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    os.umask(0o077)
+    user = sys.argv[1]
+    uid, home = USERS[user]
+    account = pwd.getpwnam(user)
+    if account.pw_uid != uid or account.pw_dir != home or uid == 0:
+        raise RuntimeError("configured developer account changed; reprovision first")
+    runtime = f"/run/user/{uid}"
+    command = [
+        "/usr/sbin/runuser", "-u", user, "--", "/usr/bin/env", "-i",
+        "PATH=/usr/bin:/bin", f"HOME={home}", f"USER={user}", f"LOGNAME={user}",
+        f"XDG_RUNTIME_DIR={runtime}", f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus",
+        f"XDG_DATA_HOME={home}/.local/share/orca-keyring",
+    ]
+    environment = {"PATH": "/usr/sbin:/usr/bin:/bin", "LANG": "C.UTF-8"}
+    client = ["/usr/bin/python3", "-I", "/usr/local/lib/agent-devbox/orca-keyring-client"]
+    with open("/proc/self/cgroup", encoding="ascii") as source:
+        cgroups = [line.strip().split(":", 2)[2] for line in source]
+    daemon_invocation = any(
+        f"/user-{uid}.slice/user@{uid}.service/" in group
+        and group.endswith("/orca-keyring.service") for group in cgroups
+    )
+    if not daemon_invocation:
+        # Orca's Requires/After starts the daemon. Never launch a competing one here.
+        subprocess.run(command + client + ["ready"], env=environment, check=True, timeout=30)
+        print("Orca keyring ready: managed owner, unlocked login/default, encrypted file")
+        return
+    subprocess.run(command + client + ["absent"], env=environment, check=True, timeout=20)
+    secret_fd = os.open(f"/etc/remote-devbox/orca/{user}.keyring-secret", os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(secret_fd, "rb") as secret_file:
+        info = os.fstat(secret_file.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
+            raise RuntimeError("unlock secret must be a root:root 0600 regular file with one link")
+        secret = secret_file.read(129)
+    if len(secret) != 64 or any(byte not in b"0123456789abcdef" for byte in secret):
+        raise RuntimeError("invalid managed unlock secret; refusing empty or replacement credentials")
+    # --unlock creates or unlocks login during this foreground daemon's startup.
+    # The root wrapper remains in the managed unit; the actual daemon runs as user.
+    subprocess.run(
+        command + ["/usr/bin/gnome-keyring-daemon", "--foreground", "--components=secrets",
+                   "--unlock", f"--control-directory={runtime}/orca-keyring"],
+        input=secret, env=environment, check=True,
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"Orca keyring refused: {error}", file=sys.stderr)
+        sys.exit(1)

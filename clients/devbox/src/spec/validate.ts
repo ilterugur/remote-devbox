@@ -41,6 +41,14 @@ const SSH_ACCESS: readonly string[] = ["public", "tailnet"] satisfies SshAccess[
 export const PROVIDERS: readonly string[] = ["claude", "codex", "omp"];
 const VERSIONED_PROVIDERS: readonly string[] = ["omp"];
 const EXACT_AGENT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const ORCA_FIELDS: Record<string, true> = {
+  enabled: true,
+  relay: true,
+  version: true,
+  port: true,
+  pairing_address: true,
+  resources: true,
+};
 const DESKTOP_ACCESS: readonly string[] = ["tunnel", "tailnet", "unsafe-public"];
 const RC_SPAWNS: readonly string[] = ["worktree", "same-dir", "session"] satisfies RcSpawn[];
 const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -428,6 +436,30 @@ function validateDevelopers(raw: Record<string, unknown>, issues: Issue[]): void
   }
   devs.forEach((d, i) => validateDeveloper(d, `developers[${i}]`, issues));
 
+  const orcaPorts = new Map<number, string>();
+  let orcaVersion: string | undefined;
+  devs.forEach((d, i) => {
+    if (!isRecord(d) || !isRecord(d.orca) || d.orca.enabled !== true) return;
+    const base = `developers[${i}].orca`;
+    const port = d.orca.port ?? 6768;
+    if (typeof port === "number" && isPort(port)) {
+      const first = orcaPorts.get(port);
+      if (first !== undefined) {
+        issues.push(err(`${base}.port`, `port ${port} is already claimed by developer '${first}'`));
+      } else {
+        orcaPorts.set(port, String(d.user));
+      }
+    }
+    const version = d.orca.version;
+    if (typeof version === "string" && EXACT_AGENT_VERSION_RE.test(version)) {
+      if (orcaVersion !== undefined && version !== orcaVersion) {
+        issues.push(err(`${base}.version`, `all enabled developers must use the same Orca version (${orcaVersion})`));
+      } else {
+        orcaVersion = version;
+      }
+    }
+  });
+
   const modes = new Set<"direct" | "weight">();
   devs.filter(isRecord).forEach((developer) => {
     const resources = developer.resources;
@@ -506,6 +538,7 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   if (d.paseo_daemon === true && !(isRecord(d.paseo_resources) && d.paseo_resources.memory_max !== undefined)) {
     issues.push(err(`${base}.paseo_resources.memory_max`, "required when paseo_daemon is true"));
   }
+  validateOrca(d.orca, `${base}.orca`, issues);
   const fleet = d.agent_fleet;
   if (fleet !== undefined) {
     if (!isRecord(fleet)) {
@@ -527,6 +560,44 @@ function validateDeveloper(d: unknown, base: string, issues: Issue[]): void {
   validateFileBridge(d.file_bridge, `${base}.file_bridge`, issues);
   validateAppConfigs(d, base, issues);
   validateProjects(d.projects, `${base}.projects`, issues);
+}
+
+function validateOrca(value: unknown, base: string, issues: Issue[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push(err(base, "must be a mapping"));
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!Object.hasOwn(ORCA_FIELDS, key)) issues.push(err(`${base}.${key}`, "unknown Orca field"));
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    issues.push(err(`${base}.enabled`, "must be true or false"));
+  }
+  if (value.relay !== undefined && typeof value.relay !== "boolean") {
+    issues.push(err(`${base}.relay`, "must be true or false"));
+  }
+  if (value.version !== undefined &&
+      !(typeof value.version === "string" && EXACT_AGENT_VERSION_RE.test(value.version))) {
+    issues.push(err(`${base}.version`, "must be an exact version such as 1.4.197 (without a leading v, tag or range)"));
+  } else if (value.enabled === true && value.version === undefined) {
+    issues.push(err(`${base}.version`, "required when orca.enabled is true"));
+  }
+  if (value.port !== undefined && !isPort(value.port)) {
+    issues.push(err(`${base}.port`, "must be an integer in 1..65535"));
+  }
+  if (value.enabled === true && value.relay === true && (value.port ?? 6768) !== 6768) {
+    issues.push(err(`${base}.port`, "relay desktop mode requires port 6768"));
+  }
+  if (value.pairing_address !== undefined &&
+      (!isNonEmptyString(value.pairing_address) || /\s/.test(value.pairing_address))) {
+    issues.push(err(`${base}.pairing_address`, "must be a nonempty host or URL without whitespace"));
+  }
+  validateResources(value.resources, `${base}.resources`, issues, { allowServiceKnobs: true });
+  if (value.enabled === true &&
+      !(isRecord(value.resources) && isNonEmptyString(value.resources.memory_max))) {
+    issues.push(err(`${base}.resources.memory_max`, "a nonempty ceiling is required when orca.enabled is true"));
+  }
 }
 
 function validateAgentVersions(d: Record<string, unknown>, base: string, issues: Issue[]): void {

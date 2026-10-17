@@ -1,0 +1,11 @@
+#!/bin/sh
+# Managed by Ansible (remote-devbox Orca).
+set -eu
+[ "$#" -eq 1 ] || exit 64
+# No caller-controlled path, environment lookup, or nft argument is accepted.
+case "$1" in
+{% for unit in devbox_orca_units %}
+    {{ unit.user }}) exec /usr/sbin/nft -f /etc/remote-devbox/orca/{{ unit.user }}.nft ;;
+{% endfor %}
+    *) exit 64 ;;
+esac

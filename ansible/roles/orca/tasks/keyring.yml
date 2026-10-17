@@ -1,0 +1,160 @@
+---
+# Included only for row.relay, after the developer's lingering user manager starts.
+- name: Install encrypted SecretService runtime dependencies
+  ansible.builtin.apt:
+    name:
+      - gnome-keyring
+      - libsecret-1-0
+      - libsecret-tools
+      - python3-dbus
+    state: present
+    install_recommends: false
+
+- name: Install the fixed root keyring entry point
+  ansible.builtin.template:
+    src: orca-keyring.py.j2
+    dest: /usr/local/sbin/devbox-orca-keyring
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install non-secret user-side keyring ownership and readiness checks
+  ansible.builtin.template:
+    src: orca-keyring-client.py.j2
+    dest: /usr/local/lib/agent-devbox/orca-keyring-client
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Refuse a foreign SecretService before changing user keyring setup
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/runuser
+      - -u
+      - "{{ row.user }}"
+      - --
+      - /usr/bin/env
+      - -i
+      - PATH=/usr/bin:/bin
+      - "HOME={{ orca_home }}"
+      - "XDG_RUNTIME_DIR=/run/user/{{ orca_uid }}"
+      - "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ orca_uid }}/bus"
+      - "XDG_DATA_HOME={{ orca_home }}/.local/share/orca-keyring"
+      - /usr/bin/python3
+      - -I
+      - /usr/local/lib/agent-devbox/orca-keyring-client
+      - check
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Inspect the existing managed keyring boundary without following links
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "/etc/remote-devbox/orca/{{ row.user }}.keyring-secret"
+    - "{{ orca_home }}/.local/share/orca-keyring"
+    - "{{ orca_home }}/.config/systemd/user/gnome-keyring-daemon.service"
+    - "{{ orca_home }}/.config/systemd/user/gnome-keyring-daemon.socket"
+    - "{{ orca_home }}/.local/share/orca-keyring/keyrings"
+  register: orca_keyring_paths
+
+- name: Refuse unknown keyring data or custom GNOME service definitions
+  ansible.builtin.assert:
+    that:
+      - >-
+        not orca_keyring_paths.results[0].stat.exists or
+        (orca_keyring_paths.results[0].stat.isreg | default(false) and
+         orca_keyring_paths.results[0].stat.uid == 0 and
+         orca_keyring_paths.results[0].stat.gid == 0 and
+         orca_keyring_paths.results[0].stat.mode == '0600')
+      - >-
+        not orca_keyring_paths.results[1].stat.exists or
+        (orca_keyring_paths.results[0].stat.exists and
+         orca_keyring_paths.results[1].stat.isdir | default(false) and
+         orca_keyring_paths.results[1].stat.uid == orca_uid | int)
+      - >-
+        not orca_keyring_paths.results[2].stat.exists or
+        orca_keyring_paths.results[2].stat.lnk_source | default('') == '/dev/null'
+      - >-
+        not orca_keyring_paths.results[3].stat.exists or
+        orca_keyring_paths.results[3].stat.lnk_source | default('') == '/dev/null'
+      - >-
+        not orca_keyring_paths.results[4].stat.exists or
+        (orca_keyring_paths.results[4].stat.isdir | default(false) and
+         orca_keyring_paths.results[4].stat.uid == orca_uid | int)
+    fail_msg: >-
+      Refusing to adopt unknown Orca keyring data, replace an unlock secret, or overwrite
+      custom GNOME keyring user units. Existing keyrings are not reset or migrated.
+
+- name: Generate the root-only unlock secret once on the box
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -I
+      - -c
+      - |
+        import os, secrets, sys
+        os.umask(0o077)
+        fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as target:
+            target.write(secrets.token_hex(32))
+            target.flush()
+            os.fsync(target.fileno())
+      - "/etc/remote-devbox/orca/{{ row.user }}.keyring-secret"
+    creates: "/etc/remote-devbox/orca/{{ row.user }}.keyring-secret"
+  no_log: true
+
+- name: Create isolated private persistent keyring directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0700"
+  loop:
+    - "{{ orca_home }}/.local/share/orca-keyring"
+    - "{{ orca_home }}/.local/share/orca-keyring/keyrings"
+
+# The package supplies globally enabled user units. Mask only these standard names
+# for this developer so they cannot race our isolated provider at the next boot.
+- name: Prevent the package default daemon from racing the isolated provider
+  ansible.builtin.file:
+    src: /dev/null
+    dest: "{{ orca_home }}/.config/systemd/user/{{ item }}"
+    state: link
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    follow: false
+  loop:
+    - gnome-keyring-daemon.service
+    - gnome-keyring-daemon.socket
+
+- name: Install the managed encrypted keyring user service
+  ansible.builtin.template:
+    src: orca-keyring.service.j2
+    dest: "{{ orca_home }}/.config/systemd/user/orca-keyring.service"
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0600"
+
+- name: Reload the developer's user units for the keyring
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", daemon-reload]
+  changed_when: false
+
+- name: Enable the isolated keyring for unattended user-manager startup
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", enable, orca-keyring.service]
+  register: orca_keyring_enable
+  changed_when: "'Created symlink' in orca_keyring_enable.stderr"
+
+- name: Start the keyring without restarting an existing provider
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", start, orca-keyring.service]
+  changed_when: false
+
+- name: Require managed ownership, an unlocked default collection and encrypted persistence
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/devbox-orca-keyring, "{{ row.user }}"]
+  changed_when: false

@@ -1,0 +1,11 @@
+# Managed by Ansible (remote-devbox Orca).
+[Unit]
+Description=Orca runtime and Chromium scopes ({{ row.user }})
+
+[Slice]
+{% for key, directive in {'memory_high': 'MemoryHigh', 'memory_max': 'MemoryMax', 'memory_swap_max': 'MemorySwapMax', 'cpu_weight': 'CPUWeight', 'cpu_quota': 'CPUQuota', 'io_weight': 'IOWeight'}.items() %}
+{% if key in row.resources %}
+{{ directive }}={{ row.resources[key] }}
+{% endif %}
+{% endfor %}
+ManagedOOMPreference=omit

@@ -592,6 +592,22 @@ export interface ProjectSpec {
   remote_control?: ProjectRemoteControlSpec | false;
 }
 
+/** Optional Orca runtime, independent of the Paseo daemon. */
+export interface OrcaSpec {
+  enabled?: boolean;
+  /** Enable relay-capable desktop mode on Xvfb with an encrypted keyring. Defaults to false. */
+  relay?: boolean;
+  /** Exact release version without a leading "v"; required when enabled.
+   * All enabled developers share this root-owned installation. */
+  version?: string;
+  /** Listener port. Defaults to 6768; unique across enabled developers. Relay requires 6768. */
+  port?: number;
+  /** Serve-mode advertised address, not a listener bind address. Defaults to 127.0.0.1. */
+  pairing_address?: string;
+  /** Explicit fleet ceiling; memory_max is required when enabled, with no RC fallback. */
+  resources?: RcResourceSpec;
+}
+
 export interface DeveloperSpec {
   user: string;
   adopt_existing?: boolean;
@@ -626,6 +642,8 @@ export interface DeveloperSpec {
    * on this box is 28 GB across 14 sessions, and starting under a 12G wall would kill
    * the fleet on the first apply. State the ceiling from measurement instead. */
   paseo_resources?: RcResourceSpec;
+  /** Run Orca as a managed user service; off by default and independent of Paseo. */
+  orca?: OrcaSpec;
   /** The session count `paseo_resources` was sized against. Alarmed on, not enforced —
    * see AgentFleetSpec. */
   agent_fleet?: AgentFleetSpec;

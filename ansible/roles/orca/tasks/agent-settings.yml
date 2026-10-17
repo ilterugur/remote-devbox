@@ -1,0 +1,30 @@
+---
+- name: Install the offline Orca agent preference merger
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/orca-agent-settings.py"
+    dest: /usr/local/lib/agent-devbox/orca-agent-settings
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Reject ambiguous Orca provider profile selection
+  ansible.builtin.assert:
+    that:
+      - >-
+        (dev.agent_profiles.values() | selectattr('provider', 'equalto', profile.provider) | list | length) == 1
+        or dev.agent_profiles[dev.default_agent_profile].provider == profile.provider
+    fail_msg: "Orca needs an unambiguous profile for {{ row.user }}/{{ profile.provider }}; select its profile as default_agent_profile."
+  vars:
+    dev: "{{ devbox_developers | selectattr('user', 'equalto', row.user) | first }}"
+    profile: "{{ item.value }}"
+  loop: "{{ (devbox_developers | selectattr('user', 'equalto', row.user) | first).agent_profiles | dict2items }}"
+  loop_control:
+    label: "{{ row.user }}/{{ item.key }}"
+
+- name: Write declared Orca agent launcher preferences
+  ansible.builtin.template:
+    src: orca-agent-settings.json.j2
+    dest: "/home/{{ row.user }}/.config/orca-devbox-agent-settings.json"
+    owner: "{{ row.user }}"
+    group: "{{ row.user }}"
+    mode: "0600"

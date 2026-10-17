@@ -1,0 +1,17 @@
+# Managed by Ansible (remote-devbox Orca).
+# Each start resolves the new service cgroup inode before Orca can bind any socket.
+# Ancestor matching also covers delegated child cgroups and upstream's random fallback.
+add table inet devbox_orca_{{ orca_uid }}
+flush table inet devbox_orca_{{ orca_uid }}
+table inet devbox_orca_{{ orca_uid }} {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        iifname { "lo", "tailscale0" } return
+        # Replies to outbound API connections have the reply direction and pass through.
+{% if row.relay %}
+        ct direction original socket cgroupv2 level 4 "user.slice/user-{{ orca_uid }}.slice/user@{{ orca_uid }}.service/orca.slice" drop
+{% else %}
+        ct direction original socket cgroupv2 level 5 "user.slice/user-{{ orca_uid }}.slice/user@{{ orca_uid }}.service/app.slice/orca-serve.service" drop
+{% endif %}
+    }
+}

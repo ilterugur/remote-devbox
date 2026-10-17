@@ -1,0 +1,89 @@
+---
+# Optional and independent of agent_remote. Empty inventories must not install anything.
+- name: Provision the requested Orca runtimes
+  when: devbox_orca_units | default([]) | length > 0
+  block:
+    - name: Read existing developer accounts
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Require a supported host and one pinned release
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution in ['Ubuntu', 'Debian']
+          - ansible_facts.architecture in ['x86_64', 'aarch64']
+          - devbox_orca_units | map(attribute='version') | unique | length == 1
+        fail_msg: Orca requires Ubuntu/Debian, amd64/arm64 and one shared pinned release.
+
+    - name: Check existing accounts and the fleet ceiling
+      ansible.builtin.assert:
+        that:
+          - row.user in ansible_facts.getent_passwd
+          - row.resources.memory_max is defined
+          - row.version is match('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')
+        fail_msg: Orca requires an existing developer account, a pinned version and memory_max.
+      loop: "{{ devbox_orca_units }}"
+      loop_control:
+        loop_var: row
+        label: "{{ row.user }}"
+
+    - name: Install the pinned shared application
+      ansible.builtin.include_tasks: install.yml
+      vars:
+        orca_version: "{{ devbox_orca_units[0].version }}"
+        orca_install_dir: "/opt/orca/{{ devbox_orca_units[0].version }}"
+        orca_asset_name: "{{ 'orca-linux-arm64.AppImage' if ansible_facts.architecture == 'aarch64' else 'orca-linux.AppImage' }}"
+
+    - name: Create the root-owned firewall configuration directory
+      ansible.builtin.file:
+        path: /etc/remote-devbox/orca
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the narrowly scoped firewall helper
+      ansible.builtin.template:
+        src: orca-firewall.sh.j2
+        dest: /usr/local/sbin/devbox-orca-firewall
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure the shared runtime directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /usr/local/lib/agent-devbox
+        - /var/tmp/devbox-scratch
+
+    - name: Install the bounded private readiness check
+      ansible.builtin.template:
+        src: orca-ready.py.j2
+        dest: /usr/local/lib/agent-devbox/orca-ready
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Authorize only the managed Orca firewall operation
+      ansible.builtin.template:
+        src: orca-sudoers.j2
+        dest: /etc/sudoers.d/remote-devbox-orca
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Reconcile each developer's own Orca user service
+      ansible.builtin.include_tasks: user.yml
+      loop: "{{ devbox_orca_units }}"
+      loop_control:
+        loop_var: row
+        label: "{{ row.user }}"
+      vars:
+        orca_uid: "{{ ansible_facts.getent_passwd[row.user][1] }}"
+        orca_home: "{{ ansible_facts.getent_passwd[row.user][4] }}"

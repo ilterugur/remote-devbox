@@ -1,0 +1,9 @@
+# Managed by Ansible (remote-devbox Orca).
+# Chromium creates app-orca-<PID>.scope through systemd for XDG portal identity.
+# Keep that scope within the same budget/firewall and terminate it with the server.
+[Unit]
+PartOf=orca-serve.service
+
+[Scope]
+Slice=orca.slice
+ManagedOOMPreference=omit

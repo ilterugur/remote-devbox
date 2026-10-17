@@ -364,6 +364,24 @@ developers:
       memory_max: 44G
       memory_swap_max: 4G
 
+    # Optional Orca runtime; independent of paseo_daemon, so either or both
+    # may run. All enabled developers must pin the same release and use unique ports.
+    # The ceiling is explicit, never inherited from remote_control.resources.
+    orca:
+      enabled: false
+      # Relay needs the normal desktop on Xvfb, with extra memory/CPU overhead.
+      # It requires port 6768 and an isolated encrypted keyring whose automatic-unlock
+      # secret is root-only on the same disk (not protection from root/disk compromise).
+      relay: false
+      version: "1.4.198"
+      port: 6768
+      # Headless mode only: advertised address, not the listener bind address.
+      # The default uses an SSH tunnel; a tailnet host opens no public firewall port.
+      pairing_address: "127.0.0.1"
+      resources:
+        memory_max: 16G # example only: size from this developer's measured Orca fleet
+        memory_swap_max: 1G
+
     git_identities:
       work:
         name: "Dev A"

@@ -89,6 +89,63 @@ a system timer reapplies `memory_max`, `memory_swap_max`, and optional Redis/Val
 `redis_maxmemory` after Compose recreates it. This policy lives only on the devbox and
 does not rewrite the application's Compose file.
 
+Orca is optional alongside Paseo: set `developers[].orca.enabled: true` and declare
+an exact `version` (without `v`) plus `resources.memory_max`. Each enabled developer
+gets an `orca-serve.service` user service with their own home and heavy-command gate;
+`paseo_daemon` remains independent, so either or both can run. Enabled developers must
+share one release version and use distinct `port` values (default `6768`).
+In the default headless mode (`relay: false`), `pairing_address` defaults to `127.0.0.1`
+for an SSH tunnel and only changes the advertised address, not the listener bind address.
+No public firewall port is opened.
+Apply just this option with `devbox apply orca`.
+
+Set `developers[].orca.relay: true` for the vendor relay: upstream only starts its relay
+service in normal desktop mode, so this runs the desktop on a private Xvfb display.
+It requires port `6768` (at most one relay desktop per box); `pairing_address` applies
+only to headless mode. Desktop mode uses more memory/CPU than headless mode; size the
+explicit fleet ceiling accordingly. Readiness checks the live desktop RPC and current
+service invocation, not merely an open port. Orca account sign-in is still required.
+
+Chromium creates a separate `app-orca-<PID>.scope` for XDG portal integration. A
+managed scope drop-in places it under `orca.slice` and ties its lifetime to the
+Orca service. The aggregate slice carries the fleet ceiling and the private
+ingress rule, so this normal desktop behavior cannot escape either boundary.
+
+Relay mode also provisions an isolated encrypted GNOME keyring under
+`~/.local/share/orca-keyring`, unlocked before Orca starts with `gnome-libsecret`.
+Its automatic-unlock secret is stored root-only (`0600`) at
+`/etc/remote-devbox/orca/<user>.keyring-secret`. This avoids plaintext token storage,
+but does **not** protect against root access or compromise of the disk holding both
+the keyring and unlock secret. Provisioning refuses to adopt an unknown existing
+Secret Service or keyring. Telemetry remains disabled in both modes.
+
+The role installs the official checksum-verified AppImage and the `orca-ide` CLI on
+Linux (`orca` can be the GNOME screen reader). On macOS the desktop app's bundled
+`Contents/Resources/bin/orca` launcher can be linked into `~/.local/bin/orca`.
+Check either installation with `--version` and `status --json`.
+
+Orca uses the existing agent-profile launchers, including their memory and heavy-job
+environment; it does not copy logins or create another memory bank. Multiple profiles
+of one provider require that provider's selected profile to be `default_agent_profile`.
+Managed launcher preferences are merged before service startup, preserving unrelated
+Orca settings and session data. Applying configuration never restarts an active fleet;
+an explicit service restart ends its live terminals.
+
+Server telemetry is disabled with `ORCA_TELEMETRY_DISABLED=1`. On the local desktop,
+also turn off **Settings → Privacy → Share anonymous usage data**. Pair directly over
+Tailscale to avoid the vendor relay. Pairing links are credentials: do not publish them.
+Because upstream can bind a fallback port, a narrowly authorized root helper installs
+an Orca-cgroup-specific nftables ingress rule before each start. Only loopback and
+`tailscale0` may initiate connections to that service and its children; outbound API
+responses and other services, including Paseo, are unaffected.
+
+Without Tailscale on the client, use an SSH local forward instead of exposing the
+runtime publicly: `ssh -N -L 127.0.0.1:16768:127.0.0.1:6768 devbox-<user>`.
+Pair the client with the forwarded `ws://127.0.0.1:16768` endpoint; the server's
+Tailscale-advertised address cannot work on a client outside the tailnet. A supervised
+tunnel can also forward `127.0.0.1:19077` to the existing Hindsight API at
+`127.0.0.1:9077`; local memory clients then use `http://127.0.0.1:19077` with their
+existing bank ID. This creates neither a new bank nor a local memory daemon.
 
 Developers cannot read each other's homes, secrets, git keys, container sockets or even
 each other's process command lines, and none of them can escalate to root.

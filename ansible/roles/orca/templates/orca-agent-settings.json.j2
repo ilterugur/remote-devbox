@@ -1,0 +1,11 @@
+{% set dev = devbox_developers | selectattr('user', 'equalto', row.user) | first %}
+{% set ns = namespace(commands={}, default_agent=none) %}
+{% for name, profile in dev.agent_profiles.items() %}
+{% if name == dev.default_agent_profile or profile.provider not in ns.commands %}
+{% set _ = ns.commands.update({profile.provider: '/home/' ~ row.user ~ '/.local/bin/' ~ name}) %}
+{% endif %}
+{% if name == dev.default_agent_profile %}
+{% set ns.default_agent = profile.provider %}
+{% endif %}
+{% endfor %}
+{{ {'agentCmdOverrides': ns.commands, 'defaultTuiAgent': ns.default_agent} | to_nice_json }}

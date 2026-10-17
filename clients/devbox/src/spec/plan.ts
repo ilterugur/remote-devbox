@@ -174,6 +174,16 @@ function developerLines(
     );
   }
 
+  if (dev.orca?.enabled === true) {
+    lines.push(row(
+      "orca",
+      `orca-serve.service · version ${dev.orca.version} · port ${dev.orca.port ?? 6768}` +
+        (dev.orca.relay === true ? " · relay desktop (encrypted keyring)" : ` · pairing ${dev.orca.pairing_address ?? "127.0.0.1"}`) +
+        ` · ceiling ${dev.orca.resources?.memory_max ?? "unset"}`,
+      indent,
+    ));
+  }
+
   if (dev.memory?.enabled) {
     const instances = Object.entries(dev.memory.instances ?? {})
       .map(([k, v]) => `${k}→${v.llm_provider}`)

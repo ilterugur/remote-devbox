@@ -24,6 +24,7 @@ export const PHASES: Phase[] = [
   { name: "agents", tags: ["agents"], summary: "agent profiles and launchers" },
   { name: "projects", tags: ["projects"], summary: "clones, per-repo identity, dependencies" },
   { name: "rc", tags: ["rc"], summary: "always-on Remote Control servers, one per project" },
+  { name: "orca", tags: ["orca"], summary: "optional Orca runtimes and mobile Relay, one per developer" },
   { name: "browser", tags: ["browser"], summary: "headless Chrome and the browser MCP servers" },
   { name: "containers", tags: ["containers"], summary: "rootless engines and the engine map" },
   { name: "memory", tags: ["memory"], summary: "memory daemons, banks and agent wiring" },

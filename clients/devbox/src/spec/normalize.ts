@@ -243,6 +243,7 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_codex_units: normalizeCodexUnits(resolved, hostHeavyJobGate),
     devbox_codex_remote_control_units: normalizeCodexRemoteControlUnits(resolved, hostHeavyJobGate),
     devbox_paseo_units: normalizePaseoUnits(resolved, hostHeavyJobGate),
+    devbox_orca_units: normalizeOrcaUnits(resolved, hostHeavyJobGate),
     devbox_developers: resolved.developers.map((dev) =>
       normalizeDeveloper(dev, tailscale, client, clientPorts, hostHeavyJobGate),
     ),
@@ -447,6 +448,32 @@ function normalizePaseoUnits(
       // limit are rendered from one declaration. Null means "no number was measured":
       // the role then charts the count without alarming on a threshold nobody chose.
       max_sessions: dev.agent_fleet?.max_sessions ?? null,
+    }];
+  });
+}
+
+/** One opted-in Orca runtime per developer, with its own explicit fleet ceiling. */
+function normalizeOrcaUnits(
+  resolved: ResolvedSpec,
+  hostHeavyJobGate: NormalizedHeavyJobGate,
+): Record<string, unknown>[] {
+  return resolved.developers.flatMap((dev) => {
+    const orca = dev.orca;
+    if (orca?.enabled !== true) return [];
+    const heavyJobGate = normalizeHeavyJobGate(hostHeavyJobGate, dev.heavy_job_gate);
+    return [{
+      user: dev.user,
+      version: orca.version,
+      relay: orca.relay ?? false,
+      port: orca.port ?? 6768,
+      pairing_address: orca.pairing_address ?? "127.0.0.1",
+      heavy_job_gate_enabled: heavyJobGate.enabled,
+      heavy_job_gate_categories: HEAVY_JOB_CATEGORIES.filter((category) => heavyJobGate.categories[category]),
+      heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
+      heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
+      heavy_job_gate_memory_max: heavyJobGate.memory_max,
+      heavy_job_gate_memory_max_by_category: heavyJobGate.memory_max_by_category,
+      resources: normalizeDirectMemoryResources({ ...(orca.resources ?? {}) }, true),
     }];
   });
 }

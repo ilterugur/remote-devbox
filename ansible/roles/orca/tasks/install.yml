@@ -1,0 +1,128 @@
+---
+- name: Install headless Electron and firewall prerequisites
+  ansible.builtin.apt:
+    name: >-
+      {{ ['ca-certificates', 'curl', 'file', 'jq', 'git', 'xvfb', 'xauth', 'zlib1g-dev',
+          'sudo', 'nftables', 'libnss3', 'libgbm1', 'libxtst6', 'libdrm2', 'libxkbcommon0',
+          'libpango-1.0-0', 'libcairo2', 'libxcomposite1', 'libxdamage1', 'libxfixes3',
+          'libxrandr2', 'libxrender1', 'libx11-xcb1', 'libxcb-dri3-0', 'libxss1']
+         + (['libgtk-3-0t64', 'libatk1.0-0t64', 'libatk-bridge2.0-0t64', 'libasound2t64',
+             'libcups2t64', 'libatspi2.0-0t64'] if orca_t64 else
+            ['libgtk-3-0', 'libatk1.0-0', 'libatk-bridge2.0-0', 'libasound2',
+             'libcups2', 'libatspi2.0-0']) }}
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  vars:
+    orca_t64: >-
+      {{ (ansible_facts.distribution == 'Ubuntu' and ansible_facts.distribution_version is version('24.04', '>='))
+         or (ansible_facts.distribution == 'Debian' and ansible_facts.distribution_major_version | int >= 13) }}
+
+- name: Secure the versioned installation directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/orca
+    - "{{ orca_install_dir }}"
+
+- name: Check whether this release was completely extracted
+  ansible.builtin.stat:
+    path: "{{ orca_install_dir }}/.extracted"
+  register: orca_extracted
+
+# Never overwrite a running release's extracted binaries. New versions have new paths;
+# an interrupted extraction has no completion marker and is safe to retry.
+- name: Download and extract a new pinned release
+  when: not orca_extracted.stat.exists
+  block:
+    - name: Read the official pinned release metadata
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/stablyai/orca/releases/tags/v{{ orca_version }}"
+        return_content: true
+        headers:
+          Accept: application/vnd.github+json
+      register: orca_release
+      check_mode: false
+
+    - name: Select the architecture's official AppImage
+      ansible.builtin.set_fact:
+        orca_assets: "{{ orca_release.json.assets | selectattr('name', 'equalto', orca_asset_name) | list }}"
+
+    - name: Require exactly one official release asset
+      ansible.builtin.assert:
+        that:
+          - orca_assets | length == 1
+          - orca_release.json.tag_name == 'v' ~ orca_version
+        fail_msg: The pinned Orca release has no unique AppImage for this architecture.
+
+    - name: Require a published SHA256 digest before executing the download
+      ansible.builtin.assert:
+        that: orca_assets[0].digest | default('', true) is match('^sha256:[0-9a-f]{64}$')
+        fail_msg: This release has no usable SHA256 asset digest; refusing an unverified executable.
+
+    - name: Download the checksum-verified AppImage
+      ansible.builtin.get_url:
+        url: "{{ orca_assets[0].browser_download_url }}"
+        dest: "{{ orca_install_dir }}/{{ orca_asset_name }}"
+        checksum: "{{ orca_assets[0].digest }}"
+        owner: root
+        group: root
+        mode: "0755"
+        timeout: 120
+
+    - name: Extract without FUSE and make the root-owned tree readable
+      ansible.builtin.shell:
+        executable: /bin/bash
+        chdir: "{{ orca_install_dir }}"
+        creates: "{{ orca_install_dir }}/.extracted"
+        cmd: |
+          set -euo pipefail
+          ./{{ orca_asset_name }} --appimage-extract
+          chown -hR root:root squashfs-root
+          chmod -R u=rwX,go=rX squashfs-root
+          # Chromium's packaged setuid sandbox remains enabled; never use --no-sandbox.
+          chmod 4755 squashfs-root/chrome-sandbox
+          test -x squashfs-root/AppRun
+          test -x squashfs-root/resources/bin/orca-ide
+          touch .extracted
+          chmod 0644 .extracted
+
+    - name: Record the installed artifact's checksum
+      ansible.builtin.copy:
+        content: "{{ orca_assets[0].digest }}\n"
+        dest: "{{ orca_install_dir }}/SHA256"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Check the stable CLI path before adoption
+  ansible.builtin.stat:
+    path: /usr/local/bin/orca-ide
+    follow: false
+  register: orca_cli_stat
+
+- name: Read an existing regular CLI launcher
+  ansible.builtin.slurp:
+    src: /usr/local/bin/orca-ide
+  when: orca_cli_stat.stat.exists and orca_cli_stat.stat.isreg | default(false)
+  register: orca_cli_existing
+
+- name: Refuse to replace a foreign CLI installation
+  ansible.builtin.assert:
+    that: >-
+      not orca_cli_stat.stat.exists or
+      (orca_cli_stat.stat.isreg | default(false) and
+       '# Managed by Ansible (remote-devbox Orca).' in (orca_cli_existing.content | default('') | b64decode))
+    fail_msg: /usr/local/bin/orca-ide belongs to another installation; choose an explicit adoption first.
+
+- name: Install the stable official CLI launcher
+  ansible.builtin.template:
+    src: orca-ide.sh.j2
+    dest: /usr/local/bin/orca-ide
+    owner: root
+    group: root
+    mode: "0755"

@@ -1,0 +1,152 @@
+---
+- name: Create the developer's user unit directory
+  ansible.builtin.file:
+    path: "{{ orca_home }}/.config/systemd/user"
+    state: directory
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0700"
+
+- name: Ensure disk-backed scratch exists for the Orca fleet
+  ansible.builtin.file:
+    path: "/var/tmp/devbox-scratch/{{ row.user }}"
+    state: directory
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0700"
+
+- name: Prepare Orca agent settings for the existing developer profiles
+  ansible.builtin.include_tasks: agent-settings.yml
+
+- name: Require the shared heavy-command gate when enabled
+  ansible.builtin.stat:
+    path: /usr/local/lib/agent-devbox/heavy-command-gate/bun
+  register: orca_gate
+  when: row.heavy_job_gate_enabled
+
+- name: Refuse to launch an ungated fleet
+  ansible.builtin.assert:
+    that: orca_gate.stat.exists
+    fail_msg: Run the agents role to install the shared heavy-command gate first.
+  when: row.heavy_job_gate_enabled
+
+- name: Write the developer's fail-closed cgroup firewall
+  ansible.builtin.template:
+    src: orca-firewall.nft.j2
+    dest: "/etc/remote-devbox/orca/{{ row.user }}.nft"
+    owner: root
+    group: root
+    mode: "0644"
+  register: orca_firewall
+
+- name: Keep this developer's user manager running after logout
+  ansible.builtin.command:
+    argv: [loginctl, enable-linger, "{{ row.user }}"]
+    creates: "/var/lib/systemd/linger/{{ row.user }}"
+
+- name: Start the existing developer's user manager without restarting it
+  ansible.builtin.systemd_service:
+    name: "user@{{ orca_uid }}.service"
+    state: started
+
+- name: Prepare encrypted account storage for Orca Relay
+  ansible.builtin.include_tasks: keyring.yml
+  when: row.relay | default(false)
+
+- name: Install the aggregate Orca resource slice
+  ansible.builtin.template:
+    src: orca.slice.j2
+    dest: "{{ orca_home }}/.config/systemd/user/orca.slice"
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0600"
+  when: row.relay
+
+- name: Create Chromium application scope configuration directory
+  ansible.builtin.file:
+    path: "{{ orca_home }}/.config/systemd/user/app-orca-.scope.d"
+    state: directory
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0700"
+  when: row.relay
+
+- name: Keep Chromium application scopes under the managed Orca boundary
+  ansible.builtin.template:
+    src: orca-chromium-scope.conf.j2
+    dest: "{{ orca_home }}/.config/systemd/user/app-orca-.scope.d/remote-devbox.conf"
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0600"
+  when: row.relay
+
+- name: Write the managed Orca service without restarting its fleet
+  ansible.builtin.template:
+    src: orca-serve.service.j2
+    dest: "{{ orca_home }}/.config/systemd/user/orca-serve.service"
+    owner: "{{ row.user }}"
+    group: "{{ ansible_facts.getent_passwd[row.user][2] }}"
+    mode: "0600"
+  register: orca_service
+
+- name: Reload this developer's user manager
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", daemon-reload]
+  changed_when: false
+
+- name: Read the current Orca service state
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", show, orca-serve.service, -p, ActiveState, --value]
+  changed_when: false
+  register: orca_state
+  check_mode: false
+
+# An already-running unit has a live cgroup, so changing its firewall needs no restart.
+# Every new start applies it in ExecStartPre after systemd creates that cgroup.
+- name: Reconcile firewall protection for an already-running Orca fleet
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/devbox-orca-firewall, "{{ row.user }}"]
+  changed_when: orca_firewall.changed
+  when: orca_state.stdout in ['active', 'activating', 'reloading']
+
+- name: Enable Orca in the developer's user manager
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", enable, orca-serve.service]
+  register: orca_enable
+  changed_when: "'Created symlink' in orca_enable.stderr"
+
+- name: Start an inactive Orca service only
+  ansible.builtin.command:
+    argv: [systemctl, --user, "--machine={{ row.user }}@", start, orca-serve.service]
+  when: orca_state.stdout in ['inactive', 'failed']
+
+- name: Report a pending Orca fleet restart
+  ansible.builtin.debug:
+    msg: >-
+      {{ row.user }}: the Orca unit changed but its running fleet was NOT restarted.
+      Before any restart, run sudo -Hu {{ row.user }} /usr/local/bin/orca-ide terminal list --json
+      and require a complete hostScope with no live terminals on any affected host.
+      An incomplete or failed census means defer. Then explicitly run systemctl --user
+      --machine={{ row.user }}@ reset-failed orca-serve.service and restart orca-serve.service.
+      Restarting ends every Orca terminal and agent; Paseo is not touched.
+  when:
+    - orca_service.changed
+    - orca_state.stdout in ['active', 'activating', 'reloading']
+
+- name: Explain readiness and private pairing verification
+  ansible.builtin.debug:
+    msg: >-
+      {{ row.user }}: service startup is not readiness.
+      {% if row.relay %}
+      Desktop startup checks authenticated local RPC, its requested port and the
+      managed Orca slice. Also require account persistence=encrypted and a successful
+      Relay pairing invite; CLI status alone does not prove cloud connectivity.
+      {% else %}
+      Inspect this invocation's journal: journalctl --user --user-unit=orca-serve.service
+      -b -o cat (as {{ row.user }}). Require JSON type=orca_server_ready, schemaVersion=1,
+      pairing.available=true, and boundEndpoint port={{ row.port }}.
+      {% endif %}
+      A port collision can make upstream choose a fallback.
+      Only loopback and tailscale0 can initiate connections to this service's sockets,
+      including fallback ports and child dev servers. Pairing URLs are credentials;
+      never paste them into public logs. Five failed starts per 300 seconds is the cap.

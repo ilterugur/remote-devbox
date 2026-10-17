@@ -81,6 +81,11 @@
       tags: [agents, rc]
       when: devbox_remote_control.enabled | bool
 
+    # Independent, opt-in runtime alongside Paseo. No Remote Control enablement needed.
+    - role: orca
+      tags: [orca]
+      when: devbox_orca_units | default([]) | length > 0
+
     # Headless Chrome and the browser MCP servers, for the developers that asked.
     # After agent_config: that role rewrites the same ~/.claude tree, and the MCP
     # entries must survive it rather than race it.
