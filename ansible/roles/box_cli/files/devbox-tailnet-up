@@ -1,7 +1,16 @@
 #!/bin/sh
-# Kept so an ~/.ssh/config written before the dispatcher existed keeps working: its
-# `Match exec` still names this file. The logic now lives in one place — the dispatcher's
-# `tailnet-up` subcommand — and re-running the client installer rewrites the ssh block to
-# call that directly.
+# Standalone SSH Match probe. Do not call `devbox` here: a developer may put a
+# checkout's compiled CLI on PATH, which does not implement `tailnet-up`.
 set -eu
-exec devbox tailnet-up "$@"
+peer="${1:?usage: devbox-tailnet-up <tailnet-ip> [port]}"
+port="${2:-22}"
+case "$(uname -s)" in
+  Darwin)
+    route -n get "$peer" 2>/dev/null | grep -q 'interface: utun' || exit 1
+    nc -z -G 1 "$peer" "$port" >/dev/null 2>&1
+    ;;
+  *)
+    ip route get "$peer" 2>/dev/null | grep -q 'dev tailscale' || exit 1
+    nc -z -w 1 "$peer" "$port" >/dev/null 2>&1
+    ;;
+esac

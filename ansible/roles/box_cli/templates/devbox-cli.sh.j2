@@ -172,7 +172,7 @@ emit_ssh_config() {
   echo "# Change IdentityFile below if your key lives elsewhere."
   if [ -n "$ts" ]; then
     echo "# The tailnet is a route here, not a credential — sshd is key-only on both paths."
-    printf 'Match host %s exec "devbox tailnet-up %s"\n    HostName %s\n' "$al" "$ts" "$ts"
+    printf 'Match host %s exec "devbox-tailnet-up %s"\n    HostName %s\n' "$al" "$ts" "$ts"
   fi
   printf "Host %s\n    HostName %s\n    User %s\n    Port 22\n${id}" "$al" "$pub" "$user"
   if [ -n "$ts" ]; then
