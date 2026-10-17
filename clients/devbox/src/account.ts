@@ -7,9 +7,9 @@
  * binary can never drift from the copy the box runs — `account.test.ts` asserts the two
  * are byte-identical.
  *
- * `-p <profile>` does not re-implement anything either: it shells out to the box's
- * `remote-devbox-account` wrapper over `ssh -t`, which runs the very same engine as the
- * right Linux user with that agent profile's CLAUDE_CONFIG_DIR.
+ * `-p <profile>` does not re-implement anything either: it shells out over `ssh -t` as
+ * the developer (no sudo) to `~/.local/bin/devbox-account` when that is installed, else
+ * the shared engine. Both swap Claude Code and pin omp to the same org.
  *
  * Manual only, by design: nothing here reads a quota or picks an account for you
  * (docs/superpowers/specs/2026-09-04-claude-account-swap-design.md, "Policy boundary").
@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 import engineScript from "../../../scripts/devbox-account.sh" with { type: "text" };
 import { type Config, die, hostFor, loadConfig, resolveProfile, shQuote } from "./config";
-import { pinOmpAfterRemoteUse, pinOmpAfterUse } from "./omp-pin";
+import { ompPinScriptPath } from "./omp-pin";
 
 
 /** The engine's verbs, in the order its own usage text lists them. */
@@ -93,17 +93,16 @@ export function engineScriptPath(): string {
 
 /** Where the agents phase installs the engine, and each profile's config tree. */
 const BOX_ENGINE = "/usr/local/share/remote-devbox/devbox-account.sh";
+const boxUserWrapper = (user: string) => `/home/${user}/.local/bin/devbox-account`;
 const boxConfigDir = (user: string, agentProfile: string) => `/home/${user}/.agent-profiles/${agentProfile}`;
 
 /**
- * The ssh argv that runs the engine on the box, as the developer, WITHOUT sudo.
+ * The ssh argv that runs the swap on the box, as the developer, WITHOUT sudo.
  *
- * `sudo remote-devbox-account` is the OPERATOR's entry point (it switches users and
- * restarts units, so it needs root). The ssh alias here logs in as the developer, who has
- * no sudo at all — going through the wrapper would just fail. The developer owns the
- * profile's config tree and vault, so the engine needs no privilege for park/restore; only
- * the Remote Control restart does, which `useHint` below hands back to the operator.
- * `-t` because macOS/Linux both want a tty for the engine's prompts and clean output.
+ * Prefers `~/.local/bin/devbox-account` (Claude Code + omp, per-profile vault, no root).
+ * `sudo remote-devbox-account` is the OPERATOR's entry point — it switches users and
+ * restarts Remote Control units. The ssh alias here logs in as the developer, who has
+ * no sudo. `-t` because macOS/Linux both want a tty for the engine's prompts.
  */
 export function remoteArgv(
   cfg: Config,
@@ -111,11 +110,18 @@ export function remoteArgv(
   argv: string[],
   agentProfile: string = DEFAULT_AGENT_PROFILE,
 ): string[] {
+  const quoted = argv.map(shQuote).join(" ");
+  const wrap = boxUserWrapper(profile);
   const env = [
     `CLAUDE_CONFIG_DIR=${shQuote(boxConfigDir(profile, agentProfile))}`,
+    `DEVBOX_ACCOUNT_VAULT=${shQuote(`/home/${profile}/.claude-accounts/${agentProfile}`)}`,
     "DEVBOX_ACCOUNT_STORE=file",
+    "DEVBOX_ACCOUNT_OMP_PIN=1",
   ].join(" ");
-  const remote = [`env ${env}`, BOX_ENGINE, ...argv.map(shQuote)].join(" ");
+  // User wrapper first: it migrates a legacy vault and pins omp. Fall back to the
+  // shared engine with the same env so a box that has not been through the latest
+  // playbook still swaps.
+  const remote = `if [ -x ${shQuote(wrap)} ]; then DEVBOX_AGENT_PROFILE=${shQuote(agentProfile)} exec ${shQuote(wrap)} ${quoted}; fi; env ${env} ${BOX_ENGINE} ${quoted}`;
   return ["ssh", "-t", hostFor(cfg, profile), remote];
 }
 
@@ -134,11 +140,14 @@ export function useHint(cfg: Config, profile: string, agentProfile: string, labe
     ],
     { encoding: "utf8" },
   );
+  if (agentProfile !== DEFAULT_AGENT_PROFILE) return null;
   const found = (units.stdout ?? "").split("\n").filter((l) => l.includes(`-${profile}-`));
   if (units.status !== 0 || found.length === 0) return null;
   return (
-    `note: ${found.length} Remote Control unit(s) still serve the previous account.\n` +
-    `      As the operator: ssh -t <operator>@<box> "sudo remote-devbox-account ${profile} ${agentProfile} use ${label}"`
+    `note: ${found.length} Remote Control unit(s) still hold the previous session on ${agentProfile}.\n` +
+    `      Those sessions rewrite this profile's org. Keep Team RC here and put personal\n` +
+    `      on a second Claude profile. Operator login/swap for THIS profile only:\n` +
+    `        ssh -t <operator>@<box> "sudo remote-devbox-account ${profile} ${agentProfile} use ${label}"`
   );
 }
 
@@ -159,7 +168,6 @@ export function runAccount(argv: string[], opts: { profile?: string; agentProfil
     if (r.error) die(`could not run ssh: ${r.error.message}`);
     const code = r.status ?? 1;
     if (code === 0 && argv[0] === "use" && argv[1]) {
-      pinOmpAfterRemoteUse(hostFor(cfg, user), argv[1]);
       const hint = useHint(cfg, user, agentProfile, argv[1]);
       if (hint) console.log(hint);
     }
@@ -167,9 +175,10 @@ export function runAccount(argv: string[], opts: { profile?: string; agentProfil
   }
   // The engine reads CLAUDE_CONFIG_DIR / DEVBOX_ACCOUNT_* from the environment, which
   // spawnSync inherits, so an operator can point a call at another tree or vault.
-  const r = spawnSync(engineScriptPath(), argv, { stdio: "inherit" });
+  const r = spawnSync(engineScriptPath(), argv, {
+    stdio: "inherit",
+    env: { ...process.env, DEVBOX_OMP_PIN_SCRIPT: ompPinScriptPath() },
+  });
   if (r.error) die(`could not run the account engine: ${r.error.message}`);
-  const code = r.status ?? 1;
-  if (code === 0 && argv[0] === "use" && argv[1]) pinOmpAfterUse(argv[1]);
-  return code;
+  return r.status ?? 1;
 }

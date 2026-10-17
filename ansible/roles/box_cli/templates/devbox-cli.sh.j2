@@ -11,6 +11,7 @@
 #   devbox container doctor       is the rootless engine actually healthy?
 #   devbox compose up|down|...    engine-agnostic compose
 #   devbox doctor                 is this box still the box the config describes?
+#   devbox account use team       swap Claude Code + omp on this user (no sudo)
 #   devbox client-config          what your laptop needs to reach this box
 set -euo pipefail
 
@@ -130,6 +131,13 @@ cmd_compose() {
   bin="$(engine_cmd "$engine")"
   [[ "$engine" == docker-rootless ]] && export_docker_host
   exec "$bin" compose "$@"
+}
+
+# Claude Code + omp, this developer, no sudo. Same binary as ~/.local/bin/devbox-account.
+cmd_account() {
+  local wrap="$HOME/.local/bin/devbox-account"
+  [[ -x "$wrap" ]] || die "devbox-account is not installed — re-run the playbook (agent_profiles)"
+  exec "$wrap" "$@"
 }
 
 
@@ -543,9 +551,10 @@ case "${1:-}" in
   compose) shift; cmd_compose "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
   recover) shift; cmd_recover "$@" ;;
+  account) shift; cmd_account "$@" ;;
   client-config) shift; cmd_client_config "$@" ;;
   ""|-h|--help|help)
-    sed -n '5,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '5,15p' "$0" | sed 's/^# \{0,1\}//'
     ;;
-  *) die "unknown command '$1' (engine|container|compose|doctor|recover|client-config)" ;;
+  *) die "unknown command '$1' (engine|container|compose|doctor|recover|account|client-config)" ;;
 esac

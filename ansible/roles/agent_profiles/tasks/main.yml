@@ -572,6 +572,14 @@
     group: root
     mode: "0755"
 
+- name: Deploy omp pin helper (after Claude account use)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/omp-pin-after-use.py"
+    dest: /usr/local/share/remote-devbox/omp-pin-after-use.py
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Deploy the Codex account swap engine
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../scripts/devbox-codex-account.sh"
@@ -614,6 +622,46 @@
     owner: root
     group: root
     mode: "0755"
+
+# The developer runs this themselves — no sudo. Same engine as remote-devbox-account,
+# plus omp pin, against their own profile tree. One copy per developer (not per profile).
+- name: Ensure the developer-local share dir for the account engine
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.local/share/remote-devbox"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop: "{{ _devbox_agent_profiles | selectattr('provider', 'equalto', 'claude') | map(attribute='user') | unique | list }}"
+
+# Prefer this copy until the box-wide engine at /usr/local/share is new enough to
+# carry verify-org. The wrapper picks the system copy once that lands.
+- name: Install a developer-local copy of the account engine
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-account.sh"
+    dest: "/home/{{ item }}/.local/share/remote-devbox/devbox-account.sh"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop: "{{ _devbox_agent_profiles | selectattr('provider', 'equalto', 'claude') | map(attribute='user') | unique | list }}"
+
+- name: Install a developer-local copy of the omp pin helper
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/omp-pin-after-use.py"
+    dest: "/home/{{ item }}/.local/share/remote-devbox/omp-pin-after-use.py"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop: "{{ _devbox_agent_profiles | selectattr('provider', 'equalto', 'claude') | map(attribute='user') | unique | list }}"
+
+- name: Install the developer-facing account swap command
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-account-user.sh"
+    dest: "/home/{{ item }}/.local/bin/devbox-account"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ _devbox_agent_profiles | selectattr('provider', 'equalto', 'claude') | map(attribute='user') | unique | list }}"
 
 - name: Agent profiles that still need an interactive login
   ansible.builtin.debug:

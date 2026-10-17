@@ -1,19 +1,17 @@
 /**
- * After a local Claude Code `use`, pin omp to the same Anthropic *identity*.
- *
- * This never copies a Claude Code OAuth token into omp (Anthropic forbids driving a
- * subscription token from another tool). It only flips `disabled_cause` on rows omp
- * already holds from its own `/login anthropic`, so round-robin cannot pick a
- * different email than the one you just named.
- *
+ * After `devbox account use`, pin omp's Anthropic OAuth to the parked Claude label's
+ * email + orgUuid. Only flips disabled_cause; omp's rows come from `omp login anthropic`.
  * Set DEVBOX_ACCOUNT_OMP_PIN=0 to skip.
  */
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+
+import ompPinScript from "../../../scripts/omp-pin-after-use.py" with { type: "text" };
 
 export const OMP_PIN_CAUSE_PREFIX = "devbox-account: pinned away from ";
 
@@ -21,9 +19,9 @@ export type OmpPinResult =
   | { kind: "missing-db" }
   | { kind: "no-table" }
   | { kind: "no-oauth" }
-  | { kind: "no-match"; emails: string[] }
-  | { kind: "already"; email: string }
-  | { kind: "pinned"; email: string; enabled: number; disabled: number };
+  | { kind: "no-match"; emails: string[]; orgUuid?: string }
+  | { kind: "already"; email: string; orgUuid?: string }
+  | { kind: "pinned"; email: string; enabled: number; disabled: number; orgUuid?: string };
 
 type OAuthRow = { id: number; identity_key: string | null; disabled_cause: string | null; data: string };
 
@@ -34,19 +32,38 @@ export function emailFromIdentityKey(key: string | null | undefined): string | n
   return email || null;
 }
 
-export function parkedAccountEmail(label: string, vault = process.env.DEVBOX_ACCOUNT_VAULT): string | null {
+export function orgFromIdentityKey(key: string | null | undefined): string | null {
+  if (!key) return null;
+  const m = key.match(/(?:^|\|)org:([^|]+)/i);
+  const org = m?.[1]?.trim().toLowerCase();
+  return org || null;
+}
+
+type ParkedClaudeIdentity = {
+  oauthAccount?: { emailAddress?: string; organizationUuid?: string };
+};
+
+function readParkedIdentity(label: string, vault?: string): ParkedClaudeIdentity | null {
   const root = vault && vault.length > 0 ? vault : join(homedir(), ".claude-accounts");
   const path = join(root, label, "identity.json");
   if (!existsSync(path)) return null;
   try {
-    const identity = JSON.parse(readFileSync(path, "utf8")) as {
-      oauthAccount?: { emailAddress?: string };
-    };
-    const email = identity.oauthAccount?.emailAddress?.trim().toLowerCase();
-    return email || null;
+    return JSON.parse(readFileSync(path, "utf8")) as ParkedClaudeIdentity;
   } catch {
     return null;
   }
+}
+
+export function parkedAccountEmail(label: string, vault = process.env.DEVBOX_ACCOUNT_VAULT): string | null {
+  const identity = readParkedIdentity(label, vault);
+  const email = identity?.oauthAccount?.emailAddress?.trim().toLowerCase();
+  return email || null;
+}
+
+export function parkedAccountOrgUuid(label: string, vault = process.env.DEVBOX_ACCOUNT_VAULT): string | null {
+  const identity = readParkedIdentity(label, vault);
+  const org = identity?.oauthAccount?.organizationUuid?.trim().toLowerCase();
+  return org || null;
 }
 
 export function ompDbPaths(home = homedir()): string[] {
@@ -73,8 +90,9 @@ function pinCause(email: string): string {
   return `${OMP_PIN_CAUSE_PREFIX}${email}`;
 }
 
-export function pinOmpAnthropic(dbPath: string, email: string): OmpPinResult {
+export function pinOmpAnthropic(dbPath: string, email: string, orgUuid?: string | null): OmpPinResult {
   const want = email.trim().toLowerCase();
+  const wantOrg = orgUuid?.trim().toLowerCase() || null;
   if (!want) return { kind: "no-match", emails: [] };
   if (!existsSync(dbPath)) return { kind: "missing-db" };
 
@@ -99,13 +117,19 @@ export function pinOmpAnthropic(dbPath: string, email: string): OmpPinResult {
     const emails = [
       ...new Set(rows.map((r) => emailFromIdentityKey(r.identity_key)).filter((e): e is string => Boolean(e))),
     ];
-    const matches = rows.filter((r) => emailFromIdentityKey(r.identity_key) === want);
-    if (matches.length === 0) return { kind: "no-match", emails };
+    let matches = rows.filter((r) => emailFromIdentityKey(r.identity_key) === want);
+    if (matches.length === 0) return { kind: "no-match", emails, orgUuid: wantOrg ?? undefined };
+    if (wantOrg) {
+      const byOrg = matches.filter((r) => orgFromIdentityKey(r.identity_key) === wantOrg);
+      if (byOrg.length > 0) matches = byOrg;
+      else return { kind: "no-match", emails, orgUuid: wantOrg };
+    }
 
-    const others = rows.filter((r) => emailFromIdentityKey(r.identity_key) !== want);
+    const matchIds = new Set(matches.map((r) => r.id));
+    const others = rows.filter((r) => !matchIds.has(r.id));
     const matchAlreadyOn = matches.every((r) => r.disabled_cause == null);
     const othersAlreadyOff = others.every((r) => r.disabled_cause != null);
-    if (matchAlreadyOn && othersAlreadyOff) return { kind: "already", email: want };
+    if (matchAlreadyOn && othersAlreadyOff) return { kind: "already", email: want, orgUuid: wantOrg ?? undefined };
 
     const cause = pinCause(want);
     const before = new Map(rows.map((r) => [r.id, r.data]));
@@ -138,7 +162,13 @@ export function pinOmpAnthropic(dbPath: string, email: string): OmpPinResult {
       }
     }
 
-    return { kind: "pinned", email: want, enabled: matches.length, disabled: others.length };
+    return {
+      kind: "pinned",
+      email: want,
+      enabled: matches.length,
+      disabled: others.length,
+      orgUuid: wantOrg ?? undefined,
+    };
   } finally {
     db.close();
   }
@@ -154,6 +184,7 @@ export function describeOmpPin(result: OmpPinResult): string | null {
     case "no-match":
       return (
         `omp: no Anthropic OAuth for that email` +
+        (result.orgUuid ? ` (org ${result.orgUuid})` : "") +
         (result.emails.length ? ` (have ${result.emails.join(", ")})` : "") +
         " — /login anthropic inside omp, then use again"
       );
@@ -164,116 +195,34 @@ export function describeOmpPin(result: OmpPinResult): string | null {
   }
 }
 
-/** Local `use` only. Never copies tokens. Failures print; they do not fail the swap. */
-export function pinOmpAfterUse(label: string): void {
-  if (process.env.DEVBOX_ACCOUNT_OMP_PIN === "0") return;
-  const email = parkedAccountEmail(label);
-  if (!email) {
-    console.error("omp: parked identity has no email — skip pin");
-    return;
+const OMP_PIN_DIGEST = createHash("sha256").update(ompPinScript).digest("hex").slice(0, 16);
+const BOX_OMP_PIN = "/usr/local/share/remote-devbox/omp-pin-after-use.py";
+
+export function ompPinScriptPath(): string {
+  const path = join(tmpdir(), `omp-pin-after-use-${OMP_PIN_DIGEST}.py`);
+  try {
+    const st = lstatSync(path);
+    if (st.isFile() && st.size === Buffer.byteLength(ompPinScript)) return path;
+  } catch {
+    // not materialised yet
   }
-  const dbs = ompDbPaths();
-  if (dbs.length === 0) return;
-  for (const db of dbs) {
-    try {
-      const line = describeOmpPin(pinOmpAnthropic(db, email));
-      if (line) console.error(line);
-    } catch (err) {
-      console.error(`omp: could not pin ${db}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, ompPinScript, { mode: 0o700 });
+  renameSync(tmp, path);
+  return path;
 }
 
-/**
- * Same pin, on the box, after `devbox account use -p`. Reads the parked identity
- * from the developer's vault there and only flips `disabled_cause` in omp-* agent.db.
- * stdin is the python below so we never interpolate the label into a remote shell.
- */
-const REMOTE_PIN_PY = String.raw`
-import glob, json, os, sqlite3, sys
+/** Local `use`: pin omp-* to the label's org. Failures print; they do not fail the swap. */
+export function pinOmpAfterUse(label: string): void {
+  if (process.env.DEVBOX_ACCOUNT_OMP_PIN === "0") return;
+  const r = spawnSync("python3", [ompPinScriptPath(), label], { stdio: "inherit", env: process.env });
+  if (r.error) console.error(`omp: could not pin: ${r.error.message}`);
+}
 
-label = sys.argv[1]
-vault = os.environ.get("DEVBOX_ACCOUNT_VAULT") or os.path.expanduser("~/.claude-accounts")
-ident_path = os.path.join(vault, label, "identity.json")
-try:
-    ident = json.load(open(ident_path))
-except Exception:
-    print("omp: parked identity has no email — skip pin", file=sys.stderr)
-    sys.exit(0)
-email = ((ident.get("oauthAccount") or {}).get("emailAddress") or "").strip().lower()
-if not email:
-    print("omp: parked identity has no email — skip pin", file=sys.stderr)
-    sys.exit(0)
-
-def email_of(key):
-    if not key:
-        return None
-    key = key.lower()
-    for part in key.split("|"):
-        if part.startswith("email:"):
-            return part[6:]
-    return None
-
-cause = "devbox-account: pinned away from " + email
-paths = sorted(glob.glob(os.path.expanduser("~/.agent-profiles/omp-*/agent.db")))
-if not paths:
-    sys.exit(0)
-
-for path in paths:
-    con = sqlite3.connect(path)
-    try:
-        con.execute("PRAGMA busy_timeout = 3000")
-        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='auth_credentials'").fetchone():
-            continue
-        rows = list(con.execute(
-            "SELECT id, identity_key, disabled_cause, data FROM auth_credentials "
-            "WHERE provider='anthropic' AND credential_type='oauth' ORDER BY id"
-        ))
-        if not rows:
-            print("omp: no Anthropic OAuth in this profile — /login anthropic inside omp, then use again", file=sys.stderr)
-            continue
-        emails = []
-        seen = set()
-        for _id, key, _d, _data in rows:
-            e = email_of(key)
-            if e and e not in seen:
-                seen.add(e)
-                emails.append(e)
-        matches = [r for r in rows if email_of(r[1]) == email]
-        others = [r for r in rows if email_of(r[1]) != email]
-        if not matches:
-            have = ", ".join(emails)
-            extra = (" (have %s)" % have) if have else ""
-            print("omp: no Anthropic OAuth for that email%s — /login anthropic inside omp, then use again" % extra, file=sys.stderr)
-            continue
-        already = all(r[2] is None for r in matches) and all(r[2] is not None for r in others)
-        if already:
-            print("omp: anthropic already pinned to %s" % email, file=sys.stderr)
-            continue
-        before = {r[0]: r[3] for r in rows}
-        con.execute("BEGIN")
-        for r in matches:
-            con.execute("UPDATE auth_credentials SET disabled_cause = NULL, updated_at = CAST(strftime('%s','now') AS INTEGER) WHERE id = ?", (r[0],))
-        for r in others:
-            con.execute("UPDATE auth_credentials SET disabled_cause = ?, updated_at = CAST(strftime('%s','now') AS INTEGER) WHERE id = ?", (cause, r[0]))
-        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='auth_change_revision'").fetchone():
-            con.execute("UPDATE auth_change_revision SET revision = revision + 1 WHERE id = 1")
-        con.execute("COMMIT")
-        after = list(con.execute("SELECT id, data FROM auth_credentials WHERE provider='anthropic' AND credential_type='oauth'"))
-        for _id, data in after:
-            if before.get(_id) != data:
-                raise SystemExit("omp-pin mutated credential data — aborting")
-        parked = len(others)
-        extra = " (parked %d)" % parked if parked else ""
-        print("omp: pinned anthropic to %s%s" % (email, extra), file=sys.stderr)
-    finally:
-        con.close()
-`
-
+/** Box `use -p`: same pin script installed under /usr/local/share/remote-devbox. */
 export function pinOmpAfterRemoteUse(host: string, label: string): void {
   if (process.env.DEVBOX_ACCOUNT_OMP_PIN === "0") return;
-  const r = spawnSync("ssh", ["-o", "BatchMode=yes", host, "python3", "-", label], {
-    input: REMOTE_PIN_PY,
+  const r = spawnSync("ssh", ["-o", "BatchMode=yes", host, "python3", BOX_OMP_PIN, label], {
     encoding: "utf8",
   });
   if (r.error) {

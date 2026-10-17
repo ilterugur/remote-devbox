@@ -78,16 +78,29 @@ fi
 # point the engine at, and it would then park and restore the developer's DEFAULT tree —
 # the exact confusion the per-profile split exists to prevent.
 set +e
+# Isolated vault so Team RC on claude-main and personal on a second profile cannot
+# clobber each other's `active` row. omp follows the parked org (same as the
+# developer-facing `devbox-account`). Set DEVBOX_ACCOUNT_OMP_PIN=0 to leave omp alone.
 sudo -u "$dev" env \
   "HOME=/home/$dev" \
   "CLAUDE_CONFIG_DIR=/home/$dev/.agent-profiles/$profile" \
+  "DEVBOX_ACCOUNT_VAULT=/home/$dev/.claude-accounts/$profile" \
   DEVBOX_ACCOUNT_STORE=file \
+  "DEVBOX_ACCOUNT_OMP_PIN=${DEVBOX_ACCOUNT_OMP_PIN:-1}" \
   "$ENGINE" "$verb" "$@"
 rc=$?
 set -e
 
 if [[ $rc -ne 0 || "$verb" != "use" ]]; then
   exit "$rc"
+fi
+
+use_label="${1:-}"
+if [[ -n "$use_label" && "${DEVBOX_ACCOUNT_OMP_PIN:-1}" != "0" ]]; then
+  sudo -u "$dev" env "HOME=/home/$dev" \
+    "DEVBOX_ACCOUNT_VAULT=/home/$dev/.claude-accounts/$profile" \
+    python3 /usr/local/share/remote-devbox/omp-pin-after-use.py "$use_label" >&2 \
+    || true
 fi
 
 # The always-on Remote Control servers read the credential once, at session start, so

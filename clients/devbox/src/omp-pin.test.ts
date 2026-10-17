@@ -7,7 +7,9 @@ import { join } from "node:path";
 import {
   emailFromIdentityKey,
   ompDbPaths,
+  orgFromIdentityKey,
   parkedAccountEmail,
+  parkedAccountOrgUuid,
   pinOmpAnthropic,
 } from "./omp-pin";
 
@@ -21,7 +23,10 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function makeDb(path: string, rows: Array<{ id: number; email: string; disabled?: string | null; data?: string }>) {
+function makeDb(
+  path: string,
+  rows: Array<{ id: number; email: string; disabled?: string | null; data?: string; identityKey?: string }>,
+) {
   const db = new Database(path);
   db.exec(`
     CREATE TABLE auth_credentials (
@@ -42,7 +47,12 @@ function makeDb(path: string, rows: Array<{ id: number; email: string; disabled?
      VALUES (?, 'anthropic', 'oauth', ?, ?, ?)`,
   );
   for (const row of rows) {
-    ins.run(row.id, row.data ?? `token-${row.id}`, row.disabled ?? null, `email:${row.email}|org:org-${row.id}`);
+    ins.run(
+      row.id,
+      row.data ?? `token-${row.id}`,
+      row.disabled ?? null,
+      row.identityKey ?? `email:${row.email}|org:org-${row.id}`,
+    );
   }
   db.run(
     `INSERT INTO auth_credentials (id, provider, credential_type, data, identity_key)
@@ -79,15 +89,28 @@ describe("emailFromIdentityKey", () => {
   });
 });
 
+describe("orgFromIdentityKey", () => {
+  test("reads the org= segment", () => {
+    expect(orgFromIdentityKey("email:a@x.com|org:team-uuid")).toBe("team-uuid");
+    expect(orgFromIdentityKey(null)).toBe(null);
+  });
+});
+
 describe("parkedAccountEmail", () => {
   test("reads oauthAccount.emailAddress from the vault identity", () => {
     const vault = join(scratch(), "vault");
     mkdirSync(join(vault, "sipahi"), { recursive: true });
     writeFileSync(
       join(vault, "sipahi", "identity.json"),
-      JSON.stringify({ oauthAccount: { emailAddress: "sipahi@vertiplatform.com" } }),
+      JSON.stringify({
+        oauthAccount: {
+          emailAddress: "sipahi@vertiplatform.com",
+          organizationUuid: "org-team",
+        },
+      }),
     );
     expect(parkedAccountEmail("sipahi", vault)).toBe("sipahi@vertiplatform.com");
+    expect(parkedAccountOrgUuid("sipahi", vault)).toBe("org-team");
     expect(parkedAccountEmail("missing", vault)).toBe(null);
   });
 });
@@ -143,6 +166,37 @@ describe("pinOmpAnthropic", () => {
     ]);
     expect(pinOmpAnthropic(path, "sipahi@x.com")).toEqual({ kind: "already", email: "sipahi@x.com" });
     expect(snapshot(path).rev).toBe(10);
+  });
+
+  test("pins only the Team org row when the same email has personal and Team OAuth", () => {
+    const path = join(scratch(), "agent.db");
+    makeDb(path, [
+      {
+        id: 1,
+        email: "me@example.com",
+        identityKey: "email:me@example.com|org:org-personal",
+        data: "personal-token",
+      },
+      {
+        id: 2,
+        email: "me@example.com",
+        identityKey: "email:me@example.com|org:org-team",
+        data: "team-token",
+      },
+      { id: 3, email: "other@example.com", data: "other-token" },
+    ]);
+    const result = pinOmpAnthropic(path, "me@example.com", "org-team");
+    expect(result).toEqual({
+      kind: "pinned",
+      email: "me@example.com",
+      enabled: 1,
+      disabled: 2,
+      orgUuid: "org-team",
+    });
+    const snap = snapshot(path);
+    expect(snap.creds.find((r) => r.id === 2)!.disabled_cause).toBe(null);
+    expect(snap.creds.find((r) => r.id === 1)!.disabled_cause).toContain("me@example.com");
+    expect(snap.creds.find((r) => r.id === 3)!.disabled_cause).toContain("me@example.com");
   });
 
   test("does not mutate when the email is not in omp", () => {

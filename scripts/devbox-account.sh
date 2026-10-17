@@ -17,10 +17,16 @@
 #
 # Env:
 #   CLAUDE_CONFIG_DIR            config tree (default ~/.claude, with state at ~/.claude.json)
-#   DEVBOX_ACCOUNT_VAULT         vault dir (default ~/.claude-accounts)
+#   DEVBOX_ACCOUNT_VAULT         vault dir (default ~/.claude-accounts, or
+#                                ~/.claude-accounts/<profile> when CLAUDE_CONFIG_DIR is set)
 #   DEVBOX_ACCOUNT_BACKUP_KEEP   swap backups to retain (default 3)
-#   DEVBOX_ACCOUNT_STORE         file | keychain | auto (default auto: keychain on macOS)
+#   DEVBOX_ACCOUNT_STORE         file | keychain | auto (default auto: keychain on macOS
+#                                for the default tree; file when CLAUDE_CONFIG_DIR is set)
 #   DEVBOX_ACCOUNT_PGREP         override the "is claude running" probe (testing seam)
+#   DEVBOX_ACCOUNT_PROFILE_URL   where to ask which org a token bills (default Anthropic's
+#                                /api/oauth/profile; testing seam)
+#   DEVBOX_ACCOUNT_OMP_PIN       1 (default) pin omp to this label's email+org after use;
+#                                0 leave omp alone
 set -euo pipefail
 
 ME="devbox-account"
@@ -38,14 +44,31 @@ else
   CFG="$HOME/.claude"
   STATE="$HOME/.claude.json"
 fi
-VAULT="${DEVBOX_ACCOUNT_VAULT:-$HOME/.claude-accounts}"
+# One vault per config tree. Two Claude profiles sharing ~/.claude-accounts fight over
+# `active` and rewrite each other's parked rows. The default tree (no CLAUDE_CONFIG_DIR)
+# keeps the historical ~/.claude-accounts path.
+if [ -n "${DEVBOX_ACCOUNT_VAULT:-}" ]; then
+  VAULT="$DEVBOX_ACCOUNT_VAULT"
+elif [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  VAULT="$HOME/.claude-accounts/$(basename "$CFG")"
+else
+  VAULT="$HOME/.claude-accounts"
+fi
 REG="$VAULT/accounts.json"
 KEEP="${DEVBOX_ACCOUNT_BACKUP_KEEP:-3}"
 KC_SERVICE="Claude Code-credentials"
 
 STORE="${DEVBOX_ACCOUNT_STORE:-auto}"
 if [ "$STORE" = auto ]; then
-  [ "$(uname -s)" = Darwin ] && STORE=keychain || STORE=file
+  # macOS keychain is one item named Claude Code-credentials. A second CLAUDE_CONFIG_DIR
+  # would clobber the first profile's token, so a relocated tree always uses the file store.
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    STORE=file
+  elif [ "$(uname -s)" = Darwin ]; then
+    STORE=keychain
+  else
+    STORE=file
+  fi
 fi
 case "$STORE" in file | keychain) ;; *) die "DEVBOX_ACCOUNT_STORE must be file, keychain or auto (got '$STORE')" ;; esac
 
@@ -86,9 +109,69 @@ def info(identity):
     return {
         "email": acct.get("emailAddress", ""),
         "org": acct.get("organizationName", ""),
+        "orgUuid": acct.get("organizationUuid", ""),
+        "orgType": acct.get("organizationType", ""),
         "accountUuid": acct.get("accountUuid", ""),
         "userID": identity.get("userID", ""),
     }
+
+
+def org_badge(org_type):
+    if not org_type:
+        return ""
+    if org_type in ("claude_team", "claude_enterprise"):
+        return "team"
+    if org_type == "claude_max":
+        return "max"
+    if org_type == "claude_pro":
+        return "pro"
+    return org_type.replace("claude_", "", 1) if org_type.startswith("claude_") else org_type
+
+
+# OAuth credential files often keep subscriptionType/rateLimitTier from whichever
+# workspace was picked at /login time, even after identity-apply restores personal
+# org keys. Paseo and `claude auth status` read those fields — align them to the
+# parked identity whenever they disagree with organizationType / rate-limit tier.
+SUBSCRIPTION_FROM_ORG_TYPE = {
+    "claude_max": "max",
+    "claude_pro": "pro",
+    "claude_team": "team",
+    "claude_enterprise": "enterprise",
+}
+
+
+def heal_credential_metadata(identity_path, cred_path):
+    identity = load(identity_path)
+    acct = identity.get("oauthAccount") or {}
+    want_sub = SUBSCRIPTION_FROM_ORG_TYPE.get(acct.get("organizationType") or "")
+    want_tier = acct.get("organizationRateLimitTier") or acct.get("userRateLimitTier")
+    if not want_sub and not want_tier:
+        return False
+    cred = load(cred_path, {})
+    oauth = cred.setdefault("claudeAiOauth", {})
+    changed = False
+    if want_sub and oauth.get("subscriptionType") != want_sub:
+        oauth["subscriptionType"] = want_sub
+        changed = True
+    if want_tier and oauth.get("rateLimitTier") != want_tier:
+        oauth["rateLimitTier"] = want_tier
+        changed = True
+    if changed:
+        save(cred_path, cred)
+    return changed
+
+
+def tree_matches_registry(tree_info, row):
+    if not tree_info or not row:
+        return True
+    if row.get("accountUuid") and tree_info.get("accountUuid"):
+        if row["accountUuid"] != tree_info["accountUuid"]:
+            return False
+    row_org = row.get("orgUuid") or ""
+    tree_org = tree_info.get("orgUuid") or ""
+    if row_org and tree_org and row_org != tree_org:
+        return False
+    return True
 
 
 def registry(path):
@@ -127,6 +210,63 @@ elif op == "identity-apply":
 
 elif op == "identity-info":
     print(json.dumps(info(load(sys.argv[2]))))
+
+elif op == "tree-matches-vault":
+    state, vault_path = sys.argv[2], sys.argv[3]
+    tree_info = info(load(state))
+    vault_info = info(load(vault_path))
+    row = {
+        "accountUuid": vault_info.get("accountUuid"),
+        "orgUuid": vault_info.get("orgUuid"),
+    }
+    sys.exit(0 if tree_matches_registry(tree_info, row) else 1)
+
+elif op == "credential-heal":
+    identity_path, cred_path = sys.argv[2], sys.argv[3]
+    sys.exit(0 if heal_credential_metadata(identity_path, cred_path) else 1)
+
+elif op == "verify-org":
+    # The identity comes from .claude.json and the credential from the store, read
+    # separately. With one email on personal Max and a Team seat, a live session or a
+    # half-finished /login can leave them naming different orgs; parked like that, the
+    # label says personal while every request bills Team. Ask the token itself.
+    # Exit 0: same org (or nothing to compare). 3: different org. 2: could not ask.
+    import urllib.request
+    identity_path, cred_path = sys.argv[2], sys.argv[3]
+    want = info(load(identity_path))
+    want_org = want["orgUuid"].strip().lower()
+    if not want_org:
+        sys.exit(0)
+    raw = open(cred_path).read().strip()
+    try:
+        cred = json.loads(raw)
+    except ValueError:
+        try:
+            cred = json.loads(bytes.fromhex(raw).decode())  # macOS keychain stores hex
+        except ValueError:
+            cred = None
+    oauth = (cred.get("claudeAiOauth") or {}) if isinstance(cred, dict) else {}
+    token = oauth.get("accessToken")
+    if not token:
+        print("the credential holds no access token, so its org cannot be checked")
+        sys.exit(2)
+    url = os.environ.get("DEVBOX_ACCOUNT_PROFILE_URL") or "https://api.anthropic.com/api/oauth/profile"
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as res:
+            org = json.load(res).get("organization") or {}
+    except Exception as exc:
+        print("could not ask Anthropic which org this token bills (%s)" % exc)
+        sys.exit(2)
+    got_org = (org.get("uuid") or "").strip().lower()
+    if not got_org:
+        print("Anthropic did not say which org this token bills")
+        sys.exit(2)
+    if got_org != want_org:
+        print("the token bills %s (%s) but .claude.json names %s (%s) — run /login, pick %s, then try again"
+              % (org.get("name") or "?", got_org, want["org"] or "?", want_org, want["org"] or want_org))
+        sys.exit(3)
 
 elif op == "reg-upsert":
     path, label, meta, kc = sys.argv[2], sys.argv[3], json.loads(sys.argv[4]), sys.argv[5]
@@ -196,15 +336,23 @@ elif op == "render":
             print("no accounts parked yet — log in, then `add <label>`")
         for row in doc["accounts"]:
             mark = "*" if row["label"] == doc["active"] else " "
-            print("%s %-14s %-32s %-24s %s" % (
-                mark, row["label"], row.get("email", ""), row.get("org", ""),
+            org = row.get("org", "")
+            badge = org_badge(row.get("orgType", ""))
+            if badge:
+                org = ("%s [%s]" % (org, badge)) if org else "[%s]" % badge
+            print("%s %-14s %-32s %-32s %s" % (
+                mark, row["label"], row.get("email", ""), org,
                 row.get("lastUsedAt", "")))
     else:
         print("active      : %s" % (doc["active"] or "(none tracked)"))
         if tree_info:
+            badge = org_badge(tree_info.get("orgType", ""))
+            org = tree_info.get("org", "")
+            if badge:
+                org = ("%s [%s]" % (org, badge)) if org else "[%s]" % badge
             print("tree        : %s%s" % (
                 tree_info["email"] or "(no oauthAccount)",
-                "  [%s]" % tree_info["org"] if tree_info["org"] else ""))
+                "  (%s)" % org if org else ""))
         else:
             print("tree        : nothing logged in")
         print("credential  : %s (%s store)" % (doc["credential"], doc["store"]))
@@ -214,9 +362,12 @@ elif op == "render":
     # swap would silently overwrite an untracked login, so say so loudly.
     if tree_info and doc["active"]:
         row = reg["accounts"].get(doc["active"], {})
-        if row.get("accountUuid") and tree_info["accountUuid"] and row["accountUuid"] != tree_info["accountUuid"]:
+        if not tree_matches_registry(tree_info, row):
+            held = tree_info["email"] or "(unknown)"
+            if tree_info.get("org"):
+                held += " / " + tree_info["org"]
             print("warning: the tree holds %s but the registry says %s — run `add <label>` to adopt it"
-                  % (tree_info["email"], doc["active"]), file=sys.stderr)
+                  % (held, doc["active"]), file=sys.stderr)
 
 elif op == "cred-expiry":
     data = load(sys.argv[2])
@@ -278,6 +429,12 @@ store_load() {
     # alternative (a temp file) is worse: it survives a crash. Same-user exposure only.
     security add-generic-password -U -s "$KC_SERVICE" -a "$acct" -w "$(cat "$src")" \
       || die "could not write the '$KC_SERVICE' keychain item"
+    # Paseo and some CLIs read ~/.claude/.credentials.json even when the live store is
+    # keychain; keep the file in sync so plan badges match the parked identity.
+    cp "$src" "$CFG/.credentials.json.tmp"
+    chmod 600 "$CFG/.credentials.json.tmp"
+    mv "$CFG/.credentials.json.tmp" "$CFG/.credentials.json"
+    rm -f "$CFG/credentials.json"
   else
     cp "$src" "$CFG/.credentials.json.tmp"
     chmod 600 "$CFG/.credentials.json.tmp"
@@ -296,13 +453,46 @@ store_acct() {
 }
 
 # ── guards ─────────────────────────────────────────────────────────────────────────
+# Pids of `claude` that rewrite THIS tree. A leftover session on ~/.claude must not
+# block swapping claude-main, and a live claude-main session must not be ignored just
+# because another tree is quiet. Linux reads CLAUDE_CONFIG_DIR from /proc; elsewhere
+# any `claude` counts (macOS has no cheap per-pid environ).
+tree_claude_pids() {
+  local pid envdir
+  if [ "$(uname -s)" != Linux ]; then
+    pgrep -u "$(id -u)" -x claude 2>/dev/null || true
+    return 0
+  fi
+  for pid in $(pgrep -u "$(id -u)" -x claude 2>/dev/null); do
+    envdir="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | sed -n 's/^CLAUDE_CONFIG_DIR=//p' | head -1)"
+    envdir="${envdir%/}"
+    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+      [ "$envdir" = "$CFG" ] && printf '%s\n' "$pid"
+    else
+      if [ -z "$envdir" ] || [ "$envdir" = "$HOME/.claude" ]; then
+        printf '%s\n' "$pid"
+      fi
+    fi
+  done
+}
+
 claude_running() {
   if [ -n "${DEVBOX_ACCOUNT_PGREP:-}" ]; then
     # shellcheck disable=SC2086
     $DEVBOX_ACCOUNT_PGREP >/dev/null 2>&1
   else
-    pgrep -x claude >/dev/null 2>&1
+    [ -n "$(tree_claude_pids)" ]
   fi
+}
+
+# --force lets the swap proceed while Claude is live. That is enough to land the vault
+# row on disk, but not enough to keep it: interactive Claude and `claude remote-control`
+# rewrite oauthAccount from the cloud session's current org (personal vs Team) within
+# seconds. Tell the operator so "now using <label>" is not read as a sticky /status.
+warn_live_writers() {
+  claude_running || return 0
+  say "warning: a live Claude process is still running. It rewrites oauthAccount from the cloud session, so this tree can snap back to that session's org (Team vs personal) within seconds."
+  say "         Quit Claude, or have the operator restart agent-rc after /login on the org you want. Team Remote Control on this same profile will keep pulling Team back."
 }
 
 lock() {
@@ -345,6 +535,26 @@ tree_identity() {
   if py identity-extract "$STATE" "$tmp" 2>/dev/null; then rm -f "$tmp"; else rm -f "$tmp"; say "-"; fi
 }
 
+# Capture the tree's identity + credential into vault dir $1, committing them only when
+# the token bills the org the identity names. 0: committed (a check that could not run
+# only warns). 1: mismatch — the pair is left as *.new and CAPTURE_WHY says why.
+# Called from `if`, where set -e is off, so every step checks itself.
+capture() {
+  local dir="$1" rc=0
+  mkdir -p "$dir" && chmod 700 "$dir" || die "could not create $dir"
+  py identity-extract "$STATE" "$dir/identity.json.new" >/dev/null || exit 1
+  store_save "$dir/credentials.json.new" || die "could not copy the credential into $dir"
+  CAPTURE_WHY="$(py verify-org "$dir/identity.json.new" "$dir/credentials.json.new")" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) return 1 ;;
+    *) printf '%s: warning: %s; parked as .claude.json describes it\n' "$ME" "${CAPTURE_WHY:-org check failed}" >&2 ;;
+  esac
+  mv -f "$dir/identity.json.new" "$dir/identity.json" \
+    && mv -f "$dir/credentials.json.new" "$dir/credentials.json" \
+    || die "could not commit the parked pair in $dir"
+}
+
 cmd_add() {
   local label="$1" dir meta acct
   [ -n "$label" ] || die "usage: $ME add <label>"
@@ -352,10 +562,13 @@ cmd_add() {
   store_has || die "nothing is logged in under $CFG — log in first (\`claude\` then /login), then adopt it"
   lock
   dir="$VAULT/$label"
-  mkdir -p "$dir"
-  chmod 700 "$dir"
-  meta="$(py identity-extract "$STATE" "$dir/identity.json")"
-  store_save "$dir/credentials.json"
+  if ! capture "$dir"; then
+    rm -f "$dir/identity.json.new" "$dir/credentials.json.new"
+    rmdir "$dir" 2>/dev/null || true
+    die "refusing to park '$label': $CAPTURE_WHY"
+  fi
+  meta="$(py identity-info "$dir/identity.json")"
+  py credential-heal "$dir/identity.json" "$dir/credentials.json" >/dev/null 2>&1 || true
   acct="$(store_acct)"
   py reg-upsert "$REG" "$label" "$meta" "$acct"
   chmod 600 "$REG"
@@ -364,7 +577,7 @@ cmd_add() {
 }
 
 cmd_use() {
-  local label="$1" force="$2" active dir
+  local label="$1" force="$2" active dir heal_only=0 stash pids
   [ -n "$label" ] || die "usage: $ME use <label>"
   dir="$VAULT/$label"
   [ -d "$dir" ] || die "no parked account named '$label' — \`$ME ls\` shows what there is"
@@ -372,35 +585,66 @@ cmd_use() {
   [ -f "$dir/credentials.json" ] || die "'$label' has no parked credential — re-adopt it with \`$ME add $label\`"
   active="$(py reg-field "$REG" active)"
   if [ "$active" = "$label" ] && store_has; then
-    say "'$label' is already active."
-    return 0
+    if py tree-matches-vault "$STATE" "$dir/identity.json" >/dev/null 2>&1; then
+      if [ "$force" != 1 ]; then
+        py credential-heal "$dir/identity.json" "$dir/credentials.json" >/dev/null 2>&1 || true
+        store_load "$dir/credentials.json" "$(py reg-keychain-acct "$REG" "$label")"
+        say "'$label' is already active."
+        omp_pin_after_use "$label"
+        return 0
+      fi
+      heal_only=1
+    else
+      say "'$label' is active in the registry but the tree differs — restoring from vault."
+      heal_only=1
+    fi
   fi
 
   if [ "$force" != 1 ] && claude_running; then
+    if [ -z "${DEVBOX_ACCOUNT_PGREP:-}" ]; then
+      pids="$(tree_claude_pids | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    fi
+    if [ -n "$pids" ]; then
+      die "claude is running on this tree (pid $pids) — it rewrites .claude.json under us and concurrent writes corrupt it (claude-code#28992). Quit that session, then retry, or pass --force."
+    fi
     die "claude is running — it rewrites .claude.json under us and concurrent writes corrupt it (claude-code#28992). Quit it, or pass --force."
   fi
 
   lock
-  if [ "$active" = "$label" ]; then
+  if [ "$active" = "$label" ] && [ "$heal_only" != 1 ]; then
     say "'$label' is already active but the tree has no credential — restoring it."
   fi
 
   # Park what is there BEFORE touching anything, and refuse rather than destroy a login
-  # the registry does not know about.
-  if store_has; then
+  # the registry does not know about. When healing registry/tree drift for the active label,
+  # the vault row is the source of truth — never overwrite it with the stale tree.
+  if store_has && [ "$heal_only" != 1 ]; then
     [ -n "$active" ] || die "the current login is not tracked — \`$ME add <label>\` it first so this swap cannot lose it"
-    mkdir -p "$VAULT/$active"
-    chmod 700 "$VAULT/$active"
-    py identity-extract "$STATE" "$VAULT/$active/identity.json" >/dev/null
-    store_save "$VAULT/$active/credentials.json"
-    snapshot "$active"
+    if capture "$VAULT/$active"; then
+      snapshot "$active"
+    else
+      # The vault row stays as last parked; the mismatched pair is kept, not lost.
+      stash="$VAULT/.backups/$(date +%s)-$active-mismatch"
+      mkdir -p "$stash" && chmod 700 "$VAULT/.backups" "$stash"
+      mv -f "$VAULT/$active/identity.json.new" "$stash/identity.json"
+      mv -f "$VAULT/$active/credentials.json.new" "$stash/credentials.json"
+      printf '%s: warning: not re-parking %s: %s. That pair is kept in %s\n' \
+        "$ME" "$active" "$CAPTURE_WHY" "$stash" >&2
+      prune
+    fi
   fi
 
   py identity-apply "$STATE" "$dir/identity.json"
+  py credential-heal "$dir/identity.json" "$dir/credentials.json" >/dev/null 2>&1 || true
   store_load "$dir/credentials.json" "$(py reg-keychain-acct "$REG" "$label")"
+  if [ "$STORE" = file ]; then
+    py credential-heal "$dir/identity.json" "$CFG/.credentials.json" >/dev/null 2>&1 || true
+  fi
   py reg-activate "$REG" "$label"
   say "now using '$label'."
   cmd_status
+  warn_live_writers
+  omp_pin_after_use "$label"
 }
 
 cmd_rm() {
@@ -413,6 +657,27 @@ cmd_rm() {
   rm -rf "$VAULT/$label"
   py reg-forget "$REG" "$label"
   say "forgot '$label' (its credential is gone from the vault; the account itself is untouched)."
+}
+
+omp_pin_after_use() {
+  local label="$1"
+  [ "${DEVBOX_ACCOUNT_OMP_PIN:-1}" = "0" ] && return 0
+  local script="${DEVBOX_OMP_PIN_SCRIPT:-}"
+  if [ -z "$script" ]; then
+    local engine_dir
+    engine_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+    for candidate in \
+      "/usr/local/share/remote-devbox/omp-pin-after-use.py" \
+      "${HOME:-}/.local/share/remote-devbox/omp-pin-after-use.py" \
+      "$engine_dir/omp-pin-after-use.py"; do
+      if [ -f "$candidate" ]; then
+        script="$candidate"
+        break
+      fi
+    done
+  fi
+  [ -n "$script" ] || return 0
+  python3 "$script" "$label" >&2 || true
 }
 
 cmd_ls() { py render "$REG" "$(tree_identity)" "$(cred_state)" "$STORE" ls "$JSON"; }

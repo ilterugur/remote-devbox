@@ -79,15 +79,14 @@ describe("remoteArgv", () => {
   const ENGINE = "/usr/local/share/remote-devbox/devbox-account.sh";
 
   // No sudo, and not the operator wrapper: the ssh alias logs in as the DEVELOPER, who has
-  // no sudo on the box. The developer owns the profile tree and vault, so park/restore
-  // needs no privilege; only the Remote Control restart does, and that stays an operator
-  // action (`sudo remote-devbox-account`).
-  test("runs the engine as the developer with that profile's config dir", () => {
+  // no sudo on the box. Park/restore + omp pin need no privilege; Remote Control restart
+  // stays an operator action (`sudo remote-devbox-account`).
+  test("runs the user wrapper when present, else the engine, pinning omp", () => {
     expect(remoteArgv(cfg, "alice", ["use", "work"])).toEqual([
       "ssh",
       "-t",
       "devbox-alice",
-      `env CLAUDE_CONFIG_DIR='/home/alice/.agent-profiles/claude-main' DEVBOX_ACCOUNT_STORE=file ${ENGINE} 'use' 'work'`,
+      `if [ -x '/home/alice/.local/bin/devbox-account' ]; then DEVBOX_AGENT_PROFILE='claude-main' exec '/home/alice/.local/bin/devbox-account' 'use' 'work'; fi; env CLAUDE_CONFIG_DIR='/home/alice/.agent-profiles/claude-main' DEVBOX_ACCOUNT_VAULT='/home/alice/.claude-accounts/claude-main' DEVBOX_ACCOUNT_STORE=file DEVBOX_ACCOUNT_OMP_PIN=1 ${ENGINE} 'use' 'work'`,
     ]);
   });
 
@@ -96,7 +95,7 @@ describe("remoteArgv", () => {
       "ssh",
       "-t",
       "devbox-bob",
-      `env CLAUDE_CONFIG_DIR='/home/bob/.agent-profiles/claude-work' DEVBOX_ACCOUNT_STORE=file ${ENGINE} 'gc' '--keep' '3'`,
+      `if [ -x '/home/bob/.local/bin/devbox-account' ]; then DEVBOX_AGENT_PROFILE='claude-work' exec '/home/bob/.local/bin/devbox-account' 'gc' '--keep' '3'; fi; env CLAUDE_CONFIG_DIR='/home/bob/.agent-profiles/claude-work' DEVBOX_ACCOUNT_VAULT='/home/bob/.claude-accounts/claude-work' DEVBOX_ACCOUNT_STORE=file DEVBOX_ACCOUNT_OMP_PIN=1 ${ENGINE} 'gc' '--keep' '3'`,
     ]);
   });
 
