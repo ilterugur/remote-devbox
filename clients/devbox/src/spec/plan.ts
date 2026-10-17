@@ -118,7 +118,24 @@ function developerLines(
     );
     const wait = dev.heavy_job_gate?.wait_timeout_sec ?? hostHeavyJobGate?.wait_timeout_sec ?? 1800;
     const warn = dev.heavy_job_gate?.warn_after_sec ?? hostHeavyJobGate?.warn_after_sec ?? 5;
-    lines.push(row("heavy jobs", `on · ${categories.join(",")} · timeout ${wait}s · warn ${warn}s`, indent));
+    const defaultMemory = dev.heavy_job_gate?.memory_max ?? hostHeavyJobGate?.memory_max;
+    const categoryMemory = {
+      ...(hostHeavyJobGate?.memory_max_by_category ?? {}),
+      ...(dev.heavy_job_gate?.memory_max_by_category ?? {}),
+    };
+    const memory = defaultMemory
+      ? ` · memory ${defaultMemory}${Object.entries(categoryMemory)
+          .map(([category, value]) => `/${category} ${value}`)
+          .join("")}`
+      : "";
+    const slots = dev.heavy_job_gate?.slots ?? hostHeavyJobGate?.slots ?? 1;
+    const totalMemory = dev.heavy_job_gate?.total_memory_max ?? hostHeavyJobGate?.total_memory_max;
+    const capacity = ` · slots ${slots}${totalMemory ? ` · total ${totalMemory}` : ""}`;
+    lines.push(row(
+      "heavy jobs",
+      `on · ${categories.join(",")} · timeout ${wait}s · warn ${warn}s${memory}${capacity}`,
+      indent,
+    ));
   } else {
     lines.push(row("heavy jobs", "off", indent));
   }

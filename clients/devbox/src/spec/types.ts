@@ -48,10 +48,20 @@ export interface HeavyJobGateSpec {
   wait_timeout_sec?: number;
   /** Zero logs immediately; positive values log only after this many seconds in queue. */
   warn_after_sec?: number;
-  /** Ceiling for ONE gated job, as a systemd size. The queue bounds how many run at
-   * once; this bounds how large one gets, so a runaway dies alone instead of
+  /** Default ceiling for one gated job, as a systemd size. The queue bounds how many
+   * run at once; this bounds how large one gets, so a runaway dies alone instead of
    * throttling every session sharing its agent host. "" disables the scope. */
   memory_max?: string;
+  /** Per-category ceilings. A stated category overrides memory_max; omitted categories
+   * inherit it. This lets compilers use measured headroom without granting the same
+   * allowance to every test or generator. */
+  memory_max_by_category?: Partial<Record<HeavyJobCategory, string>>;
+  /** How many gated jobs one developer may run at once (1-16). Each still meets its
+   * own memory_max; total_memory_max bounds them together. Default 1. */
+  slots?: number;
+  /** Shared ceiling, as a systemd size, across all of one developer's concurrently
+   * running gated jobs. "" means no aggregate wall. */
+  total_memory_max?: string;
 }
 
 /**

@@ -25,6 +25,7 @@
                 'heavy_job_gate_wait_timeout_sec': (dev.heavy_job_gate | default({})).wait_timeout_sec | default(1800),
                 'heavy_job_gate_warn_after_sec': (dev.heavy_job_gate | default({})).warn_after_sec | default(5),
                 'heavy_job_gate_memory_max': (dev.heavy_job_gate | default({})).memory_max | default('8G'),
+                'heavy_job_gate_memory_max_by_category': (dev.heavy_job_gate | default({})).memory_max_by_category | default({}),
                 'is_default': name == dev.default_agent_profile}) or '' -}}
         {%- endfor -%}
       {%- endfor -%}
@@ -73,6 +74,7 @@
     - turbo
     - next
     - yarn
+    - cargo
   register: heavy_command_shims
   tags: [heavy_gate]
 
@@ -113,6 +115,7 @@
     - turbo
     - next
     - yarn
+    - cargo
   tags: [heavy_gate]
 
 # The shims above only bite while their directory sits ahead of mise's on PATH. Codex
@@ -143,6 +146,82 @@
     owner: root
     group: root
     mode: "0644"
+  tags: [heavy_gate]
+
+- name: Render the heavy-command gate slot counts
+  ansible.builtin.template:
+    src: heavy-gate-slots.j2
+    dest: /etc/agent-devbox/heavy-gate-slots
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [heavy_gate]
+
+# Per-developer user units: the shared memory wall for concurrent heavy jobs, and the
+# manager environment that puts transient `systemd-run --user` services behind the gate.
+# Each level is listed so none of them is created root-owned as an implicit parent.
+- name: Create each gated developer's user unit and environment.d directories
+  ansible.builtin.file:
+    path: "/home/{{ item.0.user }}/.config{{ item.1 }}"
+    state: directory
+    owner: "{{ item.0.user }}"
+    group: "{{ item.0.user }}"
+    mode: "0700"
+  loop: "{{ devbox_developers | selectattr('heavy_job_gate.enabled') | product(['', '/systemd', '/systemd/user', '/environment.d']) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}{{ item.1 }}"
+  tags: [heavy_gate]
+
+- name: Write the shared heavy-job slice
+  ansible.builtin.template:
+    src: devbox_heavy.slice.j2
+    dest: "/home/{{ dev.user }}/.config/systemd/user/devbox_heavy.slice"
+    owner: "{{ dev.user }}"
+    group: "{{ dev.user }}"
+    mode: "0600"
+  loop: "{{ devbox_developers | selectattr('heavy_job_gate.enabled') | list }}"
+  loop_control:
+    loop_var: dev
+    label: "{{ dev.user }}"
+  register: heavy_slice_units
+  tags: [heavy_gate]
+
+- name: Put the gate on the user manager's own environment
+  ansible.builtin.template:
+    src: heavy-gate-environment.conf.j2
+    dest: "/home/{{ dev.user }}/.config/environment.d/zz-devbox-heavy-gate.conf"
+    owner: "{{ dev.user }}"
+    group: "{{ dev.user }}"
+    mode: "0600"
+  loop: "{{ devbox_developers | selectattr('heavy_job_gate.enabled') | list }}"
+  loop_control:
+    loop_var: dev
+    label: "{{ dev.user }}"
+  register: heavy_gate_environment
+  tags: [heavy_gate]
+
+- name: Remove the gate's user units where the gate is disabled
+  ansible.builtin.file:
+    path: "/home/{{ item.0.user }}/.config/{{ item.1 }}"
+    state: absent
+  loop: "{{ devbox_developers | rejectattr('heavy_job_gate.enabled') | product(['systemd/user/devbox_heavy.slice', 'environment.d/zz-devbox-heavy-gate.conf']) | list }}"
+  loop_control:
+    label: "{{ item.0.user }}/{{ item.1 }}"
+  tags: [heavy_gate]
+
+# daemon-reload re-runs the environment.d generator and re-applies the slice's limits
+# to the live cgroup; running units, and the sessions inside them, are untouched.
+- name: Reload user managers whose gate units changed
+  ansible.builtin.command:
+    cmd: "systemctl --user --machine={{ item.dev.user }}@ daemon-reload"
+  loop: "{{ (heavy_slice_units.results | default([])) + (heavy_gate_environment.results | default([])) }}"
+  loop_control:
+    label: "{{ item.dev.user }}"
+  when:
+    - item.changed | default(false)
+    - not ansible_check_mode
+  changed_when: true
+  failed_when: false
   tags: [heavy_gate]
 
 - name: Keep the heavy-command gate ahead of mise in login shells

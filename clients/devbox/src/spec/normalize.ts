@@ -56,6 +56,9 @@ type NormalizedHeavyJobGate = {
   wait_timeout_sec: number;
   warn_after_sec: number;
   memory_max: string;
+  memory_max_by_category: Partial<Record<(typeof HEAVY_JOB_CATEGORIES)[number], string>>;
+  slots: number;
+  total_memory_max: string;
 };
 
 function normalizeHeavyJobGate(
@@ -68,12 +71,23 @@ function normalizeHeavyJobGate(
       developer?.categories?.[category] ?? host?.categories?.[category] ?? true,
     ]),
   ) as NormalizedHeavyJobGate["categories"];
+  const categoryMemory = Object.fromEntries(
+    HEAVY_JOB_CATEGORIES.flatMap((category) => {
+      const value = developer?.memory_max_by_category?.[category] ?? host?.memory_max_by_category?.[category];
+      if (value === undefined) return [];
+      return [[category, canonicalMemorySize(value) ?? value]];
+    }),
+  ) as NormalizedHeavyJobGate["memory_max_by_category"];
+  const totalMemory = developer?.total_memory_max ?? host?.total_memory_max ?? "";
   return {
     enabled: developer?.enabled ?? host?.enabled ?? true,
     categories,
     wait_timeout_sec: developer?.wait_timeout_sec ?? host?.wait_timeout_sec ?? 1800,
     warn_after_sec: developer?.warn_after_sec ?? host?.warn_after_sec ?? 5,
     memory_max: canonicalMemorySize(developer?.memory_max ?? host?.memory_max ?? "8G") ?? "8G",
+    memory_max_by_category: categoryMemory,
+    slots: developer?.slots ?? host?.slots ?? 1,
+    total_memory_max: canonicalMemorySize(totalMemory) ?? totalMemory,
   };
 }
 
@@ -388,6 +402,7 @@ function codexUnitEnvelope(
     heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
     heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
     heavy_job_gate_memory_max: heavyJobGate.memory_max,
+    heavy_job_gate_memory_max_by_category: heavyJobGate.memory_max_by_category,
     resources,
   };
 }
@@ -426,6 +441,7 @@ function normalizePaseoUnits(
       heavy_job_gate_wait_timeout_sec: heavyJobGate.wait_timeout_sec,
       heavy_job_gate_warn_after_sec: heavyJobGate.warn_after_sec,
       heavy_job_gate_memory_max: heavyJobGate.memory_max,
+      heavy_job_gate_memory_max_by_category: heavyJobGate.memory_max_by_category,
       resources: normalizeDirectMemoryResources({ ...(dev.paseo_resources ?? {}) }, true),
       // Carried beside the ceiling it describes, so the monitor's alarm and the cgroup
       // limit are rendered from one declaration. Null means "no number was measured":

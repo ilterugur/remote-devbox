@@ -1,0 +1,20 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# The user manager's own environment, read by systemd's environment.d generator at
+# startup and on every daemon-reload. Agent entry points source heavy-gate.env, but a
+# job an agent starts with `systemd-run --user --unit ...` inherits the MANAGER's
+# environment, not the agent's. Measured 2026-10-16: eleven such transient services ran
+# typechecks and test suites with no gate on PATH and MemoryMax=infinity, two of them
+# wrapped in a hand-written flock on the gate's lock and still unbounded.
+#
+# The file name sorts after Ubuntu's 99-environment.conf, which re-reads /etc/environment
+# and assigns PATH outright: any earlier prepend is discarded (measured on this box).
+PATH=/usr/local/lib/agent-devbox/heavy-command-gate:${PATH}
+DEVBOX_BUN_KILL_GUARD=/usr/local/lib/agent-devbox/process-kill-guard.ts
+DEVBOX_HEAVY_JOB_CATEGORIES={{ (dev.heavy_job_gate.categories | default({'build': true, 'typecheck': true, 'generate': true, 'test': true}) | dict2items | selectattr('value', 'equalto', true) | map(attribute='key') | list) | join(',') }}
+DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC={{ dev.heavy_job_gate.wait_timeout_sec | default(1800) }}
+DEVBOX_HEAVY_JOB_WARN_AFTER_SEC={{ dev.heavy_job_gate.warn_after_sec | default(5) }}
+DEVBOX_HEAVY_JOB_MEMORY_MAX={{ dev.heavy_job_gate.memory_max | default('8G') }}
+{% for category, limit in (dev.heavy_job_gate.memory_max_by_category | default({})).items() %}
+DEVBOX_HEAVY_JOB_MEMORY_MAX_{{ category | upper }}={{ limit }}
+{% endfor %}

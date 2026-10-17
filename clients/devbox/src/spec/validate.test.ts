@@ -129,6 +129,7 @@ test("heavy_job_gate accepts bounded categories and wait controls", () => {
           categories: { build: true, typecheck: true, generate: false, test: false },
           wait_timeout_sec: 1800,
           warn_after_sec: 5,
+          memory_max_by_category: { build: "18G", typecheck: "18GB" },
         },
       },
     }),
@@ -145,6 +146,23 @@ test("heavy_job_gate accepts bounded categories and wait controls", () => {
   expect(paths({ ...minimal(), host: { heavy_job_gate: { wait_timout_sec: 10 } } })).toContain(
     "error:host.heavy_job_gate.wait_timout_sec",
   );
+  expect(paths({
+    ...minimal(),
+    host: { heavy_job_gate: { memory_max_by_category: { deploy: "18G", build: "lots" } } },
+  })).toEqual(expect.arrayContaining([
+    "error:host.heavy_job_gate.memory_max_by_category.deploy",
+    "error:host.heavy_job_gate.memory_max_by_category.build",
+  ]));
+});
+
+test("heavy_job_gate slots are bounded integers and the shared wall is a systemd size", () => {
+  const gate = (heavy_job_gate: Record<string, unknown>) => paths({ ...minimal(), host: { heavy_job_gate } });
+  expect(gate({ slots: 1, total_memory_max: "" })).toEqual([]);
+  expect(gate({ slots: 16, total_memory_max: "40GB" })).toEqual([]);
+  for (const slots of [0, 1.5, 17]) {
+    expect(gate({ slots })).toContain("error:host.heavy_job_gate.slots");
+  }
+  expect(gate({ total_memory_max: "lots" })).toContain("error:host.heavy_job_gate.total_memory_max");
 });
 
 test("runaway_guard accepts bounded thresholds", () => {

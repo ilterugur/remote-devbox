@@ -672,7 +672,10 @@ function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): vo
     issues.push(err(path, "must be a mapping"));
     return;
   }
-  const allowedFields = new Set(["enabled", "categories", "wait_timeout_sec", "warn_after_sec", "memory_max"]);
+  const allowedFields = new Set([
+    "enabled", "categories", "wait_timeout_sec", "warn_after_sec", "memory_max", "memory_max_by_category",
+    "slots", "total_memory_max",
+  ]);
   for (const key of Object.keys(value)) {
     if (!allowedFields.has(key)) issues.push(err(`${path}.${key}`, "unknown heavy-job gate field"));
   }
@@ -700,6 +703,32 @@ function validateHeavyJobGate(value: unknown, path: string, issues: Issue[]): vo
   const memoryMax = value.memory_max;
   if (memoryMax !== undefined && !(typeof memoryMax === "string" && canonicalMemorySize(memoryMax) !== null)) {
     issues.push(err(`${path}.memory_max`, "must be a systemd size like '8G' (or '' for no per-job ceiling)"));
+  }
+  const slots = value.slots;
+  if (slots !== undefined && !(typeof slots === "number" && Number.isInteger(slots) && slots >= 1 && slots <= 16)) {
+    issues.push(err(`${path}.slots`, "must be an integer from 1 to 16"));
+  }
+  const totalMemory = value.total_memory_max;
+  if (totalMemory !== undefined && !(typeof totalMemory === "string" && canonicalMemorySize(totalMemory) !== null)) {
+    issues.push(err(`${path}.total_memory_max`, "must be a systemd size like '40G' (or '' for no aggregate ceiling)"));
+  }
+  const categoryMemory = value.memory_max_by_category;
+  if (categoryMemory !== undefined) {
+    if (!isRecord(categoryMemory)) {
+      issues.push(err(`${path}.memory_max_by_category`, "must be a mapping"));
+    } else {
+      const allowed: Record<string, true> = { build: true, typecheck: true, generate: true, test: true };
+      for (const [category, limit] of Object.entries(categoryMemory)) {
+        if (!allowed[category]) {
+          issues.push(err(`${path}.memory_max_by_category.${category}`, "is not a known heavy-job category"));
+        } else if (!(typeof limit === "string" && canonicalMemorySize(limit) !== null)) {
+          issues.push(err(
+            `${path}.memory_max_by_category.${category}`,
+            "must be a systemd size like '18G' (or '' for no per-job ceiling)",
+          ));
+        }
+      }
+    }
   }
 }
 

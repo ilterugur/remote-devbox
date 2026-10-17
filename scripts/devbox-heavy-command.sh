@@ -2,8 +2,9 @@
 # Managed by Ansible (remote-devbox).
 #
 # PATH shim for commands that can consume most of a developer's memory budget.
-# Every agent owned by the same Linux user shares one kernel flock, so unrelated
-# light commands remain concurrent while build/typecheck/generate/test jobs queue.
+# Every agent owned by the same Linux user shares a small pool of kernel flocks (the
+# per-user count in /etc/agent-devbox/heavy-gate-slots, default 1), so unrelated light
+# commands remain concurrent while build/typecheck/generate/test jobs queue for a slot.
 set -euo pipefail
 
 gate_dir=$(cd "$(dirname "$0")" && pwd -P)
@@ -43,69 +44,94 @@ category_enabled() {
   [[ ",${DEVBOX_HEAVY_JOB_CATEGORIES-build,typecheck,generate,test}," == *",$1,"* ]]
 }
 
-is_heavy_token() {
+heavy_category=
+
+mark_heavy() {
+  category_enabled "$1" || return 1
+  heavy_category=$1
+}
+
+classify_heavy_token() {
   case "$1" in
-    build | build:* | *:build | *:build:*) category_enabled build ;;
-    typecheck | typecheck:* | *:typecheck | *:typecheck:*) category_enabled typecheck ;;
-    generate | generate:* | *:generate | *:generate:*) category_enabled generate ;;
-    test | test:* | *:test | *:test:*) category_enabled test ;;
+    build | build:* | *:build | *:build:*) mark_heavy build ;;
+    typecheck | typecheck:* | *:typecheck | *:typecheck:*) mark_heavy typecheck ;;
+    generate | generate:* | *:generate | *:generate:*) mark_heavy generate ;;
+    test | test:* | *:test | *:test:*) mark_heavy test ;;
     *) return 1 ;;
   esac
 }
 
-is_heavy_path() {
+classify_heavy_path() {
   case "${1##*/}" in
-    generate-declarations.ts) category_enabled generate ;;
-    typecheck-partitions.ts | tsc | tsc.js) category_enabled typecheck ;;
+    generate-declarations.ts) mark_heavy generate ;;
+    typecheck-partitions.ts | tsc | tsc.js) mark_heavy typecheck ;;
     *) return 1 ;;
   esac
 }
 
-is_heavy_command() {
+classify_heavy_command() {
   local arg
   case "$command_name" in
     tsc)
-      # The `return 0` is load-bearing: the case only sets a status, and the function
-      # ends in `return 1`, so without it every direct tsc fell through as "not heavy".
-      category_enabled typecheck && return 0
+      mark_heavy typecheck && return 0
       ;;
     bun | npm | pnpm | yarn)
       for arg in "$@"; do
-        is_heavy_token "$arg" && return 0
-        is_heavy_path "$arg" && return 0
+        classify_heavy_token "$arg" && return 0
+        classify_heavy_path "$arg" && return 0
       done
       ;;
     bunx | npx)
       for arg in "$@"; do
         case "${arg##*/}" in
-          tsc) category_enabled typecheck && return 0 ;;
-          turbo | next) category_enabled build && return 0 ;;
-          prisma) category_enabled generate && return 0 ;;
+          tsc) mark_heavy typecheck && return 0 ;;
+          turbo | next) mark_heavy build && return 0 ;;
+          prisma) mark_heavy generate && return 0 ;;
         esac
-        is_heavy_token "$arg" && return 0
-        is_heavy_path "$arg" && return 0
+        classify_heavy_token "$arg" && return 0
+        classify_heavy_path "$arg" && return 0
       done
       ;;
     node)
       for arg in "$@"; do
         case "$arg" in
-          */typescript/bin/tsc | */typescript/lib/tsc.js) category_enabled typecheck && return 0 ;;
-          */next/dist/bin/next | */turbo/bin/turbo) category_enabled build && return 0 ;;
-          */prisma/build/index.js) category_enabled generate && return 0 ;;
+          */typescript/bin/tsc | */typescript/lib/tsc.js) mark_heavy typecheck && return 0 ;;
+          */next/dist/bin/next | */turbo/bin/turbo) mark_heavy build && return 0 ;;
+          */prisma/build/index.js) mark_heavy generate && return 0 ;;
         esac
-        is_heavy_path "$arg" && return 0
+        classify_heavy_path "$arg" && return 0
       done
       ;;
     turbo)
       for arg in "$@"; do
-        is_heavy_token "$arg" && return 0
+        classify_heavy_token "$arg" && return 0
       done
       ;;
     next)
-      category_enabled build && [[ " ${*} " == *" build "* ]] && return 0
+      [[ " ${*} " == *" build "* ]] && mark_heavy build && return 0
       ;;
     prisma)
-      category_enabled generate && [[ " ${*} " == *" generate "* ]] && return 0
+      [[ " ${*} " == *" generate "* ]] && mark_heavy generate && return 0
+      ;;
+    cargo)
+      # The first positional argument is the subcommand. Skip a `+toolchain` and the
+      # global options that take a separate value; `cargo run` stays light because it
+      # is how dev servers start, and a server must never hold a slot for hours.
+      local skip_next=false
+      for arg in "$@"; do
+        if [[ "$skip_next" == true ]]; then
+          skip_next=false
+          continue
+        fi
+        case "$arg" in
+          -C | -Z | --config | --color | --manifest-path) skip_next=true ;;
+          -* | +*) ;;
+          build | b | install | doc | bench) mark_heavy build && return 0; return 1 ;;
+          test | t | nextest) mark_heavy test && return 0; return 1 ;;
+          check | c | clippy) mark_heavy typecheck && return 0; return 1 ;;
+          *) return 1 ;;
+        esac
+      done
       ;;
   esac
   return 1
@@ -113,16 +139,61 @@ is_heavy_command() {
 
 runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 lock_dir="$runtime_dir/agent-devbox"
-lock_path="$lock_dir/heavy-job.lock"
-scope_marker_path="$lock_dir/heavy-job.scope"
 scope_bootstrap_arg=--devbox-heavy-job-scope-bootstrap-v1
+# Every gated scope lands in this user slice. Ansible writes it as a unit whose
+# MemoryMax is the developer's total_memory_max: the wall shared by all concurrent heavy
+# jobs, while each scope keeps its own per-job MemoryMax. Without the unit file systemd
+# creates the slice on demand with no limit, which is the old one-wall-per-job behaviour.
+# An underscore, not a dash: systemd reads `a-b.slice` as a child of `a.slice`, which would
+# hide this slice's CPUWeight behind an unweighted parent instead of setting it against the
+# agent fleet's app.slice.
+heavy_slice=devbox_heavy.slice
+
+# The slot count is read from a root-owned file at every invocation rather than from the
+# environment, so changing it reaches an already-running agent fleet: a daemon keeps the
+# environment it started with until it restarts, and restarting it drops every session.
+# One `user count` pair per line; an unlisted user or a missing file means one slot.
+slots=1
+slots_file=${DEVBOX_HEAVY_GATE_SLOTS_FILE:-/etc/agent-devbox/heavy-gate-slots}
+if [[ -r "$slots_file" ]]; then
+  slots_user=${USER:-$(id -un)}
+  while read -r listed_user listed_slots || [[ -n "${listed_user:-}" ]]; do
+    if [[ "$listed_user" == "$slots_user" ]]; then
+      slots=$listed_slots
+      break
+    fi
+  done < "$slots_file"
+fi
+[[ "$slots" =~ ^[1-9][0-9]*$ ]] || slots=1
+
+canonical_lock_dir() {
+  umask 077
+  mkdir -p "$lock_dir"
+  lock_dir=$(cd "$lock_dir" && pwd -P)
+}
+
+# Slot 0 keeps the historical name, so a script an agent wrapped in a hand-written
+# `flock .../heavy-job.lock` still occupies a slot instead of running beside the pool.
+slot_lock_path() {
+  if (( $1 == 0 )); then
+    printf '%s/heavy-job.lock\n' "$lock_dir"
+  else
+    printf '%s/heavy-job.%s.lock\n' "$lock_dir" "$1"
+  fi
+}
 
 current_cgroup_identity() {
   local _hierarchy _controllers cgroup cgroup_inode
   IFS=: read -r _hierarchy _controllers cgroup < /proc/self/cgroup || return 1
   [[ -n "$cgroup" ]] || return 1
-  cgroup_inode=$(stat -Lc '%d:%i' "/sys/fs/cgroup$cgroup") || return 1
+  cgroup_inode=$(stat -Lc '%d-%i' "/sys/fs/cgroup$cgroup") || return 1
   printf '%s\t%s\n' "$cgroup" "$cgroup_inode"
+}
+
+# One marker per live scope, named by its cgroup inode and holding its path. Several
+# scopes now run at once, so a single shared marker would let the last writer win.
+scope_marker_path() {
+  printf '%s/heavy-job.scope.%s\n' "$lock_dir" "$1"
 }
 
 # systemd-run starts this script inside the bounded scope before the real command. The
@@ -132,23 +203,12 @@ if [[ "$command_name" == "$(basename "$script_path")" &&
       "${1:-}" == "$scope_bootstrap_arg" ]]; then
   shift
   [[ $# -gt 0 ]] || exit 64
-  umask 077
-  mkdir -p "$lock_dir"
+  canonical_lock_dir
   IFS=$'\t' read -r scope_cgroup scope_inode < <(current_cgroup_identity)
-  marker_tmp="${scope_marker_path}.$$"
-  cleanup_scope_marker() {
-    local marked_cgroup= marked_inode=
-    rm -f -- "$marker_tmp"
-    if [[ -r "$scope_marker_path" ]]; then
-      IFS=$'\t' read -r marked_cgroup marked_inode < "$scope_marker_path" || true
-      if [[ "$marked_cgroup" == "$scope_cgroup" && "$marked_inode" == "$scope_inode" ]]; then
-        rm -f -- "$scope_marker_path"
-      fi
-    fi
-  }
-  trap cleanup_scope_marker EXIT
-  printf '%s\t%s\n' "$scope_cgroup" "$scope_inode" >"$marker_tmp"
-  mv -f -- "$marker_tmp" "$scope_marker_path"
+  marker=$(scope_marker_path "$scope_inode")
+  trap 'rm -f -- "$marker" "$marker.$$"' EXIT
+  printf '%s\n' "$scope_cgroup" >"$marker.$$"
+  mv -f -- "$marker.$$" "$marker"
   set +e
   "$@"
   command_status=$?
@@ -168,123 +228,98 @@ if [[ "$command_name" == bun && -n "$bun_kill_guard" && -r "$bun_kill_guard" ]];
   real_command_argv+=(--preload "$bun_kill_guard")
 fi
 
-if ! is_heavy_command "$@"; then
+if ! classify_heavy_command "$@"; then
   exec "${real_command_argv[@]}" "$@"
 fi
 
-umask 077
-mkdir -p "$lock_dir"
+canonical_lock_dir
 
 # Turbo strict mode deliberately removes arbitrary DEVBOX_* variables. If this process
-# is still in the exact bounded scope registered by the lock owner, it is nested work
-# from that job and must not wait on its own lock. Different cgroups still serialize.
-if [[ -r "$scope_marker_path" ]]; then
-  marked_cgroup=
-  marked_inode=
-  current_cgroup=
-  current_inode=
-  IFS=$'\t' read -r marked_cgroup marked_inode < "$scope_marker_path" || true
-  IFS=$'\t' read -r current_cgroup current_inode < <(current_cgroup_identity) || true
-  if [[ -n "$marked_cgroup" &&
-        "$marked_cgroup" == "$current_cgroup" &&
-        "$marked_inode" == "$current_inode" ]]; then
+# is still inside a bounded scope the gate registered, it is nested work from that job
+# and must not wait for a slot of its own. Different cgroups still queue.
+if IFS=$'\t' read -r current_cgroup current_inode < <(current_cgroup_identity); then
+  marker=$(scope_marker_path "$current_inode")
+  if [[ -r "$marker" && "$(<"$marker")" == "$current_cgroup" ]]; then
     exec "${real_command_argv[@]}" "$@"
   fi
 fi
 
-# A nested command may legitimately resolve through the shim again. Accept the
-# inherited descriptor only when it points at this exact lock and still owns it.
-inherited_fd=${DEVBOX_HEAVY_JOB_FD:-}
-if [[ "$inherited_fd" =~ ^[0-9]+$ && -e "/proc/$$/fd/$inherited_fd" ]]; then
-  inherited_path=$(readlink -f "/proc/$$/fd/$inherited_fd" 2>/dev/null || true)
-  if [[ "$inherited_path" == "$lock_path" ]] && /usr/bin/flock -n "$inherited_fd"; then
-    exec "${real_command_argv[@]}" "$@"
-  fi
-fi
-
-# Some runtimes intentionally close non-stdio descriptors in spawned children.
-# Prove that the recorded owner is still an ancestor, is the same PID generation,
-# still has the exact descriptor open, and that a separate descriptor cannot take
-# the kernel lock. Only then is this a reentrant child of the active heavy job.
-owner_pid=${DEVBOX_HEAVY_JOB_OWNER_PID:-}
-owner_start=${DEVBOX_HEAVY_JOB_OWNER_START:-}
-owner_fd=${DEVBOX_HEAVY_JOB_OWNER_FD:-}
-if [[ "$owner_pid" =~ ^[0-9]+$ && "$owner_start" =~ ^[0-9]+$ && "$owner_fd" =~ ^[0-9]+$ ]]; then
-  current_pid=$$
-  owner_is_ancestor=false
-  while [[ "$current_pid" -gt 1 && -r "/proc/$current_pid/status" ]]; do
-    current_pid=$(awk '/^PPid:/{print $2}' "/proc/$current_pid/status")
-    if [[ "$current_pid" == "$owner_pid" ]]; then
-      owner_is_ancestor=true
-      break
-    fi
+# A slot held by this process or one of its ancestors means this command is part of
+# that job: a descriptor inherited from the gate, a runtime that closed it in a child
+# while the parent still holds it, or a script wrapped in a hand-written `flock` on a
+# slot file. Taking a second slot would deadlock at slots=1 and double-count otherwise,
+# so the command runs under the held one — still inside a scope of its own below.
+# The probe proves the descriptor's lock is really held; an fd left open on a free slot
+# file grants nothing.
+slot_held_by_ancestor() {
+  local pid=$$ key value target probe_fd
+  while [[ "$pid" -gt 1 && -d "/proc/$pid" ]]; do
+    while IFS= read -r target; do
+      [[ -n "$target" ]] || continue
+      exec {probe_fd}>>"$target"
+      if /usr/bin/flock -n "$probe_fd"; then
+        /usr/bin/flock -u "$probe_fd"
+        exec {probe_fd}>&-
+      else
+        exec {probe_fd}>&-
+        return 0
+      fi
+    done < <(find "/proc/$pid/fd" -maxdepth 1 \( -lname "$lock_dir/heavy-job.lock" -o \
+               -lname "$lock_dir/heavy-job.[0-9]*.lock" \) -printf '%l\n' 2>/dev/null)
+    value=
+    while IFS=$':\t ' read -r key value; do
+      [[ "$key" == PPid ]] && break
+    done < "/proc/$pid/status" 2>/dev/null || true
+    [[ "$value" =~ ^[0-9]+$ ]] || return 1
+    pid=$value
   done
-
-  actual_owner_start=$(process_start_time "$owner_pid" 2>/dev/null || true)
-  actual_owner_path=$(readlink -f "/proc/$owner_pid/fd/$owner_fd" 2>/dev/null || true)
-  if [[ "$owner_is_ancestor" == true && "$actual_owner_start" == "$owner_start" && \
-        "$actual_owner_path" == "$lock_path" ]]; then
-    shopt -u varredir_close 2>/dev/null || true
-    exec {probe_fd}>>"$lock_path"
-    if ! /usr/bin/flock -n "$probe_fd"; then
-      exec "${real_command_argv[@]}" "$@"
-    fi
-    /usr/bin/flock -u "$probe_fd"
-    exec {probe_fd}>&-
-  fi
-fi
+  return 1
+}
 
 shopt -u varredir_close 2>/dev/null || true
-exec {slot_fd}>>"$lock_path"
+slot_fd=
+try_take_slot() {
+  local index path fd
+  for ((index = 0; index < slots; index++)); do
+    path=$(slot_lock_path "$index")
+    exec {fd}>>"$path"
+    if /usr/bin/flock -n "$fd"; then
+      slot_fd=$fd
+      return 0
+    fi
+    exec {fd}>&-
+  done
+  return 1
+}
 
-if ! /usr/bin/flock -n "$slot_fd"; then
+# Waiting polls the pool instead of blocking on one file: with several slots there is no
+# single descriptor to sleep on, and a second's latency is nothing next to a build.
+if ! slot_held_by_ancestor && ! try_take_slot; then
   wait_timeout=${DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC:-1800}
   warn_after=${DEVBOX_HEAVY_JOB_WARN_AFTER_SEC:-5}
-  waiter_pid=
-  warning_pid=
-  stop_warning() {
-    [[ -n "$warning_pid" ]] || return 0
-    kill -TERM "$warning_pid" 2>/dev/null || true
-    wait "$warning_pid" 2>/dev/null || true
-    warning_pid=
-  }
-  stop_waiter() {
-    [[ -z "$waiter_pid" ]] || kill -TERM "$waiter_pid" 2>/dev/null || true
-    stop_warning
-    exit 143
-  }
-  trap stop_waiter HUP INT TERM
+  waiting_message="devbox: waiting for the shared heavy-job slot ($command_name $*)"
+  trap 'exit 143' HUP INT TERM
+  wait_started=$SECONDS
+  warned=false
   if (( warn_after == 0 )); then
-    echo "devbox: waiting for the shared heavy-job slot ($command_name $*)" >&2
-  else
-    (sleep "$warn_after"; echo "devbox: waiting for the shared heavy-job slot ($command_name $*)" >&2) &
-    warning_pid=$!
+    echo "$waiting_message" >&2
+    warned=true
   fi
-  if (( wait_timeout == 0 )); then
-    /usr/bin/flock "$slot_fd" &
-  else
-    /usr/bin/flock -w "$wait_timeout" "$slot_fd" &
-  fi
-  waiter_pid=$!
-  set +e
-  wait "$waiter_pid"
-  wait_status=$?
-  set -e
-  waiter_pid=
-  stop_warning
+  until try_take_slot; do
+    waited=$((SECONDS - wait_started))
+    if (( wait_timeout > 0 && waited >= wait_timeout )); then
+      echo "devbox: timed out waiting for the shared heavy-job slot after ${wait_timeout}s ($command_name $*)" >&2
+      exit 75
+    fi
+    if [[ "$warned" == false ]] && (( waited >= warn_after )); then
+      echo "$waiting_message" >&2
+      warned=true
+    fi
+    sleep 1
+  done
   trap - HUP INT TERM
-  if [[ $wait_status -ne 0 ]]; then
-    echo "devbox: timed out waiting for the shared heavy-job slot after ${wait_timeout}s ($command_name $*)" >&2
-    exit 75
-  fi
   echo "devbox: acquired the shared heavy-job slot" >&2
 fi
-
-DEVBOX_HEAVY_JOB_OWNER_START=$(process_start_time "$$")
-export DEVBOX_HEAVY_JOB_FD=$slot_fd
-export DEVBOX_HEAVY_JOB_OWNER_PID=$$
-export DEVBOX_HEAVY_JOB_OWNER_START
-export DEVBOX_HEAVY_JOB_OWNER_FD=$slot_fd
 
 # The lock bounds how MANY heavy jobs run at once; it says nothing about how large
 # one gets. Measured 2026-08-20: a single tsc reached 14.4G inside an agent host with
@@ -301,6 +336,8 @@ export DEVBOX_HEAVY_JOB_OWNER_FD=$slot_fd
 # global OOM killer took unrelated sessions down instead. Default the wall, so an
 # unprovisioned caller is contained too; `infinity` stays the explicit opt-out.
 memory_max=${DEVBOX_HEAVY_JOB_MEMORY_MAX:-8G}
+category_limit_var="DEVBOX_HEAVY_JOB_MEMORY_MAX_${heavy_category^^}"
+memory_max=${!category_limit_var:-$memory_max}
 if [[ "$memory_max" == infinity ]]; then
   memory_max=
 fi
@@ -358,7 +395,7 @@ scope_available() {
 }
 
 if scope_available; then
-  exec systemd-run --user --scope --quiet --collect \
+  exec systemd-run --user --scope --quiet --collect --slice="$heavy_slice" \
     -p "MemoryMax=$memory_max" \
     -p "MemorySwapMax=0" \
     -p "OOMPolicy=continue" \

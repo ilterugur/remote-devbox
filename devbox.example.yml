@@ -26,7 +26,7 @@ host:
   # Weight-mode arithmetic subtracts this from physical RAM before dividing the pool.
   # It does not enforce an OS/systemd/cgroup reservation by itself.
   memory_reserve: 4G
-  # Serialize selected heavy command families per Linux developer.
+  # Bound how many heavy command families run at once per Linux developer.
   heavy_job_gate:
     enabled: true
     categories:
@@ -36,6 +36,12 @@ host:
       test: true
     wait_timeout_sec: 1800 # 0 waits forever; timeout exits the queued command with status 75.
     warn_after_sec: 5     # 0 reports queuing immediately.
+    # How many gated jobs one developer may run at once (1-16). Read by the gate at
+    # every invocation, so a change reaches an already-running agent fleet.
+    slots: 1
+    # The wall ALL concurrent gated jobs share (a devbox_heavy.slice user unit), so
+    # raising `slots` adds concurrency without multiplying the worst case. '' = none.
+    total_memory_max: ""
     # Ceiling for ONE gated job. The queue above bounds how many run at once; this
     # bounds how large one gets. A single tsc reaching its agent host's whole budget
     # does not die there — MemoryHigh throttles instead of killing — so the host stalls

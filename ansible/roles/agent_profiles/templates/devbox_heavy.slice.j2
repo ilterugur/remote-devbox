@@ -1,0 +1,17 @@
+# Managed by Ansible (remote-devbox) — do not edit by hand.
+#
+# Every gated heavy job of {{ dev.user }} runs in a scope under this slice. Each scope
+# carries its own per-job MemoryMax; this is the wall they share, so raising the slot
+# count multiplies concurrency without multiplying the worst case the host must absorb.
+[Unit]
+Description=Shared memory wall for {{ dev.user }}'s gated heavy jobs
+
+[Slice]
+MemoryMax={{ dev.heavy_job_gate.total_memory_max | default('', true) or 'infinity' }}
+# The scopes already refuse swap; a slice that allowed it would only let a runaway
+# thrash the disk before the wall above is reached.
+MemorySwapMax=0
+# Heavy jobs saturate every core they can get (cargo, TS7, Turbo), while agent sessions are
+# latency-sensitive and mostly idle. Half the default weight means compilers still get
+# the whole machine when it is free, and yield to sessions when the CPU is contended.
+CPUWeight=50

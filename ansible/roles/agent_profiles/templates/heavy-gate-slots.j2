@@ -1,0 +1,11 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{# How many heavy jobs each developer may run at once: `user count` per line.
+   The gate reads this at every heavy invocation instead of taking it from the
+   environment, so a change reaches an agent fleet that is already running — a daemon
+   keeps its environment until it restarts, and restarting it drops every session.
+   An unlisted developer gets one slot. #}
+{% for dev in devbox_developers | sort(attribute='user') %}
+{% if dev.heavy_job_gate.enabled %}
+{{ dev.user }} {{ dev.heavy_job_gate.slots | default(1) }}
+{% endif %}
+{% endfor %}

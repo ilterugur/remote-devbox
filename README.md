@@ -36,14 +36,26 @@ Agent package installs can create hundreds of thousands of scratch files and exh
 tmpfs inodes before byte capacity; the normal daily `systemd-tmpfiles-clean.timer`
 performs the cleanup, and active entries are retained by their timestamps.
 
-Every agent owned by the same developer also shares one kernel-backed heavy-command
-slot. Build, typecheck, generate and test commands queue instead of running in parallel;
-lightweight toolchain commands remain concurrent. The gate is stale-lock safe because
-the kernel releases its `flock` descriptor when the owning process exits. It defaults
-on and can be overridden field-by-field for one Linux account. `categories` controls
-which command families use the slot, `wait_timeout_sec: 0` waits forever (the default is
-1800 seconds), and `warn_after_sec: 0` reports queuing immediately (the default is 5
-seconds). Changed settings apply to newly launched agent processes. Claude profile
+Every agent owned by the same developer also shares a small pool of kernel-backed
+heavy-command slots (`slots`, default 1). Build, typecheck, generate and test commands
+queue for a free slot instead of running unbounded in parallel; lightweight toolchain
+commands remain concurrent. The gate is stale-lock safe because the kernel releases its
+`flock` descriptor when the owning process exits. It defaults on and can be overridden
+field-by-field for one Linux account. `categories` controls which command families use
+the slots, `memory_max` caps each job's transient systemd scope, and
+`memory_max_by_category` can give build or typecheck a larger ceiling without raising
+every heavy command. All scopes run under one `devbox_heavy.slice` user unit whose
+`MemoryMax` is `total_memory_max`, so raising `slots` adds concurrency without
+multiplying the worst case (`''` leaves the slice unbounded). A command started under a
+slot its ancestor already holds — including a script wrapped in a hand-written `flock`
+on the gate's lock — runs under that slot rather than queueing for a second one. The
+shell shims and OMP's tool hook both normalize supported absolute executable paths
+(including `cargo`; `cargo run` stays ungated) through the gate, and the developer's
+user manager environment carries the gate too, so `systemd-run --user` services an
+agent starts are gated. `wait_timeout_sec: 0` waits forever (the default is 1800
+seconds), and `warn_after_sec: 0` reports queuing immediately (the default is 5
+seconds). `slots` and `total_memory_max` take effect for running agents on the next
+apply. The other settings apply to newly launched agent processes: Claude profile
 launchers pick them up on the next launch; an already-running managed Codex code-mode
 host needs an explicit service restart before its inherited environment changes.
 
@@ -58,6 +70,12 @@ host:
       test: true
     wait_timeout_sec: 1800
     warn_after_sec: 5
+    slots: 2
+    total_memory_max: 40G
+    memory_max: 10G
+    memory_max_by_category:
+      build: 18G
+      typecheck: 18G
 
 developers:
   - user: dev-a

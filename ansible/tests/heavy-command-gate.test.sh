@@ -45,24 +45,29 @@ if (( active > maximum )); then
 fi
 flock -u 8
 
+# Close every descriptor this subshell inherited on a slot file, the way a Node/Bun
+# subprocess launcher closes non-stdio descriptors in its children.
+close_slot_fds() {
+  local fd
+  for fd in /proc/$BASHPID/fd/*; do
+    [[ "$(readlink "$fd" 2>/dev/null)" == */agent-devbox/heavy-job*.lock ]] || continue
+    eval "exec ${fd##*/}>&-"
+  done
+}
+
 if [[ " $* " == *" build:nested-stripped "* ]]; then
-  # Turbo's strict environment drops the gate's DEVBOX_* ownership variables. The
-  # nested command still belongs to the same bounded scope and must not queue behind it.
+  # Turbo's strict environment drops every DEVBOX_* variable. The nested command still
+  # belongs to the same bounded scope and must not queue behind it.
   (
-    inherited_fd=${DEVBOX_HEAVY_JOB_FD:?}
-    eval "exec ${inherited_fd}>&-"
-    env -u DEVBOX_HEAVY_JOB_FD \
-      -u DEVBOX_HEAVY_JOB_OWNER_PID \
-      -u DEVBOX_HEAVY_JOB_OWNER_START \
-      -u DEVBOX_HEAVY_JOB_OWNER_FD \
+    close_slot_fds
+    env -u DEVBOX_HEAVY_JOB_MEMORY_MAX -u DEVBOX_HEAVY_JOB_CATEGORIES \
       bun ./scripts/generate-declarations.ts
   )
 elif [[ " $* " == *" build:nested "* ]]; then
-  # Node/Bun subprocess launchers can close non-stdio descriptors. The parent still
-  # owns the slot, so a nested shim must validate that ancestor instead of deadlocking.
+  # The child lost the descriptor but its parent still holds the slot, so a nested
+  # shim must recognise that ancestor instead of deadlocking.
   (
-    inherited_fd=${DEVBOX_HEAVY_JOB_FD:?}
-    eval "exec ${inherited_fd}>&-"
+    close_slot_fds
     bun ./scripts/generate-declarations.ts
   )
 else
@@ -188,6 +193,59 @@ set -e
 [[ $failure_status -eq 42 ]] || fail "child exit status was not preserved"
 timeout 3 bun run build
 
+# Slots come from a root-owned roster read at every invocation, so a running fleet sees a
+# change without restarting. Two slots let two builds overlap and hold the third back.
+export DEVBOX_HEAVY_GATE_SLOTS_FILE="$tmp/slots"
+printf 'someone-else 9\n%s 2\n' "$(id -un)" >"$DEVBOX_HEAVY_GATE_SLOTS_FILE"
+reset_counter
+export DEVBOX_GATE_TEST_SLEEP=1.5
+bun run build &
+pool_a=$!
+bun run build &
+pool_b=$!
+bun run build &
+pool_c=$!
+wait "$pool_a" "$pool_b" "$pool_c"
+unset DEVBOX_GATE_TEST_SLEEP
+[[ $(cat "$tmp/maximum") == 2 ]] || fail "two slots did not run exactly two builds at once (max $(cat "$tmp/maximum"))"
+
+# An unlisted user, or a malformed count, falls back to the single slot.
+printf '%s two\n' "$(id -un)" >"$DEVBOX_HEAVY_GATE_SLOTS_FILE"
+reset_counter
+bun run build &
+malformed_a=$!
+bun run build &
+malformed_b=$!
+wait "$malformed_a" "$malformed_b"
+[[ $(cat "$tmp/maximum") == 1 ]] || fail "a malformed slot count did not fall back to one slot"
+unset DEVBOX_HEAVY_GATE_SLOTS_FILE
+
+# Agents wrap scripts in a hand-written `flock` on the gate's lock. The gated command
+# inside must run under that held slot: with one slot, queueing for another deadlocks.
+reset_counter
+mkdir -p "$tmp/runtime/agent-devbox"
+timeout 5 flock "$tmp/runtime/agent-devbox/heavy-job.lock" bun run build \
+  || fail "a gated command under a hand-written flock on the slot deadlocked"
+
+# cargo: compiling and testing are heavy, `cargo run` starts servers and must never
+# hold a slot for the server's lifetime.
+ln -s fake-command "$tmp/real-bin/cargo"
+ln -s "$gate" "$tmp/gate-bin/cargo"
+reset_counter
+cargo +stable build --release &
+cargo_a=$!
+cargo -C crates/engine test &
+cargo_b=$!
+wait "$cargo_a" "$cargo_b"
+[[ $(cat "$tmp/maximum") == 1 ]] || fail "cargo build and cargo test overlapped"
+reset_counter
+cargo run &
+cargo_run_a=$!
+cargo run &
+cargo_run_b=$!
+wait "$cargo_run_a" "$cargo_run_b"
+[[ $(cat "$tmp/maximum") == 2 ]] || fail "cargo run was serialized"
+
 # The lock bounds how many heavy jobs run; it never bounded how large one gets. These
 # cover the ceiling that does: a scope of the job's own, so a runaway compiler dies
 # alone instead of throttling the agent host that serves every session.
@@ -226,12 +284,24 @@ if command -v systemd-run >/dev/null 2>&1 &&
     || fail "gated job stayed in the ambient cgroup: $scope_cgroup"
   [[ "$scope_cgroup" == *.scope ]] \
     || fail "gated job did not run inside its own scope: $scope_cgroup"
+  # Every scope sits under the one slice whose MemoryMax is the shared wall.
+  [[ "$scope_cgroup" == */devbox_heavy.slice/*.scope ]] \
+    || fail "gated job did not land under the shared heavy-job slice: $scope_cgroup"
   [[ "$scope_out" == *"GOMEMLIMIT=1GiB"* ]] \
     || fail "gated job did not receive GOMEMLIMIT in Go's spelling: $scope_out"
 
   # A scope that does not actually carry the ceiling is theatre.
   [[ "$scope_out" == *"MEMMAX=1073741824"* ]] \
     || fail "scope carried no ceiling: $scope_out"
+  category_scope_out=$(
+    DEVBOX_HEAVY_JOB_MEMORY_MAX=1G \
+    DEVBOX_HEAVY_JOB_MEMORY_MAX_BUILD=2G \
+    next build 2>/dev/null
+  )
+  [[ "$category_scope_out" == *"MEMMAX=2147483648"* ]] \
+    || fail "build scope ignored its category ceiling: $category_scope_out"
+  [[ "$category_scope_out" == *"GOMEMLIMIT=2GiB"* ]] \
+    || fail "build scope ignored its category Go hint: $category_scope_out"
 
   # systemd-run exits 1 when it cannot reach a user manager, so the status can never be
   # read as "the scope failed to start". The child's own status must arrive intact.

@@ -20,6 +20,8 @@ Environment=PATH={% if row.heavy_job_gate_enabled | default(true) %}/usr/local/l
 Environment=DEVBOX_HEAVY_JOB_WAIT_TIMEOUT_SEC={{ row.heavy_job_gate_wait_timeout_sec | default(1800) }}
 Environment=DEVBOX_HEAVY_JOB_WARN_AFTER_SEC={{ row.heavy_job_gate_warn_after_sec | default(5) }}
 Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX={{ row.heavy_job_gate_memory_max | default('8G') }}
+{% for category, limit in (row.heavy_job_gate_memory_max_by_category | default({})).items() %}Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX_{{ category | upper }}={{ limit }}
+{% endfor %}
 {% endif %}
 ExecStart=/home/{{ row.user }}/.local/bin/codex -c features.code_mode_host=true app-server --listen unix://
 Restart=always
