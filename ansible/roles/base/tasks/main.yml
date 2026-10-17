@@ -183,3 +183,15 @@
     state: present
     reload: true
   when: devbox_host.swappiness is not none
+
+# Every vite/esbuild watcher, language server and many CLIs take an inotify INSTANCE (not just
+# watches). The kernel default of 128 per user ran out on 2026-10-17 at ~30 agent sessions plus
+# per-worktree dev stacks: vite exited with EMFILE while 119 of 128 were held.
+- name: Raise the per-user inotify instance limit
+  ansible.posix.sysctl:
+    name: fs.inotify.max_user_instances
+    value: "512"
+    sysctl_file: /etc/sysctl.d/60-remote-devbox.conf
+    sysctl_set: true
+    state: present
+    reload: true
