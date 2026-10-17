@@ -58,6 +58,63 @@ above rather than from a template:
 | `devbox_process_group_memory` | one process group over 8 GiB (crit 16 GiB) |
 | `devbox_disk_fill` | filesystem over 75% (crit 88%), well before the stock 90% |
 
+## Recovering disk headroom
+
+Check both filesystem capacity and I/O pressure before restarting an agent fleet:
+
+```bash
+df -h /
+findmnt -no SOURCE,FSTYPE /
+cat /proc/pressure/io
+```
+
+On ext4, `df` reports space available to ordinary users after subtracting the
+root-only reserve. Inspect the actual device with `sudo tune2fs -l <device>` and
+record its reserved block count before changing it. A percentage sized for a small
+root disk can reserve tens of GiB unnecessarily on a multi-TB development disk.
+
+On 2026-10-01 this box had 21,484,089 reserved 4-KiB blocks on `/dev/vda3`,
+approximately 4% of its 2-TB filesystem. `sudo tune2fs -m 1 /dev/vda3` reduced that
+to 5,365,429 blocks, preserving about 20 GiB for root and making another 61.5 GiB
+available to developers without deleting data or restarting services. A developer
+write plus `fsync` completed in 52 ms afterwards.
+
+This is emergency headroom, not storage cleanup or proof that a stall has ended:
+I/O pressure remained high after that change. Attribute ongoing writes separately,
+measure suspected large directories with bounded low-priority scans, and obtain
+approval before deleting caches or old artifacts. Never use a broad Docker prune
+with volumes as disk incident recovery; those volumes can contain real databases
+and backups.
+
+### RPC output backpressure
+
+The same incident's active writer was one OMP session under Paseo, not PostgreSQL:
+its temporary `omp-rpc-output-*/output` file reached 139.5 GiB. Bounded samples
+contained subagent streaming events, while the main conversation record was about
+1 MiB. The measured producer wrote 32–52 MiB/s.
+
+The installed OMP RPC output writer switches to a disk spool when stdout reports
+backpressure. It keeps accepting events without a total spool-size limit. Delivered
+bytes remain allocated until the reader catches up completely, at which point the
+whole spool is removed. Streaming message updates can carry the accumulated message
+again, so transport volume is not the size of the saved conversation.
+
+A throwaway run of the installed writer reproduced this behavior: delivering
+64 KiB from a 4-MiB spool left the entire 4 MiB allocated; adding another 1 MiB grew
+it to 5 MiB. Complete drain removed the file. The runtime itself was not patched.
+
+After the live producer and its spool disappeared, host I/O PSI `some avg10` fell
+to 0.01%, load fell from about 69 to 7, and a developer write plus `fsync` took
+4 ms. Paseo stayed active with no restarts. The producer's exit cause and why the
+consumer fell behind were not established; do not report a kernel OOM or a
+successful operator stop without evidence. An unbounded spool can recur.
+
+The approved build-cache cleanup reclaimed 48.93 GB in its completed pass;
+Docker subsequently reported no reclaimable build cache, retaining 14 active
+entries. The root filesystem then had 197 GiB available at 91% usage, and host I/O
+PSI `some avg10` was 0.29%. Database volumes, images and session records were not
+pruned. Capacity remains above the disk alarm threshold despite the cleared stall.
+
 ## The fleet cap
 
 `paseo_resources` is sized against a measured session count — this repo's own history says
