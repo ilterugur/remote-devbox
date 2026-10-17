@@ -302,7 +302,8 @@ prune() {
   local keep="$KEEP" n=0 dir
   [ -d "$VAULT/.backups" ] || return 0
   for dir in $(ls -1 "$VAULT/.backups" 2>/dev/null | sort -r); do
-    n=$((n + 1)); [ "$n" -gt "$keep" ] && rm -rf "$VAULT/.backups/$dir"
+    n=$((n + 1))
+    if [ "$n" -gt "$keep" ]; then rm -rf "$VAULT/.backups/$dir"; fi
   done
 }
 tree_identity() { if db_has; then py tree-info "$DB"; else say "-"; fi; }
