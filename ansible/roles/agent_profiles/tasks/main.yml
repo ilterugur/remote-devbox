@@ -356,6 +356,48 @@
     - item.provider == 'omp'
     - item.omp_model_presets is none
 
+- name: Create the OMP heavy-gate extension directories
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-heavy-gate"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.heavy_job_gate_enabled | default(true)
+  tags: [heavy_gate]
+
+- name: Install the OMP heavy-gate absolute-path guard
+  ansible.builtin.copy:
+    src: omp-heavy-gate/index.ts
+    dest: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-heavy-gate/index.ts"
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0600"
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - item.heavy_job_gate_enabled | default(true)
+  tags: [heavy_gate]
+
+- name: Remove the OMP heavy-gate guard where the gate is disabled
+  ansible.builtin.file:
+    path: "/home/{{ item.user }}/.agent-profiles/{{ item.name }}/extensions/omp-heavy-gate"
+    state: absent
+  loop: "{{ _devbox_agent_profiles }}"
+  loop_control:
+    label: "{{ item.user }}/{{ item.name }}"
+  when:
+    - item.provider == 'omp'
+    - not (item.heavy_job_gate_enabled | default(true))
+  tags: [heavy_gate]
+
 # One file, sourced by every entry point that starts an agent. The launcher is not the
 # only one: an always-on Remote Control session never goes through it, so wiring the
 # gate into the launcher alone leaves the box's busiest path ungated.
