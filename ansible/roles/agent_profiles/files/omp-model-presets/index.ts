@@ -2,6 +2,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { findScopedSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+  cfgRetryFallbackChains,
+  cfgRetryFallbackRevertPolicy,
+  cfgRetryModelFallback,
+  cfgRetryUsageAwareFallback,
+  cfgRetryUsageReservePct,
+  cfgRetryUsageReservePolicy,
+} from "@oh-my-pi/pi-coding-agent/session/settings";
 import {
   VERSION,
   type ExtensionAPI,
@@ -37,16 +47,27 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
   const agentDir = process.env.PI_CODING_AGENT_DIR;
   if (!agentDir) throw new Error("PI_CODING_AGENT_DIR is required for omp-model-presets");
   const document = parsePresetDocument(JSON.parse(readFileSync(join(agentDir, "model-presets.json"), "utf8")));
-  if (document.retry) {
-    for (const [path, value] of Object.entries(toOmpRetrySettings(document.retry))) {
-      pi.pi.settings.override(path as Parameters<typeof pi.pi.settings.override>[0], value);
-    }
-  }
   let context: ExtensionContext | undefined;
 
   const currentContext = (): ExtensionContext => {
     if (!context) throw new Error("OMP session context is not ready");
     return context;
+  };
+  const activeSettings = () => {
+    const settings = findScopedSettings(currentContext().cwd, agentDir);
+    if (!settings) throw new Error("OMP session settings are not ready");
+    return settings;
+  };
+  const applyRetry = (): void => {
+    if (!document.retry) return;
+    const retry = toOmpRetrySettings(document.retry);
+    const settings = activeSettings();
+    cfgRetryModelFallback.override(settings, retry["retry.modelFallback"]);
+    cfgRetryUsageAwareFallback.override(settings, retry["retry.usageAwareFallback"]);
+    cfgRetryUsageReservePct.override(settings, retry["retry.usageReservePct"]);
+    cfgRetryUsageReservePolicy.override(settings, retry["retry.usageReservePolicy"]);
+    cfgRetryFallbackRevertPolicy.override(settings, retry["retry.fallbackRevertPolicy"]);
+    cfgRetryFallbackChains.override(settings, retry["retry.fallbackChains"]);
   };
 
   const runtime: OmpModelPresetRuntime<OmpModel> = {
@@ -65,10 +86,10 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
       return (pi.getThinkingLevel() ?? "inherit") as OmpThinkingLevel;
     },
     replaceRoles(roles) {
-      pi.pi.settings.override("modelRoles", roles);
+      cfgModelRoles.override(activeSettings(), roles);
     },
     clearRoles() {
-      pi.pi.settings.clearOverride("modelRoles");
+      cfgModelRoles.clearOverride(activeSettings());
     },
     setModel(model) {
       return pi.setModel(model);
@@ -151,6 +172,7 @@ export default function ompModelPresets(pi: ExtensionAPI): void {
   const restore = async (ctx: ExtensionContext, initializeWhenEmpty: boolean): Promise<void> => {
     try {
       await useContext(ctx, async () => {
+        applyRetry();
         const entries = ctx.sessionManager.getEntries();
         if (initializeWhenEmpty && entries.length === 0) await controller.initializeNewSession(entries);
         else await controller.restore(entries);

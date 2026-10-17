@@ -205,7 +205,7 @@ describe("parsePresetDocument", () => {
 });
 
 describe("OMP retry settings", () => {
-  test("maps the declarative retry policy to OMP 18.1.2 setting paths", () => {
+  test("maps the declarative retry policy to OMP 18.2.10 setting paths", () => {
     const policy = parsePresetDocument({ ...rawDocument(), retry: rawRetryPolicy() }).retry!;
 
     expect(toOmpRetrySettings(policy)).toEqual({
