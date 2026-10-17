@@ -132,6 +132,60 @@
     label: "{{ server.user }}"
   changed_when: false
 
+# omp's own `browser` tool does not go through MCP: with no CDP endpoint configured it
+# launches a headless Chromium on the box, which no one can see. Pointing each omp
+# profile's `browser.cdpUrl` at the same failover endpoint sends its tabs where the
+# playwright server's already go — the developer's client browser while the reverse
+# tunnel is up, the box-local fallback otherwise. Written through omp's own config
+# command (per profile, via that profile's wrapper so PI_CODING_AGENT_DIR is right)
+# rather than by editing config.yml: the file is omp's, with its own writer and
+# migrations, and the wrapper is the one place that already knows every env the
+# profile needs. Failover off → no shared endpoint exists, so the key is cleared and
+# omp falls back to its own headless browser. Only profiles whose key differs are
+# touched; `omp config set` is a few seconds of startup per call.
+- name: Collect the omp profiles of browser-enabled developers
+  ansible.builtin.set_fact:
+    _devbox_browser_omp_profiles: "{{ _raw | from_json }}"
+  vars:
+    _raw: >-
+      {%- set out = [] -%}
+      {%- for dev in devbox_developers if dev.browser -%}
+        {%- for name, profile in (dev.agent_profiles | default({})).items() if profile.provider == 'omp' -%}
+          {{- out.append({'user': dev.user, 'name': name}) or '' -}}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+# A profile omp has never started has no config.yml yet; `set` creates it, so a missing
+# file reads as "unset" rather than as an error.
+- name: Read each omp profile's current browser.cdpUrl
+  ansible.builtin.slurp:
+    src: "/home/{{ profile.user }}/.agent-profiles/{{ profile.name }}/config.yml"
+  loop: "{{ _devbox_browser_omp_profiles }}"
+  loop_control:
+    loop_var: profile
+    label: "{{ profile.user }}/{{ profile.name }}"
+  register: _omp_profile_configs
+  failed_when: false
+
+# `reset` deletes the key (omp writes `browser: {}`), which is why "unset" and "" compare
+# equal here and a second run is a no-op either way.
+- name: Point each omp profile's browser tool at the shared CDP endpoint
+  ansible.builtin.command:
+    argv: "{{ [_wrapper, 'config'] + (['set', 'browser.cdpUrl', _wanted] if _wanted else ['reset', 'browser.cdpUrl']) }}"
+  become: true
+  become_user: "{{ item.profile.user }}"
+  environment:
+    HOME: "/home/{{ item.profile.user }}"
+  vars:
+    _wrapper: "/home/{{ item.profile.user }}/.local/bin/{{ item.profile.name }}"
+    _wanted: "{{ ('http://127.0.0.1:' ~ devbox_browser.failover.cdp_port) if devbox_browser.failover.enabled else '' }}"
+    _current: "{{ (((item.content | default('') | b64decode | from_yaml) or {}).get('browser') or {}).get('cdpUrl', '') }}"
+  loop: "{{ _omp_profile_configs.results }}"
+  loop_control:
+    label: "{{ item.profile.user }}/{{ item.profile.name }}"
+  when: _current != _wanted
+
 # ── Orphan-browser reaper ─────────────────────────────────────────────────────
 # Chrome outlives the agent session that spawned it: when an omp/codex session dies,
 # its automation browser is reparented to `systemd --user` and keeps its full heap.

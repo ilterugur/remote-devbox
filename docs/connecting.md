@@ -149,9 +149,12 @@ PAM password whose hash is in `devbox.secrets.yml`.
 ## Browser failover — isolated client browser
 
 Browser failover gives the box's browser MCP endpoint a client-browser primary and a
-box-local Chrome fallback. Enable `browser.failover` with a `chrome_user` that names
-one real developer, then have the operator provision both the endpoint and the current
-client binary:
+box-local Chrome fallback. The same endpoint is written into every `omp` profile of a
+browser-enabled developer as `browser.cdpUrl`, so omp's built-in `browser` tool opens
+its tabs in the client's Chrome too instead of a headless Chromium on the box that no
+one can see. Enable `browser.failover` with a `chrome_user` that names one real
+developer, then have the operator provision both the endpoint and the current client
+binary:
 
 ```bash
 devbox apply browser
