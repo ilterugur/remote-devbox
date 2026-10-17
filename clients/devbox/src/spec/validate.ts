@@ -342,6 +342,51 @@ function validateContainer(raw: Record<string, unknown>, issues: Issue[]): void 
   if (def !== "none" && installsOk && !(installs as string[]).includes(def)) {
     issues.push(err("container.default_engine", `'${def}' is not listed in container.install_engines`));
   }
+  const limits = c.runtime_limits;
+  if (limits === undefined) return;
+  if (!Array.isArray(limits)) {
+    issues.push(err("container.runtime_limits", "must be a list"));
+    return;
+  }
+  const seen: Record<string, true> = {};
+  limits.forEach((limit, index) => {
+    const path = `container.runtime_limits[${index}]`;
+    if (!isRecord(limit)) {
+      issues.push(err(path, "must be a mapping"));
+      return;
+    }
+    const allowed: Record<string, true> = {
+      user: true,
+      name: true,
+      engine: true,
+      memory_max: true,
+      memory_swap_max: true,
+      redis_maxmemory: true,
+    };
+    for (const key of Object.keys(limit)) {
+      if (!allowed[key]) issues.push(err(`${path}.${key}`, "unknown container runtime-limit field"));
+    }
+    if (typeof limit.user !== "string" || !USERNAME_RE.test(limit.user)) {
+      issues.push(err(`${path}.user`, "must be a Linux username"));
+    }
+    if (typeof limit.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(limit.name)) {
+      issues.push(err(`${path}.name`, "must be a stable container name"));
+    }
+    if (limit.engine !== "docker-rootless") {
+      issues.push(err(`${path}.engine`, "only 'docker-rootless' is supported"));
+    }
+    for (const key of ["memory_max", "memory_swap_max", "redis_maxmemory"] as const) {
+      const value = limit[key];
+      const canonical = typeof value === "string" ? canonicalMemorySize(value) : null;
+      if ((key === "memory_max" && value === undefined)
+          || (value !== undefined && !(canonical && !canonical.endsWith("%")))) {
+        issues.push(err(`${path}.${key}`, "must be an absolute systemd size like '6G'"));
+      }
+    }
+    const identity = `${String(limit.user)}/${String(limit.name)}`;
+    if (seen[identity]) issues.push(err(path, `duplicates container limit '${identity}'`));
+    seen[identity] = true;
+  });
 }
 
 function validateSharedServices(raw: Record<string, unknown>, issues: Issue[]): void {

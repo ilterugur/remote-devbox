@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Managed by Ansible (remote-devbox).
+set -euo pipefail
+
+if [[ $# -ne 5 ]]; then
+  echo "usage: devbox-container-limit <engine> <name> <memory-max> <memory-swap-max> <redis-maxmemory|->" >&2
+  exit 64
+fi
+
+engine=$1
+name=$2
+memory_max=$3
+memory_swap_max=$4
+redis_maxmemory=$5
+
+case "$engine" in
+  docker-rootless)
+    docker_host="unix://${XDG_RUNTIME_DIR:?}/docker.sock"
+    docker=(/usr/bin/docker --host "$docker_host")
+    ;;
+  *)
+    echo "unsupported container engine: $engine" >&2
+    exit 64
+    ;;
+esac
+to_bytes() {
+  local value=$1 base=$2 amount suffix multiplier
+  if [[ "$value" =~ ^([0-9]+)([KMGT]?)$ ]]; then
+    amount=${BASH_REMATCH[1]}
+    suffix=${BASH_REMATCH[2]}
+  else
+    echo "invalid normalized memory size: $value" >&2
+    return 64
+  fi
+  case "$suffix" in
+    "") multiplier=1 ;;
+    K) multiplier=$base ;;
+    M) multiplier=$((base ** 2)) ;;
+    G) multiplier=$((base ** 3)) ;;
+    T) multiplier=$((base ** 4)) ;;
+  esac
+  printf '%s\n' "$((amount * multiplier))"
+}
+
+docker_exec_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "${docker[@]}" exec "$name" "$@" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+
+# Containers are application-owned and may not exist yet. The timer retries after
+# compose creates or recreates them; absence is not a provisioning failure.
+"${docker[@]}" inspect "$name" >/dev/null 2>&1 || exit 0
+read -r current_memory current_swap < <(
+  "${docker[@]}" inspect --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}' "$name"
+)
+desired_memory=$(to_bytes "$memory_max" 1024)
+desired_swap=$(to_bytes "$memory_swap_max" 1024)
+if [[ "$current_memory" != "$desired_memory" || "$current_swap" != "$desired_swap" ]]; then
+  "${docker[@]}" update --memory "$memory_max" --memory-swap "$memory_swap_max" "$name" >/dev/null
+fi
+
+[[ "$redis_maxmemory" != - ]] || exit 0
+desired_redis=$(to_bytes "$redis_maxmemory" 1000)
+redis_cli=
+redis_config=
+for candidate in valkey-cli redis-cli; do
+  if redis_config=$(docker_exec_retry "$candidate" --raw CONFIG GET maxmemory 2>/dev/null); then
+    redis_cli=$candidate
+    break
+  fi
+done
+
+if [[ -z "$redis_cli" ]]; then
+  echo "container '$name' declares redis_maxmemory but exposes neither a working valkey-cli nor redis-cli" >&2
+  exit 1
+fi
+
+current_redis=${redis_config##*$'\n'}
+[[ "$current_redis" != "$desired_redis" ]] || exit 0
+docker_exec_retry "$redis_cli" CONFIG SET maxmemory "$redis_maxmemory" >/dev/null

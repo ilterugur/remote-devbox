@@ -171,6 +171,14 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
     devbox_container: {
       default_engine: resolved.container.default_engine,
       install_engines: [...resolved.container.install_engines],
+      runtime_limits: (resolved.container.runtime_limits ?? []).map((limit) => ({
+        ...limit,
+        memory_max: canonicalMemorySize(limit.memory_max)!,
+        memory_swap_max: canonicalMemorySize(limit.memory_swap_max ?? limit.memory_max)!,
+        ...(limit.redis_maxmemory === undefined
+          ? {}
+          : { redis_maxmemory: canonicalMemorySize(limit.redis_maxmemory)! }),
+      })),
     },
     devbox_shared_services: {
       enabled: resolved.shared_services?.enabled ?? false,

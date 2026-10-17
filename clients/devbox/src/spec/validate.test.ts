@@ -265,6 +265,36 @@ test("default_engine 'none' needs no install entry", () => {
     paths({ ...minimal(), container: { default_engine: "none", install_engines: ["podman-rootless"] } }),
   ).toEqual([]);
 });
+test("container runtime limits require bounded Docker and Redis sizes", () => {
+  const limit = {
+    user: "dev-a",
+    name: "app-redis",
+    engine: "docker-rootless",
+    memory_max: "6G",
+    memory_swap_max: "6G",
+    redis_maxmemory: "4G",
+  };
+  expect(paths({
+    ...minimal(),
+    container: {
+      default_engine: "docker-rootless",
+      install_engines: ["docker-rootless"],
+      runtime_limits: [limit],
+    },
+  })).toEqual([]);
+  expect(paths({
+    ...minimal(),
+    container: {
+      default_engine: "docker-rootless",
+      install_engines: ["docker-rootless"],
+      runtime_limits: [{ ...limit, memory_max: "lots", redis_maxmemory: "50%" }],
+    },
+  })).toEqual(expect.arrayContaining([
+    "error:container.runtime_limits[0].memory_max",
+    "error:container.runtime_limits[0].redis_maxmemory",
+  ]));
+});
+
 
 test("shared_services only accepts system-docker", () => {
   expect(paths({ ...minimal(), shared_services: { enabled: true, engine: "podman" } })).toContain(

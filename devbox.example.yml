@@ -160,6 +160,18 @@ container:
   install_engines:
     - podman-rootless
     - docker-rootless
+  # Optional box-only policy for application-owned containers. A system timer reapplies
+  # these after compose recreates the container; the application repo stays portable.
+  # redis_maxmemory limits the Redis/Valkey dataset while memory_max contains total
+  # allocator/AOF overhead. Equal memory_max and memory_swap_max means no extra swap.
+  # runtime_limits:
+  #   - user: dev-a
+  #     name: app-redis
+  #     engine: docker-rootless
+  #     memory_max: 6G
+  #     memory_swap_max: 6G
+  #     redis_maxmemory: 4G
+
 
 # System Docker is operator-owned only — developers are never in the docker group.
 shared_services:

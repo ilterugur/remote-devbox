@@ -1,0 +1,62 @@
+---
+- name: Verify box-local container limit units
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    row:
+      user: dev-a
+      name: app-redis
+      engine: docker-rootless
+      memory_max: 6G
+      memory_swap_max: 6G
+      redis_maxmemory: 4G
+    ansible_facts:
+      getent_passwd:
+        dev-a: [x, "1001", "1001", "Developer", /srv/dev-a, /bin/bash]
+
+  tasks:
+    - name: Render and assert
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-container-limit-policy-
+          register: render_dir
+
+        - name: Render the limit service
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/containers/templates/container-limit.service.j2"
+            dest: "{{ render_dir.path }}/limit.service"
+            mode: "0600"
+
+        - name: Render the limit timer
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/containers/templates/container-limit.timer.j2"
+            dest: "{{ render_dir.path }}/limit.timer"
+            mode: "0600"
+
+        - name: Read rendered units
+          ansible.builtin.slurp:
+            src: "{{ item }}"
+          loop:
+            - "{{ render_dir.path }}/limit.service"
+            - "{{ render_dir.path }}/limit.timer"
+          register: units
+
+        - name: Assert limits and recurring reconciliation
+          ansible.builtin.assert:
+            that:
+              - "'User=dev-a' in units.results[0].content | b64decode"
+              - "'Environment=HOME=/srv/dev-a' in units.results[0].content | b64decode"
+              - "'Environment=XDG_RUNTIME_DIR=/run/user/1001' in units.results[0].content | b64decode"
+              - "'devbox-container-limit docker-rootless app-redis 6G 6G 4G' in units.results[0].content | b64decode"
+              - "'OnUnitActiveSec=60s' in units.results[1].content | b64decode"
+              - "'Unit=devbox-container-limit-dev-a-app-redis.service' in units.results[1].content | b64decode"
+      always:
+        - name: Remove isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent
+          when: render_dir.path is defined

@@ -93,6 +93,23 @@ test("engine 'none' never needs to be installed", () => {
     msgs(spec([{ user: "dev-a", login_ssh_keys: [], container_engine: "none", projects: [] }])),
   ).toEqual([]);
 });
+test("container runtime limits reference an installed engine and developer", () => {
+  const container = {
+    default_engine: "podman-rootless" as const,
+    install_engines: ["podman-rootless" as const],
+    runtime_limits: [{
+      user: "missing",
+      name: "app-redis",
+      engine: "docker-rootless" as const,
+      memory_max: "6G",
+    }],
+  };
+  expect(msgs(spec([{ user: "dev-a", login_ssh_keys: [] }], { container }))).toEqual(expect.arrayContaining([
+    "error:container.runtime_limits[0].user",
+    "error:container.runtime_limits[0].engine",
+  ]));
+});
+
 
 test("duplicate developer users are an error on the later one", () => {
   expect(msgs(spec([{ user: "dev-a", login_ssh_keys: [] }, { user: "dev-a", login_ssh_keys: [] }]))).toEqual([

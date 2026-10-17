@@ -1,0 +1,13 @@
+# Managed by Ansible (remote-devbox).
+[Unit]
+Description=Reconcile devbox limit for {{ row.user }}/{{ row.name }}
+Wants=user@{{ ansible_facts.getent_passwd[row.user][1] }}.service
+After=user@{{ ansible_facts.getent_passwd[row.user][1] }}.service
+
+[Service]
+Type=oneshot
+User={{ row.user }}
+Environment=HOME={{ ansible_facts.getent_passwd[row.user][4] }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ ansible_facts.getent_passwd[row.user][1] }}
+ExecStart=/usr/local/sbin/devbox-container-limit {{ row.engine }} {{ row.name }} {{ row.memory_max }} {{ row.memory_swap_max }} {{ row.redis_maxmemory | default('-') }}
+Nice=10

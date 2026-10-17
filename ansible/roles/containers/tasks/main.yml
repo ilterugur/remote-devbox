@@ -76,6 +76,103 @@
 - name: Install Docker (rootless)
   ansible.builtin.include_tasks: docker_rootless.yml
   when: "'docker-rootless' in devbox_container.install_engines"
+- name: Install the box-local container limit reconciler
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-container-limit"
+    dest: /usr/local/sbin/devbox-container-limit
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render box-local container limit services
+  ansible.builtin.template:
+    src: container-limit.service.j2
+    dest: "/etc/systemd/system/devbox-container-limit-{{ row.user }}-{{ row.name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_container.runtime_limits | default([]) }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}/{{ row.name }}"
+
+- name: Render box-local container limit timers
+  ansible.builtin.template:
+    src: container-limit.timer.j2
+    dest: "/etc/systemd/system/devbox-container-limit-{{ row.user }}-{{ row.name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ devbox_container.runtime_limits | default([]) }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}/{{ row.name }}"
+
+- name: Build the desired container limit unit roster
+  ansible.builtin.set_fact:
+    _devbox_container_limit_units: "{{ _raw_container_limit_units | from_json }}"
+  vars:
+    _raw_container_limit_units: >-
+      {%- set out = [] -%}
+      {%- for row in devbox_container.runtime_limits | default([]) -%}
+        {{- out.append('devbox-container-limit-' ~ row.user ~ '-' ~ row.name ~ '.service') or '' -}}
+        {{- out.append('devbox-container-limit-' ~ row.user ~ '-' ~ row.name ~ '.timer') or '' -}}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Find managed container limit units
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns:
+      - devbox-container-limit-*.service
+      - devbox-container-limit-*.timer
+    file_type: file
+  register: _devbox_container_limit_units_found
+
+- name: Disable removed container limit timers
+  ansible.builtin.systemd_service:
+    name: "{{ item.path | basename }}"
+    enabled: false
+    state: stopped
+  loop: "{{ _devbox_container_limit_units_found.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when:
+    - (item.path | basename).endswith('.timer')
+    - (item.path | basename) not in _devbox_container_limit_units
+
+- name: Remove stale container limit unit files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _devbox_container_limit_units_found.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: (item.path | basename) not in _devbox_container_limit_units
+
+- name: Reload systemd for container limit units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Enable box-local container limit timers
+  ansible.builtin.systemd_service:
+    name: "devbox-container-limit-{{ row.user }}-{{ row.name }}.timer"
+    enabled: true
+    state: started
+  loop: "{{ devbox_container.runtime_limits | default([]) }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}/{{ row.name }}"
+
+- name: Apply box-local container limits now
+  ansible.builtin.systemd_service:
+    name: "devbox-container-limit-{{ row.user }}-{{ row.name }}.service"
+    state: started
+  loop: "{{ devbox_container.runtime_limits | default([]) }}"
+  loop_control:
+    loop_var: row
+    label: "{{ row.user }}/{{ row.name }}"
+
 
 - name: Configure operator-owned shared services
   ansible.builtin.include_tasks: shared_services.yml

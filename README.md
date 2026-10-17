@@ -65,6 +65,12 @@ developers:
       categories:
         test: false # tests may run concurrently; other categories inherit host settings
 ```
+Application repositories can stay portable while one box enforces tighter container
+budgets. `container.runtime_limits` names an application-owned rootless Docker container;
+a system timer reapplies `memory_max`, `memory_swap_max`, and optional Redis/Valkey
+`redis_maxmemory` after Compose recreates it. This policy lives only on the devbox and
+does not rewrite the application's Compose file.
+
 
 Developers cannot read each other's homes, secrets, git keys, container sockets or even
 each other's process command lines, and none of them can escalate to root.

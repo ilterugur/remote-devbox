@@ -209,9 +209,25 @@ export interface NetworkSpec {
   ssh: { access?: SshAccess[] };
 }
 
+export interface ContainerRuntimeLimitSpec {
+  /** Developer who owns the rootless engine and container. */
+  user: string;
+  /** Stable container name, not an ephemeral container id. */
+  name: string;
+  engine: "docker-rootless";
+  /** Docker cgroup wall. */
+  memory_max: string;
+  /** Combined RAM+swap wall; defaults to memory_max (no extra swap). */
+  memory_swap_max?: string;
+  /** Optional Redis/Valkey dataset ceiling, applied with CONFIG SET at runtime. */
+  redis_maxmemory?: string;
+}
+
 export interface ContainerSpec {
   default_engine: EngineId;
   install_engines: EngineId[];
+  /** Box-local limits reconciled independently of an application's compose file. */
+  runtime_limits?: ContainerRuntimeLimitSpec[];
 }
 
 export interface SharedServicesSpec {

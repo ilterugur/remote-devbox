@@ -505,6 +505,32 @@ test("runaway guard settings are taken verbatim when declared", () => {
     scan_deadline_sec: 20,
   });
 });
+test("container runtime limits become absolute box policy", () => {
+  const out = normalize({
+    ...resolved,
+    container: {
+      default_engine: "docker-rootless",
+      install_engines: ["docker-rootless"],
+      runtime_limits: [{
+        user: "dev-a",
+        name: "app-redis",
+        engine: "docker-rootless",
+        memory_max: "6GB",
+        redis_maxmemory: "4GB",
+      }],
+    },
+  } as ResolvedSpec);
+  const container = out.devbox_container as Record<string, unknown>;
+  expect(container.runtime_limits).toEqual([{
+    user: "dev-a",
+    name: "app-redis",
+    engine: "docker-rootless",
+    memory_max: "6G",
+    memory_swap_max: "6G",
+    redis_maxmemory: "4G",
+  }]);
+});
+
 
 test("heavy job gate defaults on and supports global and developer overrides", () => {
   const defaulted = normalize(resolved);

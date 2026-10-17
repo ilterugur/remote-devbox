@@ -42,6 +42,16 @@ export function renderPlan(
       `default ${resolved.container.default_engine} · installed ${resolved.container.install_engines.join(", ")}`,
     ),
   );
+  const containerLimits = resolved.container.runtime_limits ?? [];
+  lines.push(row(
+    "ctr limits",
+    containerLimits.length
+      ? containerLimits.map((limit) => {
+          const redis = limit.redis_maxmemory ? ` · redis ${limit.redis_maxmemory}` : "";
+          return `${limit.user}/${limit.name} ${limit.memory_max}${redis}`;
+        }).join(", ")
+      : "none",
+  ));
   lines.push(
     row(
       "shared svcs",

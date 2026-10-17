@@ -138,6 +138,22 @@ export function validateReferences(spec: DevboxSpec): Issue[] {
       }
     });
   });
+  for (const [index, limit] of (spec.container.runtime_limits ?? []).entries()) {
+    if (!seenUsers.has(limit.user)) {
+      issues.push(err(
+        `container.runtime_limits[${index}].user`,
+        `no developer named '${limit.user}' — rootless container limits need an owning account`,
+      ));
+    }
+    if (!spec.container.install_engines.includes(limit.engine)) {
+      issues.push(uninstalledEngine(
+        `container.runtime_limits[${index}].engine`,
+        limit.engine,
+        spec,
+      ));
+    }
+  }
+
 
   issues.push(...portIssues(claims));
 
