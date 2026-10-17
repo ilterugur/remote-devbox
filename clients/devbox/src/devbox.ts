@@ -31,6 +31,7 @@ import { runPush } from "./push";
 import { runPull } from "./pull";
 import { runAdd } from "./add";
 import { DEFAULT_AGENT_PROFILE, accountArgs, runAccount } from "./account";
+import { DEFAULT_OPENCODE_AGENT_PROFILE, opencodeAccountArgs, runOpencodeAccount } from "./opencode-account";
 import { runMountUp, runMountDown, runMountStatus } from "./mount";
 import {
   runAgentDown,
@@ -347,6 +348,45 @@ cli
         die((e as Error).message);
       }
       process.exit(runAccount(argv, { profile: opts.profile, agentProfile: opts.agentProfile }));
+    },
+  );
+
+cli
+  .command(
+    "opencode-account [action] [label]",
+    "swap the OpenCode account for this client, or a box profile (action: ls|status|add|use|rm|gc)",
+  )
+  .option("-p, --profile <profile>", "run on the box for this profile instead of locally")
+  .option("--agent-profile <name>", `box agent profile to act on (default: ${DEFAULT_OPENCODE_AGENT_PROFILE})`)
+  .option("--json", "machine-readable output (ls, status)")
+  .option("--force", "swap even while omp is running (use)")
+  .option("--keep <n>", "swap backups to retain (gc)")
+  .option("--key <apikey>", "api key to park (add)")
+  .action(
+    (
+      action: string | undefined,
+      label: string | undefined,
+      opts: {
+        profile?: string;
+        agentProfile?: string;
+        json?: boolean;
+        force?: boolean;
+        keep?: string | number;
+        key?: string;
+      },
+    ) => {
+      let argv: string[];
+      try {
+        argv = opencodeAccountArgs(action ?? "ls", label, {
+          json: opts.json,
+          force: opts.force,
+          keep: opts.keep,
+          key: opts.key,
+        });
+      } catch (e) {
+        die((e as Error).message);
+      }
+      process.exit(runOpencodeAccount(argv, { profile: opts.profile, agentProfile: opts.agentProfile }));
     },
   );
 
