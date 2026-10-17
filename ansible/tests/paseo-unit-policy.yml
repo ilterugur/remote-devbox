@@ -84,7 +84,7 @@
         - name: Assert ExecStart goes through the mise shim, not a resolved install path
           ansible.builtin.assert:
             that:
-              - "'ExecStart=/home/dev-a/.local/share/mise/shims/paseo daemon start --foreground' in paseo_unit.content | b64decode"
+              - "'ExecStart=/home/dev-a/.local/share/mise/shims/paseo daemon run --home /home/dev-a/.paseo' in paseo_unit.content | b64decode"
               - "'installs/node' not in paseo_unit.content | b64decode"
               - "'WantedBy=default.target' in paseo_unit.content | b64decode"
 

@@ -411,7 +411,7 @@ function codexUnitEnvelope(
 /**
  * The Paseo daemon, one unit per developer that asks for it.
  *
- * Paseo ships no service definition: `paseo daemon start --foreground` is a supervisor
+ * Paseo ships no service definition: `paseo daemon run` is a supervisor
  * that keeps running wherever it was launched, so whoever starts it decides the cgroup
  * its entire agent fleet lives in. Start it from an interactive SSH session and the
  * fleet lands in that session's scope; when the session leader exits, the supervisor

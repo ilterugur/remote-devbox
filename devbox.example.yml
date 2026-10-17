@@ -338,7 +338,7 @@ developers:
     codex_remote_control: true
 
     # Run the Paseo daemon as a managed user service. Paseo has no unit of its own:
-    # `paseo daemon start --foreground` keeps running wherever it was launched, so the
+    # `paseo daemon run` keeps running wherever it was launched, so the
     # launcher owns the cgroup every Paseo/omp agent session ends up in. Start it by
     # hand over SSH and the whole fleet lands in that login session's scope — which
     # belongs to whoever logged in, carries no ceiling, and outlives the session as an

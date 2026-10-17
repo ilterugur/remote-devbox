@@ -1,7 +1,7 @@
 {# Managed by Ansible (remote-devbox). The Paseo daemon: one supervisor per developer,
    parent of every Paseo/omp agent session that developer runs.
 
-   Paseo ships no unit of its own — `paseo daemon start --foreground` simply keeps
+   Paseo ships no unit of its own — `paseo daemon run` simply keeps
    running wherever it was launched. That makes the launcher, not Paseo, the owner of
    the cgroup the whole agent fleet lives in, and this unit exists to take that
    ownership back. Measured 2026-08-31 on this box, with the supervisor hand-started
@@ -51,7 +51,7 @@ Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX={{ row.heavy_job_gate_memory_max | defau
 {% for category, limit in (row.heavy_job_gate_memory_max_by_category | default({})).items() %}Environment=DEVBOX_HEAVY_JOB_MEMORY_MAX_{{ category | upper }}={{ limit }}
 {% endfor %}
 {% endif %}
-ExecStart=/home/{{ row.user }}/.local/share/mise/shims/paseo daemon start --foreground
+ExecStart=/home/{{ row.user }}/.local/share/mise/shims/paseo daemon run --home /home/{{ row.user }}/.paseo
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
