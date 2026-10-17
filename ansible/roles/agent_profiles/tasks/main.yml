@@ -572,6 +572,23 @@
     group: root
     mode: "0755"
 
+- name: Deploy the Codex account swap engine
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/devbox-codex-account.sh"
+    dest: /usr/local/share/remote-devbox/devbox-codex-account.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the Codex account swap helper
+  ansible.builtin.template:
+    src: devbox-agent-codex-account.sh.j2
+    dest: /usr/local/bin/remote-devbox-codex-account
+    owner: root
+    group: root
+    mode: "0755"
+
+
 - name: Deploy the OpenCode account swap engine
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../scripts/devbox-opencode-account.sh"
