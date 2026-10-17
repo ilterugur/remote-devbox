@@ -458,6 +458,26 @@ test("the runaway guard defaults on with a grace four sweeps wide", () => {
   });
 });
 
+test("the session reaper defaults on with the cutoff the incident used", () => {
+  expect(emitted(normalize(resolved).devbox_host, "paseo_session_reap")).toEqual({
+    enabled: true,
+    idle_hours: 12,
+    interval_sec: 3600,
+  });
+});
+
+test("session reaper settings are taken verbatim when declared", () => {
+  const declared = normalize({
+    ...resolved,
+    host: { paseo_session_reap: { enabled: false, idle_hours: 48, interval_sec: 1800 } },
+  } as ResolvedSpec);
+  expect(emitted(declared.devbox_host, "paseo_session_reap")).toEqual({
+    enabled: false,
+    idle_hours: 48,
+    interval_sec: 1800,
+  });
+});
+
 test("runaway guard settings are taken verbatim when declared", () => {
   const declared = normalize({
     ...resolved,

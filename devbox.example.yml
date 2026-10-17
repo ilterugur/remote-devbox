@@ -72,6 +72,16 @@ host:
     # A pass now stops collecting here and acts on what it read; the unit timeout is
     # derived from this, and it has to stay under interval_sec.
     scan_deadline_sec: 20
+  # The guard ends a stall one process caused; this ends the one accumulation causes.
+  # An idle Paseo agent keeps its provider process — and its whole conversation heap —
+  # resident forever: `paseo stop` is a documented no-op for an idle agent, so nothing in
+  # the product releases it. Measured 2026-09-08: 57 sessions holding 14 GB in a 34 GB
+  # cgroup pinned at its ceiling, 41 of them silent for 12-114 hours; releasing those
+  # returned 10 GB and dropped `full avg10` from 77% to 0.06%.
+  paseo_session_reap:
+    enabled: true
+    idle_hours: 12          # from the daemon's lastActivityAt, never from process age.
+    interval_sec: 3600      # a leak sweep, not the stall responder; must not exceed the cutoff.
   # Sizing note for a box running an agent fleet rather than one build at a time: a fleet
   # of mostly-idle sessions holds tens of GB of cold anonymous heap, and swap is where that
   # belongs. Undersized swap does not merely limit paging — it pins the working set

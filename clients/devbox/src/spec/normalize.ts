@@ -134,6 +134,16 @@ export function normalize(resolved: ResolvedSpec, client: ClientFacts = NO_CLIEN
         pressure_full_min: resolved.host?.runaway_guard?.pressure_full_min ?? 25,
         scan_deadline_sec: resolved.host?.runaway_guard?.scan_deadline_sec ?? 20,
       },
+      // On by default, and 12h is the cutoff the 2026-09-08 sweep used: of 57 live
+      // sessions, everything it selected had been silent between 12 and 114 hours, and
+      // nothing a developer returned to that day was inside the window. Hourly is slack
+      // on purpose - the cost of a late sweep is a few hundred MB, and the runaway guard
+      // above is what answers an actual stall.
+      paseo_session_reap: {
+        enabled: resolved.host?.paseo_session_reap?.enabled ?? true,
+        idle_hours: resolved.host?.paseo_session_reap?.idle_hours ?? 12,
+        interval_sec: resolved.host?.paseo_session_reap?.interval_sec ?? 3600,
+      },
       monitoring: {
         enabled: resolved.host?.monitoring?.enabled ?? false,
         port: resolved.host?.monitoring?.port ?? 19999,

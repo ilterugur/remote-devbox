@@ -198,6 +198,7 @@ function validateHost(raw: Record<string, unknown>, issues: Issue[]): void {
   }
   validateHeavyJobGate(h.heavy_job_gate, "host.heavy_job_gate", issues);
   validateRunawayGuard(h.runaway_guard, "host.runaway_guard", issues);
+  validatePaseoSessionReap(h.paseo_session_reap, "host.paseo_session_reap", issues);
   const mon = h.monitoring;
   if (mon !== undefined) {
     if (!isRecord(mon)) {
@@ -583,6 +584,40 @@ function validateRunawayGuard(value: unknown, path: string, issues: Issue[]): vo
   const deadline = value.scan_deadline_sec;
   if (typeof interval === "number" && typeof deadline === "number" && deadline >= interval) {
     issues.push(err(`${path}.scan_deadline_sec`, "must be less than interval_sec"));
+  }
+}
+
+function validatePaseoSessionReap(value: unknown, path: string, issues: Issue[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push(err(path, "must be a mapping"));
+    return;
+  }
+  const allowedFields = new Set(["enabled", "idle_hours", "interval_sec"]);
+  for (const key of Object.keys(value)) {
+    if (!allowedFields.has(key)) {
+      issues.push(err(`${path}.${key}`, "unknown paseo-session-reap field"));
+    }
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    issues.push(err(`${path}.enabled`, "must be true or false"));
+  }
+  const idle = value.idle_hours;
+  if (idle !== undefined && !(typeof idle === "number" && idle >= 1)) {
+    // Below an hour this stops being a leak sweep and starts closing sessions a
+    // developer stepped away from; the whole premise is that silence for hours means
+    // finished.
+    issues.push(err(`${path}.idle_hours`, "must be a number of hours >= 1"));
+  }
+  const interval = value.interval_sec;
+  if (interval !== undefined
+      && !(typeof interval === "number" && Number.isInteger(interval) && interval > 0)) {
+    issues.push(err(`${path}.interval_sec`, "must be a positive integer"));
+  }
+  // A sweep that runs less often than the cutoff means a finished session can outlive
+  // its window by a full period, which makes the declared cutoff a fiction.
+  if (typeof idle === "number" && typeof interval === "number" && interval > idle * 3600) {
+    issues.push(err(`${path}.interval_sec`, "must not exceed idle_hours"));
   }
 }
 

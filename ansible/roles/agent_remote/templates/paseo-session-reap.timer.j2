@@ -1,0 +1,20 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set R = devbox_host.paseo_session_reap %}
+[Unit]
+Description=Periodic release of Paseo sessions that have finished
+
+[Timer]
+{# Nothing has had time to finish at boot, and the daemon is still bringing sessions up,
+   so the first sweep waits rather than racing it. #}
+OnBootSec=15min
+OnUnitActiveSec={{ R.interval_sec }}s
+{# Loose on purpose, and the opposite of the runaway guard's 1s. This is a leak sweep: a
+   finished session costs a few hundred MB an hour, so letting systemd batch it with other
+   timers is worth more than punctuality. #}
+AccuracySec=5min
+{# Deliberately not Persistent=: a sweep missed while the box was down has nothing to
+   catch up on - it reads the current fleet, and after a reboot there is no fleet. #}
+Unit=paseo-session-reap.service
+
+[Install]
+WantedBy=timers.target

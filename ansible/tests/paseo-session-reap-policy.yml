@@ -1,0 +1,92 @@
+---
+# The reaper's judgement lives in the script (covered by scripts/test_paseo_session_reap.py);
+# these units decide whether it can see anything at all. The assertions below pin the
+# settings whose absence produces the worst outcome available here — a timer that fires,
+# succeeds, reports nothing and frees nothing, which looks exactly like a healthy fleet.
+- name: Verify finished-session reaper unit rendering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    devbox_host:
+      paseo_session_reap:
+        enabled: true
+        idle_hours: 12
+        interval_sec: 3600
+
+  tasks:
+    - name: Render and verify the reaper unit and timer in an isolated directory
+      block:
+        - name: Create an isolated render directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: remote-devbox-session-reap-policy-
+          register: render_dir
+
+        - name: Render the reaper unit and timer
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../roles/agent_remote/templates/paseo-session-reap.{{ item }}.j2"
+            dest: "{{ render_dir.path }}/paseo-session-reap.{{ item }}"
+            mode: "0600"
+          loop: [service, timer]
+
+        - name: Read the reaper unit
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/paseo-session-reap.service"
+          register: reap_unit
+
+        - name: Read the reaper timer
+          ansible.builtin.slurp:
+            src: "{{ render_dir.path }}/paseo-session-reap.timer"
+          register: reap_timer
+
+        - name: Assert the configured cutoff reaches the command line
+          ansible.builtin.assert:
+            that:
+              - "'--idle-hours 12' in reap_unit.content | b64decode"
+
+        # The single most important line in the unit. PASEO_AGENT_ID lives in
+        # /proc/<pid>/environ, which is ptrace-gated, and it is the only reliable way to
+        # tell which agent owns a process — matching on the working directory was tried
+        # and cannot separate a dozen sessions sharing one checkout. Without
+        # CAP_SYS_PTRACE every read returns EACCES, the sweep matches nothing, and the
+        # unit still exits 0.
+        - name: Assert the reaper can read the identity it joins on
+          ansible.builtin.assert:
+            that:
+              - "'CAP_SYS_PTRACE' in reap_unit.content | b64decode"
+              - "'AmbientCapabilities=CAP_SYS_PTRACE' in reap_unit.content | b64decode"
+              - "'CAP_KILL' in reap_unit.content | b64decode"
+              - "'CAP_DAC_READ_SEARCH' in reap_unit.content | b64decode"
+
+        # The agent records under ~/.paseo/agents are the whole basis for the decision,
+        # so ProtectHome must be read-only rather than yes — and must not be write.
+        - name: Assert the records are readable and homes stay unwritable
+          ansible.builtin.assert:
+            that:
+              - "'ProtectHome=read-only' in reap_unit.content | b64decode"
+              - "'ProtectSystem=strict' in reap_unit.content | b64decode"
+              - "'ProtectProc=default' in reap_unit.content | b64decode"
+
+        # This is a janitor, not the stall responder: the runaway guard is the unit that
+        # gets priority and reclaim protection. This one must stay out of the way, or a
+        # sweep competes with the fleet it is trying to relieve.
+        - name: Assert the sweep yields to real work
+          ansible.builtin.assert:
+            that:
+              - "'Nice=10' in reap_unit.content | b64decode"
+              - "'IOSchedulingClass=idle' in reap_unit.content | b64decode"
+              - "'OOMScoreAdjust=-900' not in reap_unit.content | b64decode"
+
+        - name: Assert the sweep is batched and does not catch up after a reboot
+          ansible.builtin.assert:
+            that:
+              - "'OnUnitActiveSec=3600s' in reap_timer.content | b64decode"
+              - "'AccuracySec=5min' in reap_timer.content | b64decode"
+              - "'Unit=paseo-session-reap.service' in reap_timer.content | b64decode"
+              - "'Persistent=' not in reap_timer.content | b64decode"
+      always:
+        - name: Remove the isolated render directory
+          ansible.builtin.file:
+            path: "{{ render_dir.path }}"
+            state: absent

@@ -1,0 +1,45 @@
+{# Managed by Ansible (remote-devbox) — do not edit by hand. #}
+{% set R = devbox_host.paseo_session_reap %}
+[Unit]
+Description=Release the provider processes of finished Paseo sessions
+Documentation=man:paseo-session-reap(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/paseo-session-reap --idle-hours {{ R.idle_hours }}
+{# Runs as root: the records and the processes belong to developers, and this signals
+   theirs. Everything below narrows that down to reading what it needs. #}
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+{# ProtectHome=read-only rather than yes: the agent records under ~/.paseo/agents are the
+   entire basis for the decision, and this must be able to read them - while never being
+   able to write into a developer's home. #}
+{# Three capabilities, each load-bearing. CAP_KILL signals another user's session.
+   CAP_DAC_READ_SEARCH reads records and /proc entries that are not world-readable.
+   CAP_SYS_PTRACE is what makes the join possible at all: /proc/<pid>/environ is
+   ptrace-gated, and PASEO_AGENT_ID lives there. Without it every read returns EACCES,
+   the sweep matches nothing, and the timer looks perfectly healthy while doing
+   nothing - the exact failure the browser reaper hit for the same reason. #}
+CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+AmbientCapabilities=CAP_SYS_PTRACE
+{# hide_pids mounts /proc with hidepid; a hardened ProtectProc on top would hide the very
+   processes this exists to identify. #}
+ProtectProc=default
+UMask=0077
+{# Unlike the runaway guard, this is a janitor and not an emergency responder: it has no
+   deadline to beat, so it yields to everything and takes the disk last. #}
+Nice=10
+IOSchedulingClass=idle
+{# A sweep that wedges must not hold a slot open forever; the next tick starts clean. The
+   pass reads a few hundred /proc entries and sends signals, so a minute is generous. #}
+TimeoutStartSec=120

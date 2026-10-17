@@ -186,6 +186,43 @@ test("runaway_guard accepts bounded thresholds", () => {
   );
 });
 
+test("paseo_session_reap accepts a bounded cutoff and cadence", () => {
+  expect(
+    paths({
+      ...minimal(),
+      host: { paseo_session_reap: { enabled: true, idle_hours: 12, interval_sec: 3600 } },
+    }),
+  ).toEqual([]);
+  expect(paths({ ...minimal(), host: { paseo_session_reap: true } })).toContain(
+    "error:host.paseo_session_reap",
+  );
+  expect(paths({ ...minimal(), host: { paseo_session_reap: { enabled: "yes" } } })).toContain(
+    "error:host.paseo_session_reap.enabled",
+  );
+  expect(paths({ ...minimal(), host: { paseo_session_reap: { idle_hor: 12 } } })).toContain(
+    "error:host.paseo_session_reap.idle_hor",
+  );
+  // Under an hour this stops releasing finished sessions and starts closing ones a
+  // developer walked away from.
+  expect(paths({ ...minimal(), host: { paseo_session_reap: { idle_hours: 0.5 } } })).toContain(
+    "error:host.paseo_session_reap.idle_hours",
+  );
+  expect(paths({ ...minimal(), host: { paseo_session_reap: { interval_sec: 0 } } })).toContain(
+    "error:host.paseo_session_reap.interval_sec",
+  );
+});
+
+// A sweep rarer than the cutoff makes the declared cutoff a fiction: a session that goes
+// quiet just after a pass survives its whole window plus another period.
+test("a sweep interval longer than the cutoff is rejected", () => {
+  expect(
+    paths({ ...minimal(), host: { paseo_session_reap: { idle_hours: 1, interval_sec: 7200 } } }),
+  ).toContain("error:host.paseo_session_reap.interval_sec");
+  expect(
+    paths({ ...minimal(), host: { paseo_session_reap: { idle_hours: 12, interval_sec: 3600 } } }),
+  ).toEqual([]);
+});
+
 // A grace below the sweep interval means the first sighting is already past grace, so
 // the guard would kill on sight — the one thing its two-pass design exists to prevent.
 // A scan budget at or above the sweep interval queues passes on top of each other, and

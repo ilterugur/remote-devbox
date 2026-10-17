@@ -95,6 +95,33 @@ export interface RunawayGuardSpec {
   scan_deadline_sec?: number;
 }
 
+/**
+ * Release the provider process of a Paseo session that has finished.
+ *
+ * An agent that answered and went quiet keeps its provider — omp, codex, claude —
+ * resident with the whole heap its conversation built, and nothing in the product gives
+ * that memory back: `paseo stop` is a documented no-op for an idle agent, while
+ * `archive` and `delete` remove the agent instead of freeing it. So the fleet only grows.
+ * Measured 2026-09-08: 57 live sessions holding 14 GB inside a 34 GB cgroup that sat
+ * exactly at its ceiling with `full avg10` between 44% and 77%; 41 of them had been
+ * silent for 12 to 114 hours. Releasing those returned 10 GB and pressure fell to 0.06%.
+ *
+ * This is the runaway guard's opposite number: the guard ends a stall caused by one
+ * process growing, this prevents the stall caused by many sessions never leaving.
+ */
+export interface PaseoSessionReapSpec {
+  enabled?: boolean;
+  /** How long an idle or closed agent must have been silent before its provider is
+   *  released. Measured against the daemon's own `lastActivityAt`, never process age:
+   *  `ps` cannot tell a five-day-old session that is thinking from one that finished on
+   *  Monday. */
+  idle_hours?: number;
+  /** How often the sweep runs. This is a leak sweep, not the stall responder, so it is
+   *  deliberately slack - an hour of a finished session costs a few hundred MB, and the
+   *  guard is what handles the emergency. */
+  interval_sec?: number;
+}
+
 export type HeavyJobCategory = "build" | "typecheck" | "generate" | "test";
 
 /** Host tuning that is not part of the developer model. */
@@ -122,6 +149,8 @@ export interface HostSpec {
   heavy_job_gate?: HeavyJobGateSpec;
   /** Kill the runaway that has parked an agent cgroup at its MemoryHigh. Defaults on. */
   runaway_guard?: RunawayGuardSpec;
+  /** Release finished Paseo sessions so the fleet stops growing. Defaults on. */
+  paseo_session_reap?: PaseoSessionReapSpec;
   /** Host metrics dashboard and alarms. Off unless declared. */
   monitoring?: MonitoringSpec;
 }

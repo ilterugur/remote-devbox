@@ -522,6 +522,61 @@
   when: not devbox_host.runaway_guard.enabled
   notify: Reload systemd
 
+# ── Finished Paseo session reaper ─────────────────────────────────────────────
+# The guard above answers "one process is pinning this cgroup"; this answers "nothing
+# ever leaves". A Paseo agent that has answered and gone quiet keeps its provider process
+# resident with the whole heap the conversation built, and the product has no way to give
+# that back - `paseo stop` is a documented no-op for an idle agent. Measured 2026-09-08:
+# 57 sessions holding 14 GB in a 34 GB cgroup that sat exactly at its ceiling with
+# `full avg10` up to 77%, 41 of them silent for 12-114 hours. Releasing them by hand
+# returned 10 GB and dropped pressure to 0.06%; this is that hand on a timer.
+- name: Deploy the finished-session reaper (python, driven by its own timer)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/paseo-session-reap.py"
+    dest: /usr/local/bin/paseo-session-reap
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the finished-session reaper unit and timer
+  ansible.builtin.template:
+    src: "paseo-session-reap.{{ item }}.j2"
+    dest: "/etc/systemd/system/paseo-session-reap.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  when: devbox_host.paseo_session_reap.enabled
+  notify: Reload systemd
+
+- name: Enable the finished-session reaper timer
+  ansible.builtin.systemd_service:
+    name: paseo-session-reap.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when:
+    - devbox_host.paseo_session_reap.enabled
+    - not ansible_check_mode
+
+# Stop before removing, for the same reason as the guard above: a timer whose unit files
+# vanish underneath it stays loaded and armed until something reloads the manager.
+- name: Stop the finished-session reaper timer when reaping is disabled
+  ansible.builtin.systemd_service:
+    name: paseo-session-reap.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not devbox_host.paseo_session_reap.enabled
+
+- name: Remove the finished-session reaper unit and timer when reaping is disabled
+  ansible.builtin.file:
+    path: "/etc/systemd/system/paseo-session-reap.{{ item }}"
+    state: absent
+  loop: [service, timer]
+  when: not devbox_host.paseo_session_reap.enabled
+  notify: Reload systemd
+
 # ── Legacy migration: retire the old single-agent claude-rc-* units/scripts/dir.
 #    MUST run before "Enable and start" so the old RC session is gone before the new
 #    agent-rc unit brings one up — two RC sessions must not fight over one login.
