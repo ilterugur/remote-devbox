@@ -487,7 +487,6 @@ test("runaway guard settings are taken verbatim when declared", () => {
         interval_sec: 60,
         grace_sec: 600,
         rss_floor_mb: 8192,
-    dominance_percent: 25,
         dominance_percent: 25,
         high_ratio: 0.95,
         pressure_full_min: 40,
