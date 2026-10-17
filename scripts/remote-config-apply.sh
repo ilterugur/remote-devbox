@@ -44,11 +44,19 @@ for u in "${users[@]}"; do
     echo "no curated config at ${src} — skipping ${u}" >&2
     continue
   fi
-  dest="/home/${u}/.claude"
-  mkdir -p "${dest}"
-  rsync -a "${excludes[@]}" "${src}/" "${dest}/"
-  chown -R "${u}:${u}" "${dest}"
-  echo "applied ${src} -> ${u}"
+  dests=( "/home/${u}/.claude" )
+  if [ -d "/home/${u}/.agent-profiles" ]; then
+    for d in /home/"${u}"/.agent-profiles/claude-*; do
+      [ -d "$d" ] || continue
+      dests+=( "$d" )
+    done
+  fi
+  for dest in "${dests[@]}"; do
+    mkdir -p "${dest}"
+    rsync -a "${excludes[@]}" "${src}/" "${dest}/"
+    chown -R "${u}:${u}" "${dest}"
+    echo "applied ${src} -> ${dest}"
+  done
 done
 
 if [ "${with_settings}" -eq 1 ]; then

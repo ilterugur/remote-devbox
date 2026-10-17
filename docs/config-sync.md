@@ -20,7 +20,7 @@ portable subset into each account dir**, and never touch the per-account identit
 | Class | Items | Handling |
 | --- | --- | --- |
 | **Per-account — NEVER sync** | `.credentials.json` (the login), **`~/.claude.json`** (identity `oauthAccount`/`userID` + per-project **cost/usage** + caches) | Left untouched per account. Sharing `~/.claude.json` **cross-wires accounts and pools usage** — and it's atomically rewritten, so a symlink to it breaks anyway. |
-| **Shared — synced** | `CLAUDE.md` (+ its `@`-included files), `skills/`, `agents/`, `commands/`, `output-styles/`, `rules/`, `workflows/`, `themes/`, `keybindings.json`, `hooks/` scripts, `mcp.json`, `statusline-command.sh` | Bundled from your client → `/opt/remote-shared` on the box → **copied** into each profile's `~/.claude`. |
+| **Shared — synced** | `CLAUDE.md` (+ its `@`-included files), `skills/`, `agents/`, `commands/`, `output-styles/`, `rules/`, `workflows/`, `themes/`, `keybindings.json`, `hooks/` scripts, `mcp.json`, `statusline-command.sh` | Bundled from your client → `/opt/remote-shared` on the box → **copied** into `~/.claude` and each `~/.agent-profiles/claude-*` tree. |
 | **Machine/session state — never sync** | `projects/`, `sessions/`, `history.jsonl`, `todos/`, `statsig/`, `telemetry/`, caches, `plugins/` payload, daemon/lock/log files | The bundle ships a **whitelist only**; the push and apply additionally enforce a shared exclude list (`roles/claude_config/files/sync-excludes.txt`). |
 | **Special — opt-in** | `settings.json` (holds hooks/permissions/env) | **Not deployed by default** — see caveats. |
 
@@ -35,7 +35,10 @@ client ~/.claude  --bundle-->  repo claude-config/shared/  --rsync-->  box /opt/
                                                                             |
                                           remote-config-apply  --copy (excl. credentials/.claude.json)-->
                                                                             |
-                       /home/work/.claude    /home/personal/.claude    ...  (each keeps its own login)
+                       /home/<dev>/.claude
+                       /home/<dev>/.agent-profiles/claude-main
+                       /home/<dev>/.agent-profiles/claude-personal
+                       (identity files excluded; each tree keeps its own login)
 ```
 
 1. **Bundle** (client): `./scripts/bundle-local-config.sh` curates the portable
