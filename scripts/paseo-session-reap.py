@@ -143,7 +143,43 @@ def proc_facts(pid, procfs="/proc"):
     return ppid, start_ts, rss_pages * (os.sysconf("SC_PAGE_SIZE") // 1024)
 
 
-def read_sessions(records, procfs="/proc"):
+def boot_time(procfs="/proc"):
+    """Epoch seconds the kernel booted at (`btime` in /proc/stat), or None."""
+    try:
+        with open(os.path.join(procfs, "stat")) as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return int(line.split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+    return None
+
+
+def process_age_hours(start_ticks, booted_at, now=None):
+    """Hours a process has been alive, from its starttime in clock ticks since boot."""
+    if booted_at is None:
+        return None
+    started = booted_at + start_ticks / float(os.sysconf("SC_CLK_TCK"))
+    return ((now if now is not None else time.time()) - started) / 3600.0
+
+
+def idle_since(record_idle_hours, process_age):
+    """How long the session has really been silent, or None when either clock is unreadable.
+
+    The record alone is not enough. Opening a finished agent in Paseo resumes it: a fresh
+    provider process starts, but `lastActivityAt` only moves when a turn runs. Measured
+    2026-11-13: an agent resumed at 09:35 whose record said 14.9 hours idle was killed by
+    the 09:43 sweep, eight minutes into its new life, and Paseo reported the kill as a
+    failed turn ("OMP RPC process exited with code 143"). A process cannot have been idle
+    for longer than it has existed, so the younger of the two clocks wins.
+    """
+    if record_idle_hours is None or process_age is None:
+        return None
+    return min(record_idle_hours, process_age)
+
+
+
+def read_sessions(records, procfs="/proc", now=None):
     """Every provider process that belongs to a known agent, one entry per session.
 
     A provider spawns children — shells, bundlers, browsers — and they inherit the agent
@@ -151,6 +187,7 @@ def read_sessions(records, procfs="/proc"):
     takes its tree with it, while signalling a child would leave the heap behind and
     break the session it was supposed to release.
     """
+    booted_at = boot_time(procfs)
     owned = {}
     for entry in os.listdir(procfs):
         if not entry.isdigit():
@@ -177,7 +214,10 @@ def read_sessions(records, procfs="/proc"):
             pid=pid,
             agent_id=agent_id,
             status=record.get("lastStatus") or "unknown",
-            idle_hours=hours_since(record.get("lastActivityAt") or record.get("updatedAt")),
+            idle_hours=idle_since(
+                hours_since(record.get("lastActivityAt") or record.get("updatedAt"), now),
+                process_age_hours(start_ts, booted_at, now),
+            ),
             title=(record.get("title") or "")[:60],
             rss_kb=rss_kb,
             start_ts=start_ts,

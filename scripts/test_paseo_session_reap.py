@@ -140,6 +140,36 @@ class FakeProcfs(unittest.TestCase):
         found = reap.read_sessions(recs, procfs=str(self.root))
         self.assertEqual([s.pid for s in found], [50])
 
+    def write_boot(self, btime):
+        (self.root / "stat").write_text("cpu  1 2 3 4\nbtime %d\nprocesses 9\n" % btime)
+
+    def test_a_freshly_resumed_session_is_not_idle_however_old_its_record(self):
+        # 2026-11-13: opening a finished agent resumed it into a new process, but the
+        # record kept saying 14.9 h idle, and the next sweep killed it eight minutes later.
+        now = 1794560000.0
+        tick = os.sysconf("SC_CLK_TCK")
+        self.write_boot(int(now - 5000 / tick - 8 * 60))  # starttime 5000 => 8 min ago
+        self.write_proc(60, 1, "agent-f")
+        recs = self.records(**{"agent-f": ("idle", "2026-11-12T19:00:00Z")})
+        found = reap.read_sessions(recs, procfs=str(self.root), now=now)
+        self.assertAlmostEqual(found[0].idle_hours, 8 / 60.0, places=3)
+        self.assertEqual(reap.select(found, 12), [])
+
+    def test_a_long_lived_silent_session_is_still_released(self):
+        now = 1794560000.0
+        tick = os.sysconf("SC_CLK_TCK")
+        self.write_boot(int(now - 5000 / tick - 48 * 3600))
+        self.write_proc(70, 1, "agent-g")
+        recs = self.records(**{"agent-g": ("idle", "2026-11-12T00:00:00Z")})
+        found = reap.read_sessions(recs, procfs=str(self.root), now=now)
+        self.assertEqual([s.pid for s in reap.select(found, 12)], [70])
+
+    def test_an_unreadable_boot_time_never_becomes_a_kill(self):
+        self.write_proc(80, 1, "agent-h")
+        recs = self.records(**{"agent-h": ("idle", "2026-01-01T00:00:00Z")})
+        found = reap.read_sessions(recs, procfs=str(self.root))
+        self.assertEqual(reap.select(found, 12), [])
+
 
 class Release(unittest.TestCase):
     """The signal sequence. omp ignores SIGTERM, so SIGKILL has to actually arrive."""
